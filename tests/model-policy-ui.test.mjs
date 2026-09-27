@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {WorkspaceClient} from '../public/core/client.mjs';
 import {createModelPolicyUI,modelPolicyChoices,modelPolicyOutcome} from '../public/model-policy-ui.mjs';
+import {createSelectionState,recordObservation,selectAssignment} from '../public/core/model-selection.mjs';
 
 const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
 function fakeDialog(){
@@ -36,6 +37,24 @@ test('promotion hold and success, withdrawal fallback are described without qual
  assert.match(modelPolicyOutcome('withdraw',{reason:'restored_previous'}),/이전 경로로 복구/);
  assert.match(modelPolicyOutcome('withdraw',{reason:'safe_fallback_required'}),/확인을 기다립니다/);
  assert.doesNotMatch(modelPolicyOutcome('register_candidate',{}),/검증됐|동일 품질/);
+});
+
+test('baseline critical hold is explained in Korean without changing the policy dialog flow',async()=>{
+ assert.match(modelPolicyOutcome('promote',{reason:'baseline_critical_regression'}),/기준 모델의 중대한 품질 문제/);
+ const profile={family:'dialog',requirementsVersion:'r1',evaluationVersion:'e1',criteria:['correct'],requiredCapabilities:['text'],contextClass:'general'};
+ const baseline={id:'baseline',provider:'codex',model:'gpt-old',modelVersion:'v1',effort:'low'};
+ const initial=createSelectionState({profile,baseline});
+ const critical={id:'review-critical',provider:'codex',executionId:'execution-critical',generation:1,candidateId:'baseline',modelVersion:'v1',comparisonId:'comparison-critical',profile,observedAt:1000,source:'normal_execution',quality:{source:'independent_review',critical:true,criteria:[{id:'correct',status:'fail'}]}};
+ const state=recordObservation(initial,critical,{now:1000}).state;
+ const route=selectAssignment(state,{profile,now:1000});
+ assert.equal(route.reason,'baseline_critical_regression');
+ const response=policyResponse();response.policy.activeId=state.activeId;response.policy.candidates=state.candidates;response.route=route;
+ const client={remote:true,readModelPolicy:async()=>response};const view=fakeDialog();
+ const ui=createModelPolicyUI({dialog:view.dialog,getContext:()=>policyContext(client)});await ui.open('child');
+ assert.match(view.content.innerHTML,/기준 모델의 중대한 품질 문제/);
+ assert.match(view.content.innerHTML,/다음 배정 대기/);
+ assert.match(view.content.innerHTML,/철회/);
+ ui.close();
 });
 
 test('failed first read can be retried and older overlapping read cannot replace the latest response',async()=>{

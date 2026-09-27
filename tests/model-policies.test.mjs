@@ -4,8 +4,9 @@ import {DatabaseSync} from 'node:sqlite';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {join,resolve,sep} from 'node:path';
 import {TestD1} from './helpers/d1.mjs';
-import {D1ModelPolicies} from '../worker/model-policies.mjs';
+import {D1ModelPolicies,profileKey} from '../worker/model-policies.mjs';
 import {SqliteModelPolicies} from '../server/model-policies.mjs';
+import {D1_SCHEMA} from '../worker/store.mjs';
 
 const now=1_800_000_000_000;
 const profile={family:'analysis',requirementsVersion:'r1',evaluationVersion:'e1',criteria:['correct'],requiredCapabilities:['tools'],contextClass:'large'};
@@ -15,8 +16,8 @@ const availability=[baseline,candidate].map(x=>({provider:x.provider,model:x.mod
 const observation=(id,candidateId,comparisonId)=>({id,provider:'codex',executionId:`execution-${id}`,generation:1,candidateId,modelVersion:candidateId==='base'?'v1':'v2',comparisonId,profile,observedAt:now,source:'normal_execution',quality:{source:'independent_review',critical:false,criteria:[{id:'correct',status:'pass'}]},usage:{source:'executor_report',inputTokens:candidateId==='base'?100:70,outputTokens:20,latencyMs:candidateId==='base'?1000:800}});
 
 for(const [name,open] of [
- ['D1',()=>{const db=new TestD1(),reopen=(at=now)=>new D1ModelPolicies(db,{now:()=>at,getAvailability:()=>availability,verifyObservation:ref=>ref});return {store:reopen(),reopen,withoutVerifier:()=>new D1ModelPolicies(db,{now:()=>now}),close:()=>db.close()};}],
- ['SQLite',()=>{const db=new DatabaseSync(':memory:'),reopen=(at=now)=>new SqliteModelPolicies(db,{now:()=>at,getAvailability:()=>availability,verifyObservation:ref=>ref});return {store:reopen(),reopen,withoutVerifier:()=>new SqliteModelPolicies(db,{now:()=>now}),close:()=>db.close()};}],
+ ['D1',()=>{const db=new TestD1(),reopen=(at=now)=>new D1ModelPolicies(db,{now:()=>at,getAvailability:()=>availability,verifyObservation:ref=>ref});return {store:reopen(),reopen,sql:db.db,withoutVerifier:()=>new D1ModelPolicies(db,{now:()=>now}),close:()=>db.close()};}],
+ ['SQLite',()=>{const db=new DatabaseSync(':memory:');db.exec(D1_SCHEMA);const reopen=(at=now)=>new SqliteModelPolicies(db,{now:()=>at,getAvailability:()=>availability,verifyObservation:ref=>ref});return {store:reopen(),reopen,sql:db,withoutVerifier:()=>new SqliteModelPolicies(db,{now:()=>now}),close:()=>db.close()};}],
 ]){
  test(`${name} persists manual pin and rejects stale pin control writes`,async()=>{
   const a=open();try{
@@ -88,6 +89,53 @@ for(const [name,open] of [
    const replay=await a.reopen(now+91*86_400_000).observe({profile,evidenceRef:old,expectedStateVersion:1});
    assert.equal(replay.recorded,false);
    await assert.rejects(a.store.observe({profile,evidenceRef:{...old,observedAt:now-1},expectedStateVersion:1}),/version conflict/i);
+  }finally{a.close();}
+ });
+
+ test(`${name} atomically persists trusted baseline regression and never unwithdraws on replay or later pass`,async()=>{
+  const a=open();try{
+   const initial=await a.store.create({profile,baseline,expectedStateVersion:0});
+   const pinned=await a.store.pin({profile,candidateId:'base',expectedStateVersion:initial.stateVersion});
+   const critical={...observation('critical-base','base','critical'),quality:{source:'independent_review',critical:true,criteria:[{id:'correct',status:'fail'}]}};
+   const result=await a.store.observe({profile,evidenceRef:critical,expectedStateVersion:pinned.state.stateVersion});
+   assert.equal(result.reason,'critical_regression');
+   assert.equal(result.state.activeId,null);assert.equal(result.state.pin,null);
+   assert.equal((await a.reopen().read(profile)).candidates.find(x=>x.id==='base').status,'withdrawn');
+   assert.equal((await a.reopen().select(profile)).status,'wait');
+   const replay=await a.reopen().observe({profile,evidenceRef:critical,expectedStateVersion:pinned.state.stateVersion});
+   assert.equal(replay.recorded,false);assert.equal(replay.state.stateVersion,result.state.stateVersion);
+   await assert.rejects(a.reopen().observe({profile,evidenceRef:observation('other','base','later'),expectedStateVersion:pinned.state.stateVersion}),/version conflict/i);
+   const later=await a.reopen().observe({profile,evidenceRef:observation('later-pass','base','later'),expectedStateVersion:result.state.stateVersion});
+   assert.equal(later.state.candidates.find(x=>x.id==='base').status,'withdrawn');
+  }finally{a.close();}
+ });
+
+ test(`${name} turns legacy baseline critical into durable withdrawal before no-op prune and expiry`,async()=>{
+  const a=open();try{
+   const initial=await a.store.create({profile,baseline,expectedStateVersion:0});
+   const critical={...observation('legacy-base','base','critical'),quality:{source:'independent_review',critical:true,criteria:[{id:'correct',status:'fail'}]}};
+   a.sql.prepare('UPDATE metadata SET value=? WHERE key=?').run(JSON.stringify({...initial,observations:[critical]}),await profileKey(profile));
+   assert.equal((await a.reopen().select(profile)).status,'wait');
+   const normalized=await a.reopen().prune({profile,expectedStateVersion:initial.stateVersion});
+   assert.equal(normalized.state.candidates.find(x=>x.id==='base').status,'withdrawn');
+   await assert.rejects(a.reopen().prune({profile,expectedStateVersion:initial.stateVersion}),/version conflict/i);
+   const expired=await a.reopen(now+91*86_400_000).prune({profile,expectedStateVersion:normalized.state.stateVersion});
+   assert.equal(expired.state.observations.length,0);
+   assert.equal((await a.reopen(now+91*86_400_000).select(profile)).status,'wait');
+  }finally{a.close();}
+ });
+
+ test(`${name} normal observation cannot prune legacy baseline critical before persisting exclusion`,async()=>{
+  const a=open();try{
+   const initial=await a.store.create({profile,baseline,expectedStateVersion:0});
+   const critical={...observation('legacy-eviction','base','critical'),quality:{source:'independent_review',critical:true,criteria:[{id:'correct',status:'fail'}]}};
+   a.sql.prepare('UPDATE metadata SET value=? WHERE key=?').run(JSON.stringify({...initial,observations:[critical]}),await profileKey(profile));
+   const later=now+91*86_400_000;
+   const pass={...observation('late-pass','base','later'),observedAt:later};
+   const result=await a.reopen(later).observe({profile,evidenceRef:pass,expectedStateVersion:initial.stateVersion});
+   assert.equal(result.state.observations.some(row=>row.id==='legacy-eviction'),false);
+   assert.equal(result.state.candidates.find(row=>row.id==='base').status,'withdrawn');
+   assert.equal((await a.reopen(later).select(profile)).status,'wait');
   }finally{a.close();}
  });
 }

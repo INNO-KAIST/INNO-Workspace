@@ -144,3 +144,21 @@ test('critical regression still withdraws at the 2 MB state limit',async t=>{
  assert.equal(result.state.activeId,'base');assert.equal(result.state.observations.length,1);
  assert.equal((await f.make().read(profile)).activeId,'base');
 });
+
+test('baseline critical at the 2 MB limit persists exclusion without losing prior observations',async t=>{
+ const f=setup('D1');t.after(f.close);
+ const initial=await f.store.create({profile,baseline,expectedStateVersion:0});
+ const pinned=await f.store.pin({profile,candidateId:'base',expectedStateVersion:initial.stateVersion});
+ const prior={...pinned.state,observations:[{...evidence('large',now),filler:''}]};
+ const target=1_999_850,baseBytes=Buffer.byteLength(JSON.stringify(prior));
+ prior.observations[0].filler='x'.repeat(target-baseBytes);
+ await seed(f,prior);
+ const critical={...observation('baseline-capacity'),quality:{source:'independent_review',critical:true,criteria:[{id:'correct',status:'fail'}]}};
+ const result=await f.store.observe({profile,evidenceRef:critical,expectedStateVersion:prior.stateVersion});
+ assert.equal(result.recorded,false);assert.equal(result.reason,'critical_regression_evidence_capacity');
+ assert.equal(result.state.activeId,null);assert.equal(result.state.pin,null);
+ assert.equal(result.state.candidates.find(x=>x.id==='base').status,'withdrawn');
+ assert.deepEqual(result.state.observations,prior.observations);
+ assert.equal((await f.make().select(profile)).status,'wait');
+ await assert.rejects(f.make().observe({profile,evidenceRef:observation('different'),expectedStateVersion:prior.stateVersion}),/version conflict/i);
+});

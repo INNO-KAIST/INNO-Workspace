@@ -1,5 +1,6 @@
 import {D1ModelPolicies,profileKey} from './model-policies.mjs';
 import {ValidationError} from '../public/core/tasks.mjs';
+import {baselineExcluded} from '../public/core/model-selection.mjs';
 
 const hex=bytes=>Array.from(bytes,x=>x.toString(16).padStart(2,'0')).join('');
 const digest=async value=>hex(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))));
@@ -24,7 +25,7 @@ export async function availabilitySnapshot(store,catalog){
 
 export function unverifiedBaselineRoute(state,choice,provider){
  const baseline=state?.candidates.find(x=>x.id===state.baselineId);
- return choice?.status==='wait'&&(!state?.pin||state.pin.candidateId===state.activeId)&&state?.policyVersion===1&&state?.previousId===null&&state?.activeEvidenceIds.length===0&&state?.activeId===state?.baselineId&&baseline?.status==='active'&&baseline.modelVersion===null&&baseline.provider===provider?baseline:null;
+ return choice?.status==='wait'&&!baselineExcluded(state)&&(!state?.pin||state.pin.candidateId===state.activeId)&&state?.policyVersion===1&&state?.previousId===null&&state?.activeEvidenceIds.length===0&&state?.activeId===state?.baselineId&&baseline?.status==='active'&&baseline.modelVersion===null&&baseline.provider===provider?baseline:null;
 }
 
 export async function resolveAllocationPolicy(store,catalog,assignments){

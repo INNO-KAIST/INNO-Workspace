@@ -399,3 +399,17 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 비교 실행에서 configured MCP/native multi_agent/일반 위임·handoff 지시 및 반환 우회를 차단. CLI 도구 설정은 shell에서 별도 CLI를 호출하는 것까지 OS 수준으로 봉쇄하지 않으므로 중첩 실행과 Windows process tree 감독은 공개 capability 전 필수 검증 사항이다. 현재 runner/bridge는 비교 capability를 광고하지 않으며 운영 비교는 계속 비활성.
 - 테스트 선행 RED 최초8/8 예상 실패, process-error kill 및 일반 오류 처리 추가 RED 후 수정. 최종 구현자 관련29/29, 독립32/32, 메인 전체 Node632/632·Worker dry-run·diff check 통과. 실제 무해한 Node 자식 프로세스의 시간 초과→kill→close 확인, 실제 Codex/Claude AI 호출 없음. 로그 .inno/tmp/evaluation-deadline-tests.log 및 evaluation-deadline-dry-run.log. dry-run은 Worker 기존 패키징 비회귀이며 Node 실행기 검증은 Node 테스트 결과에 근거한다.
 - 신규 언어/런타임/의존성·유료API·운영 배포 없음. Windows 강한 process containment에 새 구성요소가 필요하면 CHANGE_REQUESTS와 PRD 위험 항목을 통해 별도 처리한다. 이 단계만으로 엄격한 전체 실행시간/과금 상한을 보장한다고 표시하지 않는다.
+
+### 2026-09-27 MOD04 기준 모델 중대 회귀 제외 착수
+- 직전 목표 턴은34e6cc4 및632개 검증으로 progress. clean 작업 트리 확인.
+- MOD06 공개 실행은 process containment/중첩 CLI/정산 계약 연결이 남아 있다. 병행 가능한 승인 MOD04의 알려진 baseline 중대 회귀 gap을 별도 하위 단계로 처리한다.
+- 구현자/독립 리뷰 분리, 기존 withdrawn/CAS 사용, 기존 frozen assignment 유지. 새 언어/런타임 없음.
+
+### 2026-09-27 MOD04 기준 모델 중대 회귀 제외 하위 단계 완료
+- 현재 상태: 알려진 baseline 중대 회귀 gap 해소. MOD04 전체 자동 정책 초기화/운영 가용성 증거/실제 모델 버전 귀속과 재자격 검증, MOD06 실행 격리·정산·전용 비교/UI, M5 배포 및 원래 플랫폼 목표는 남아 있다.
+- 신뢰된 독립 검토의 critical은 baseline(활성/비활성)도 기존 withdrawn으로 제외. 활성 baseline은 pin/현재 경로를 해제하고 적격 복구가 없으면 대기한다. 비활성 baseline은 정상 활성 후보와 동결 배정·비교 근거를 보존하며, 이후 fallback/rollback에 재사용하지 않는다. self-report는 철회 트리거가 아니다.
+- select/pin/신규 승격/초기 null-version fallback에서 제외 상태 및 레거시 baseline critical 관측을 검사. 이미 적격한 활성 후보의 기존 검증을 무조건 무효화하지 않으며, 철회된 기준선으로 새로운 후보 승격을 허용하지 않는다.
+- 레거시 critical은 prune 및 새 정상 observation에서 기록을 지우기 전에 withdrawn으로 영구화. worker.prune의 recent-only 조기 반환도 상태 변경이 있으면 CAS 저장. D1/SQLite parity에서 정리/새 관측 이후 baseline이 재선택되지 않음을 검증. 용량 초과 경로는 정상 활성 후보가 아닌 문제 baseline을 제외하고 기존 observation 전체를 보존한다.
+- 대기 사유 baseline_critical_regression을 실제 core 선택 경로와 한국어 UI 문구에 연결. 기존 레이아웃/조작 흐름 유지. 실제 recordObservation→selectAssignment→render 단위 통합 검증이며 이번 단계 새 브라우저 화면 검증을 수행했다는 주장은 하지 않는다.
+- RED: 새 pure 경계4건, D1/SQLite legacy prune2건, UI 원인 미연결을 재현 후 수정. 구현자 및 독립 대상64/64, 메인 최종 전체 Node644/644·Worker dry-run·diff check 통과. 로그 .inno/tmp/baseline-regression-tests.log 및 baseline-regression-dry-run.log. 독립 리뷰 차단 결함 없음.
+- 개발 브랜치에만 저장, 실제 AI 호출·새 스택·추가 API 비용·운영 배포 없음. 자동 재자격 부여를 무검증 철회 해제로 대체하지 않는다.

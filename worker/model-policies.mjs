@@ -82,7 +82,7 @@ export function createModelPolicyMethods(adapter,{now=Date.now,getAvailability=(
    const prior=state.observations.find(x=>x.provider===observation.provider&&x.executionId===observation.executionId&&x.generation===observation.generation);
    if(prior){if(!sameObservation(prior,observation))conflict();return {state,recorded:false,reason:'duplicate_execution'};}
    if(state.stateVersion!==expectedStateVersion)conflict();
-   const at=clock(),critical=observation.candidateId===state.activeId&&state.activeId!==state.baselineId&&observation.quality?.source==='independent_review'&&observation.quality.critical===true;
+   const at=clock(),critical=(observation.candidateId===state.activeId||observation.candidateId===state.baselineId)&&observation.quality?.source==='independent_review'&&observation.quality.critical===true;
    const noRemoval=critical||state.observations.length<1000&&state.observations.every(x=>x.observedAt>at-90*86_400_000);
    const pins=noRemoval?{ids:[],revision:null}:await adapter.taskPins();
    const availableRows=await availability();
@@ -90,8 +90,8 @@ export function createModelPolicyMethods(adapter,{now=Date.now,getAvailability=(
    if(critical){
     try{serialize(result.state);}catch(error){
      if(!/state size/.test(error.message))throw error;
-     const withdrawal=withdrawCandidate(state,state.activeId,{now:at,availability:availableRows});
-     return {state:await write(key,state,withdrawal.state),recorded:false,reason:'critical_regression_evidence_capacity'};
+     const withdrawn={...result.state,stateVersion:state.stateVersion+1,observations:state.observations};
+     return {state:await write(key,state,withdrawn),recorded:false,reason:'critical_regression_evidence_capacity'};
     }
    }
    return {...result,state:await write(key,state,result.state,pins.revision)};
@@ -130,7 +130,10 @@ export function createModelPolicyMethods(adapter,{now=Date.now,getAvailability=(
    expected(expectedStateVersion);const {key,state}=await loaded(profile);
    if(state.stateVersion!==expectedStateVersion)conflict();
    const at=clock();
-   if(state.observations.length<=1000&&state.observations.every(x=>x.observedAt>at-90*86_400_000))return {...pruneObservations(state,{now:at}),state};
+   if(state.observations.length<=1000&&state.observations.every(x=>x.observedAt>at-90*86_400_000)){
+    const result=pruneObservations(state,{now:at});
+    return {...result,state:await write(key,state,result.state)};
+   }
    const pins=await adapter.taskPins();
    const result=pruneObservations(state,{now:at,taskEvidenceIds:pins.ids});
    return {...result,state:await write(key,state,result.state,pins.revision)};

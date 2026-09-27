@@ -27,6 +27,13 @@ function available(route,profile,rows,now){
 }
 function liveObservations(state,now){return state.observations.filter(x=>x.observedAt<=now&&x.observedAt>now-EVIDENCE_MS);}
 function routeById(state,id){return state.candidates.find(x=>x.id===id);}
+function baselineCritical(state){
+ const baseline=routeById(state,state.baselineId);
+ return !!baseline&&state.observations.some(row=>row.candidateId===baseline.id&&row.modelVersion===baseline.modelVersion&&row.quality?.source==='independent_review'&&row.quality.critical===true);
+}
+export function baselineExcluded(state){
+ return !!state&&(routeById(state,state.baselineId)?.status==='withdrawn'||baselineCritical(state));
+}
 function validUsage(value){
  if(value===undefined)return null;
  if(!value||!['executor_report','server_metered'].includes(value.source))fail('usage provenance');
@@ -92,7 +99,9 @@ function retentionPins(state,taskEvidenceIds=[],now){
  return pinned;
 }
 export function pruneObservations(state,{now,taskEvidenceIds=[]}={}){
- instant(now,'now');const pinned=retentionPins(state,taskEvidenceIds,now);
+ instant(now,'now');
+ if(baselineCritical(state)&&routeById(state,state.baselineId)?.status!=='withdrawn')state=withdrawCandidate(state,state.baselineId,{now}).state;
+ const pinned=retentionPins(state,taskEvidenceIds,now);
  const retained=state.observations.filter(x=>pinned.has(x.id)||x.observedAt>now-EVIDENCE_MS);
  let removed=state.observations.length-retained.length;
  while(retained.length>MAX_OBSERVATIONS){
@@ -109,12 +118,15 @@ export function recordObservation(state,value,{now,availability=[],taskEvidenceI
  const existing=state.observations.find(x=>x.provider===observation.provider&&x.executionId===observation.executionId&&x.generation===observation.generation);
  if(existing)return {state,recorded:false,reason:'duplicate_execution'};
  if(state.observations.some(x=>x.id===observation.id))fail('duplicate observation id');
- const critical=observation.candidateId===state.activeId&&state.activeId!==state.baselineId&&observation.quality?.source==='independent_review'&&observation.quality.critical;
+ if(baselineCritical(state)&&routeById(state,state.baselineId)?.status!=='withdrawn')state=withdrawCandidate(state,state.baselineId,{now,availability}).state;
+ const critical=(observation.candidateId===state.activeId||observation.candidateId===state.baselineId)&&observation.quality?.source==='independent_review'&&observation.quality.critical;
  // Withdraw first so critical evidence can be recorded even when the old active policy pinned every slot.
- const current=critical?withdrawCandidate(state,state.activeId,{now,availability}).state:state;
+ const withdrawalInput=critical&&observation.candidateId===state.baselineId?{...state,observations:[...state.observations,observation]}:state;
+ const current=critical?withdrawCandidate(withdrawalInput,observation.candidateId,{now,availability}).state:state;
  const pinned=retentionPins(current,taskEvidenceIds,now);
  const preserve=critical&&preserveAllForCritical;
- const retained=preserve?[...current.observations]:current.observations.filter(x=>pinned.has(x.id)||x.observedAt>now-EVIDENCE_MS);
+ const priorRows=current.observations.filter(x=>x.id!==observation.id);
+ const retained=preserve?[...priorRows]:priorRows.filter(x=>pinned.has(x.id)||x.observedAt>now-EVIDENCE_MS);
  while(!preserve&&retained.length>=MAX_OBSERVATIONS){
   let victim=-1;
   for(let i=0;i<retained.length;i++)if(!pinned.has(retained[i].id)&&(victim<0||retained[i].observedAt<retained[victim].observedAt))victim=i;
@@ -129,6 +141,7 @@ export function promoteCandidate(state,candidateId,{now,availability=[]}={}){
  if(candidate.status==='active')return {state,promoted:false,reason:'already_active'};
  if(state.pin)return {state,promoted:false,reason:'manual_pin_active_route'};
  if(candidate.status==='withdrawn')return {state,promoted:false,reason:'withdrawn'};
+ if(baselineExcluded(state))return {state,promoted:false,reason:'baseline_critical_regression'};
  if(candidate.modelVersion===null)return {state,promoted:false,reason:'unobserved_model_version'};
  if(!available(candidate,state.profile,availability,now))return {state,promoted:false,reason:'candidate_unavailable'};
  const cohort=liveObservations(state,now).filter(x=>x.candidateId===candidateId&&x.modelVersion===candidate.modelVersion&&matchingProfile(state.profile,x.profile));
@@ -146,10 +159,10 @@ export function promoteCandidate(state,candidateId,{now,availability=[]}={}){
 }
 export function withdrawCandidate(state,candidateId,{now,availability=[]}={}){
  instant(now,'now');const candidate=routeById(state,id(candidateId,'candidate id'));if(!candidate)fail('candidate');
- if(candidate.id===state.baselineId)fail('baseline withdrawal');
  if(candidate.status==='withdrawn')return {state,withdrawn:false,reason:'already_withdrawn'};
+ if(candidate.id===state.baselineId&&!baselineCritical(state))fail('baseline withdrawal');
  const active=state.activeId===candidateId,prior=active?routeById(state,state.previousId):null;
- const priorProven=prior?.id===state.baselineId||prior&&evidenceCurrent(state,prior,now);
+ const priorProven=prior?.id===state.baselineId?!baselineExcluded(state):prior&&evidenceCurrent(state,prior,now);
  const restored=prior&&prior.status!=='withdrawn'&&priorProven&&available(prior,state.profile,availability,now)?prior:null;
  const candidates=state.candidates.map(x=>({...x,status:x.id===candidateId?'withdrawn':restored&&x.id===restored.id?'active':x.status}));
  return {state:{...state,stateVersion:state.stateVersion+1,policyVersion:state.policyVersion+(active?1:0),activeId:active?(restored?.id??null):state.activeId,previousId:active?null:state.previousId,activeEvidenceIds:active?(restored?.evidenceIds??[]):state.activeEvidenceIds,pin:active?null:state.pin??null,candidates},withdrawn:true,reason:active?(restored?'restored_previous':'safe_fallback_required'):'withdrawn'};
@@ -158,10 +171,11 @@ export function pinCandidate(state,candidateId,{now,availability=[],allowUnverif
  instant(now,'now');id(candidateId,'candidate id');
  const active=routeById(state,state.activeId);
  if(!active||active.id!==candidateId||active.status!=='active')fail('active candidate');
+ if(candidateId===state.baselineId&&baselineExcluded(state))fail('active route is not eligible');
  if(state.pin&&state.pin.candidateId!==candidateId)fail('inconsistent pin');
  const selection=selectAssignment(state,{profile:state.profile,availability,now});
  const eligible=selection.candidateId===candidateId&&selection.status!=='wait';
- const unverified=allowUnverifiedBaseline===true&&candidateId===state.baselineId&&state.policyVersion===1&&state.previousId===null&&state.activeEvidenceIds.length===0&&active.modelVersion===null&&selection.status==='wait';
+ const unverified=allowUnverifiedBaseline===true&&candidateId===state.baselineId&&!baselineExcluded(state)&&state.policyVersion===1&&state.previousId===null&&state.activeEvidenceIds.length===0&&active.modelVersion===null&&selection.status==='wait';
  if(!eligible&&!unverified)fail('active route is not eligible');
  if(state.pin?.candidateId===candidateId)return {state,pinned:false,reason:'already_pinned'};
  return {state:{...state,stateVersion:state.stateVersion+1,pin:{candidateId}},pinned:true,reason:'manual_pin_set'};
@@ -175,6 +189,7 @@ export function selectAssignment(state,{profile,availability=[],now}={}){
  const active=routeById(state,state.activeId),base=routeById(state,state.baselineId);
  if(state.pin){
   if(state.pin.candidateId!==state.activeId||active?.status!=='active')return {status:'wait',policyVersion:state.policyVersion,evidenceIds:[],reason:'pinned_route_unavailable'};
+  if(active.id===state.baselineId&&baselineExcluded(state))return {status:'wait',policyVersion:state.policyVersion,evidenceIds:[],reason:'baseline_critical_regression'};
   if(!available(active,state.profile,availability,now))return {status:'wait',policyVersion:state.policyVersion,evidenceIds:[],reason:'pinned_route_unavailable'};
   if(active.id!==state.baselineId){
    if(!evidenceCurrent(state,active,now)||state.activeEvidenceIds.length!==active.evidenceRefs?.length||!state.activeEvidenceIds.every((id,i)=>id===active.evidenceRefs[i].id))return {status:'wait',policyVersion:state.policyVersion,evidenceIds:[],reason:'pinned_evidence_expired'};
@@ -183,6 +198,6 @@ export function selectAssignment(state,{profile,availability=[],now}={}){
   return choice(state,active,'fallback','unvalidated_fallback',[],'manual_pin_existing_route_pending_evidence');
  }
  if(active&&active.id!==state.baselineId&&available(active,state.profile,availability,now)&&evidenceCurrent(state,active,now)&&state.activeEvidenceIds.length===active.evidenceRefs.length&&state.activeEvidenceIds.every((id,i)=>id===active.evidenceRefs[i].id))return choice(state,active,'selected','profile_scoped_observation',[...state.activeEvidenceIds],'matched_quality_and_measured_efficiency');
- if(base&&available(base,state.profile,availability,now))return choice(state,base,'fallback','unvalidated_fallback',[],'existing_route_pending_evidence');
- return {status:'wait',policyVersion:state.policyVersion,evidenceIds:[],reason:'no_fresh_eligible_route'};
+ if(base&&!baselineExcluded(state)&&available(base,state.profile,availability,now))return choice(state,base,'fallback','unvalidated_fallback',[],'existing_route_pending_evidence');
+ return {status:'wait',policyVersion:state.policyVersion,evidenceIds:[],reason:base&&baselineExcluded(state)?'baseline_critical_regression':'no_fresh_eligible_route'};
 }
