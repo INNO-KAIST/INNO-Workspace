@@ -22,6 +22,8 @@ import {createReviewObservationPipeline} from './review-observation-pipeline.mjs
 import {D1ModelPolicies} from './model-policies.mjs';
 import {createTaskPolicyManagement} from './policy-management.mjs';
 import {workspaceIdentity} from './workspace-identity.mjs';
+import {createDeliveryReceipt} from '../public/core/delivery-receipt.mjs';
+import {readDeliveryReceipt} from './delivery-receipts.mjs';
 
 const ROUTINE_BETA = 'experimental-cc-routine-2026-04-01';
 
@@ -136,19 +138,19 @@ async function fireRoutine(fetchFn, env, task, materials, ownership, signal, cat
   return result;
 }
 
-export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
+export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,deliveryReceiptVersion=0} = {}) {
   function runtime(env,context={}){
     const store=new D1TaskStore(env.DB),bridge=new CloudBridge(store,{sourceDelegationVersion}),hasRoutine=routineConfigured(env);
     const catalog=new ModelCatalog(store),discovery=new OfficialModelDiscovery(store,{fetchFn});
     const reviewObservations=createReviewObservationPipeline(store),policyRetention=new D1ModelPolicies(store.db),policyManagement=createTaskPolicyManagement(store,catalog);
     const orchestration=createOrchestration({store,delegations:new Delegations(store,{sourceDelegationVersion,catalog}),hasRoutine,waitUntil:context.waitUntil?promise=>context.waitUntil(promise):undefined,fire:async claim=>fireRoutine(fetchFn,env,claim.task,[],claim,undefined,await catalog.read(),sourceDelegationVersion)});
-    const handoff=async input=>{const task=await store.handoffExecution(input.taskId,input);return orchestration.dispatch(task.id);};
+    const handoff=async(input,options)=>{const task=await store.handoffExecution(input.taskId,input,options);return orchestration.dispatch(task.id);};
     const afterComplete=async task=>{
       const recovery=orchestration.reconcileTask(task.id).catch(()=>null);
       const observation=task.status==='completed'&&task.delegation?.state==='completed'?reviewObservations.process(task.id).catch(()=>null):Promise.resolve(null);
       if(context.waitUntil){context.waitUntil(recovery);context.waitUntil(observation);}else await Promise.all([recovery,observation]);
     };
-    const delegate=async(taskId,input)=>orchestration.allocate(taskId,input);
+    const delegate=async(taskId,input,options)=>orchestration.allocate(taskId,input,options);
     return {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement};
   }
   return {
@@ -185,6 +187,11 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
         const {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement}=runtime(env,context);
         const capabilities = {sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,reviewObservationRecovery:true,cloudCodex: true, localCodex: false, claudeRoutine: hasRoutine, cloud: true, connected: true};
         const bridgeMatch=pathname.match(/^\/api\/desktop\/([^/]+)\/(start|renew|complete|fail)$/);
+        const receiptHeader=request.headers.get('x-inno-delivery-receipt-version');
+        const receiptRequested=request.headers.has('x-inno-delivery-receipt-version');
+        if(receiptRequested&&(deliveryReceiptVersion!==1||receiptHeader!=='1'||request.method!=='POST'||!bridgeMatch||!['complete','fail'].includes(bridgeMatch[2])))
+          throw new ValidationError('Desktop delivery receipt version is not enabled for this route');
+        if(receiptRequested&&!request.headers.has('x-inno-workspace-id'))throw new ValidationError('Workspace identity is required for desktop delivery receipt');
         const desktopMutation=request.method==='POST'&&(pathname==='/api/desktop/poll'||Boolean(bridgeMatch));
         const desktopWorkspaceId=desktopMutation?await workspaceIdentity(store.db):undefined;
         if(desktopMutation&&request.headers.has('x-inno-workspace-id')&&request.headers.get('x-inno-workspace-id')!==desktopWorkspaceId)
@@ -245,28 +252,54 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
         }
         if(request.method==='POST'&&bridgeMatch){
           const id=decodeURIComponent(bridgeMatch[1]), input=await body(request);
-          if(input.models!==undefined)await catalog.report(input.models);
-          if(bridgeMatch[2]==='start')return responseJson({claim:await orchestration.hydrateClaim(await bridge.start(id,input)),workspaceId:desktopWorkspaceId},200,headers);
-          if(bridgeMatch[2]==='complete'&&input.handoff)return responseJson({task:await handoff({...input,taskId:id})},200,headers);
-          if(bridgeMatch[2]==='complete'&&input.delegation){const result=await delegate(id,{...input.delegation,executionId:input.executionId,generation:input.generation,content:input.content,usage:input.usage});return responseJson({task:result.parent},200,headers);}
-          if(bridgeMatch[2]==='complete'&&input.reviewReport){
+          const deliveryReceipt=receiptRequested?await createDeliveryReceipt({workspaceId:desktopWorkspaceId,taskId:id,action:bridgeMatch[2],input}):undefined;
+          if(deliveryReceipt){
+            const saved=await readDeliveryReceipt(store.db,deliveryReceipt);
+            if(saved)return responseJson({deliveryReceipt:saved,replayed:true},200,headers);
+          }
+          const receiptOptions={deliveryReceipt};
+          const accepted=async task=>{
+            if(!deliveryReceipt)return responseJson({task},200,headers);
+            const saved=await readDeliveryReceipt(store.db,deliveryReceipt);
+            if(!saved)throw new ConflictError('Accepted desktop delivery receipt is missing');
+            return responseJson({task,deliveryReceipt:saved,replayed:false},200,headers);
+          };
+          try{
+           if(input.models!==undefined)await catalog.report(input.models);
+           if(bridgeMatch[2]==='start')return responseJson({claim:await orchestration.hydrateClaim(await bridge.start(id,input)),workspaceId:desktopWorkspaceId},200,headers);
+           if(bridgeMatch[2]==='complete'&&input.handoff)return await accepted(await handoff({...input,taskId:id},receiptOptions));
+           if(bridgeMatch[2]==='complete'&&input.delegation){const result=await delegate(id,{...input.delegation,executionId:input.executionId,generation:input.generation,content:input.content,usage:input.usage},receiptOptions);return await accepted(result.parent);}
+           if(bridgeMatch[2]==='complete'&&input.reviewReport){
             const parent=await store.requireTask(id);
             const replay=parent.delegation?.lastReviewRetry;
-            if(replay?.executionId===input.executionId&&replay?.generation===input.generation&&!['superseded','cancelled'].includes(parent.delegation.state))return responseJson({task:parent},200,headers);
-            if(parent.status==='waiting_user'&&parent.checkpoint?.executionId===input.executionId&&parent.checkpoint?.generation===input.generation)return responseJson({task:parent},200,headers);
+            if(replay?.executionId===input.executionId&&replay?.generation===input.generation&&!['superseded','cancelled'].includes(parent.delegation.state)){
+              if(deliveryReceipt)throw new ConflictError('Delivery receipt replay requires stored verification',parent.version);
+              return responseJson({task:parent},200,headers);
+            }
+            if(parent.status==='waiting_user'&&parent.checkpoint?.executionId===input.executionId&&parent.checkpoint?.generation===input.generation){
+              if(deliveryReceipt)throw new ConflictError('Delivery receipt replay requires stored verification',parent.version);
+              return responseJson({task:parent},200,headers);
+            }
             if(parent.status==='running'&&parent.delegation?.state==='reviewing'){
               store.assertExecution(parent,input);
               const report=validateReviewReport(parent,input,{requirePass:false});
               if(report.some(row=>row.criteria.some(c=>c.status!=='pass'))){
-                if(!report.some(row=>row.criteria.some(c=>c.status==='unverifiable'))&&parent.delegation.retryCount<1){const result=await orchestration.retryReview(id,input);return responseJson({task:result.parent},200,headers);}
-                const task=await store.requestDecision(id,{...input,prompt:'하위 결과의 검토 기준을 모두 확인하지 못했습니다. 근거를 확인하고 진행 방향을 선택해 주세요.',options:[{label:'검토 보완',pros:'검증이 부족한 기준을 보완합니다.',cons:'추가 작업이 필요합니다.'},{label:'요청 수정',pros:'목표 또는 기준을 다시 지정합니다.',cons:'기존 배정이 변경될 수 있습니다.'}]});
-                return responseJson({task},200,headers);
+                if(!report.some(row=>row.criteria.some(c=>c.status==='unverifiable'))&&parent.delegation.retryCount<1){const result=await orchestration.retryReview(id,input,receiptOptions);return await accepted(result.parent);}
+                const task=await store.requestDecision(id,{...input,prompt:'하위 결과의 검토 기준을 모두 확인하지 못했습니다. 근거를 확인하고 진행 방향을 선택해 주세요.',options:[{label:'검토 보완',pros:'검증이 부족한 기준을 보완합니다.',cons:'추가 작업이 필요합니다.'},{label:'요청 수정',pros:'목표 또는 기준을 다시 지정합니다.',cons:'기존 배정이 변경될 수 있습니다.'}]},receiptOptions);
+                return await accepted(task);
               }
             }
+           }
+           const task=bridgeMatch[2]==='renew'?await bridge.renew(id,input):bridgeMatch[2]==='complete'?await bridge.complete(id,input,receiptOptions):await bridge.fail(id,input,receiptOptions);
+           if(bridgeMatch[2]!=='renew')await afterComplete(task);
+           return await accepted(task);
+          }catch(error){
+            if(deliveryReceipt){
+              const saved=await readDeliveryReceipt(store.db,deliveryReceipt);
+              if(saved)return responseJson({deliveryReceipt:saved,replayed:true},200,headers);
+            }
+            throw error;
           }
-          const task=bridgeMatch[2]==='renew'?await bridge.renew(id,input):bridgeMatch[2]==='complete'?await bridge.complete(id,input):await bridge.fail(id,input);
-          if(bridgeMatch[2]!=='renew')await afterComplete(task);
-          return responseJson({task},200,headers);
         }
         const runMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/run$/);
         if (request.method === 'POST' && runMatch) {

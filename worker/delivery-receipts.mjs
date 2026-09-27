@@ -1,10 +1,24 @@
-import {ValidationError} from '../public/core/tasks.mjs';
+import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
 
 const workspaceUuid=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const hex=/^[0-9a-f]{64}$/;
 const fields=['version','id','workspaceId','taskId','executionId','generation','action','payloadDigest'];
 const encoder=new TextEncoder();
 const invalid=()=>{throw new ValidationError('Invalid desktop delivery receipt');};
+
+export async function readDeliveryReceipt(db,descriptor){
+ const row=await db.prepare('SELECT value FROM metadata WHERE key=?1').bind('desktop_receipt:'+descriptor.id).first();
+ if(!row)return null;
+ let saved;
+ try{saved=JSON.parse(row.value);}catch{throw new ConflictError('Stored desktop delivery receipt is invalid');}
+ const keys=[...fields,'acceptedAt'];
+ if(!saved||typeof saved!=='object'||Array.isArray(saved)||Object.keys(saved).length!==keys.length
+  ||keys.some(key=>!Object.hasOwn(saved,key))||typeof saved.acceptedAt!=='string'
+  ||!Number.isFinite(Date.parse(saved.acceptedAt))||new Date(saved.acceptedAt).toISOString()!==saved.acceptedAt)
+  throw new ConflictError('Stored desktop delivery receipt is invalid');
+ if(fields.some(key=>saved[key]!==descriptor[key]))throw new ConflictError('Desktop delivery receipt payload conflicts with accepted result');
+ return saved;
+}
 const sameOwner=(value,receipt)=>value?.executionId===receipt.executionId&&value?.generation===receipt.generation;
 
 async function sha256(text){

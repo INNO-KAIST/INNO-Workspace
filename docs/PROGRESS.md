@@ -2,8 +2,8 @@
 ## 현재 재개 지점 (2026-09-28)
 - 전체 목표: 진행 중. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
-- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2a 내부 원자 저장 hook 및 Task2b 수락 도메인 명시 전달 검증 완료/최신 하단 기록 참조. 아직 HTTP replay/ack 및 클라이언트 정리 연결 없음.
-- 다음: HTTP replay 선조회·일치 확인·응답 연결 → claim 슬롯/보관 상한과 ack_pending 정리 프로토콜 → 통합·독립 검증 후 배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다.
+- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. 아직 ACK 및 클라이언트 정리·저장 상한 연결 없음.
+- 다음: claim 슬롯/보관 상한과 ack_pending 정리 프로토콜 → 통합·독립 검증 후 배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -571,3 +571,10 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 검증: 새 domain RED 6건 및 null replay RED 후 GREEN 7/7; 구현자 인접 127/127, 최종 전체 742/742 (.inno/tmp/receipt-domain-full.log). 메인 별도 대상 7/7, 독립 검토 대상·인접 120/120, 구문·diff 검사 및 기존 Wrangler dry-run 통과 (.inno/tmp/receipt-domain-dry-run.log).
 - 운영 변경/실제 AI 실행/새 스택 없음. HTTP index 및 capability는 미연결이다. Task2 전체, Task3 보관 상한·claim 예약·ack_pending 정리와 통합 배포는 미완료다.
 - 다음: 원본 parsed HTTP input에서 descriptor 생성, catalog/report·상태 shortcut·dispatch보다 앞선 저장 receipt 조회, CAS 패배 재조회 및 일치한 요청만 성공 응답. 프로토콜 활성화는 Task3 완료 이후.
+## 2026-09-28 — SRC02/06 Task2c HTTP replay 연결 (운영 비활성)
+- 원본 parsed HTTP payload에서 descriptor를 계산하고 모델 보고·상태 shortcut·dispatch보다 먼저 저장 receipt를 조회한다. 동일 결과 재전송은 task 조회/변경 없이 receipt만 반환한다. 내용 불일치·손상 저장값은 거절한다.
+- complete의 일반/하위 완료·handoff·allocation·review retry/decision/pass와 fail에 명시적 옵션 전달. CAS 또는 수락 후 후속 처리 실패는 동일한 저장 receipt가 있을 때만 성공 확인한다. 영수증 없는 기존 성공을 자동 전환하지 않는다.
+- 내부 createWorker({deliveryReceiptVersion:1})에서만 테스트 가능. 기본/exported Worker는 0이며 capability도 광고하지 않는다. 비활성/잘못된 protocol header와 workspace header 누락은 본문 처리 전 거절한다.
+- 검증: HTTP RED 7건 중 6건 실패 재현 후 GREEN 11/11, 최종 전체 753/753 (.inno/tmp/receipt-http-full.log), 메인 대상 11/11, 독립 인접 80/80, 구문·diff 및 Wrangler dry-run 통과. 실제 AI·운영 호출 없음.
+- 다음 Task3: 실행 회차별 admission 예약과 receipt 합계 상한, 원자 예약→수신 기록 전환, 로컬 pending→ack_pending→서버 해제→파일 정리, 불확실 실행의 명시적 복구. 후속 설계는 delivery-receipts 계획에 기록했다. 전체 복구 및 제품 전체 완료는 아니다.
+- 마지막 테스트 보강: 실제 새 Codex generation 시작 후 이전 결과 replay에서도 새 owner·running 상태·전체 task snapshot·revision 보존을 확인했다. 테스트 파일만 변경했으며 최종 메인 대상 11/11 통과 (.inno/tmp/receipt-http-main-final.log). 전체 753/753 및 독립 80/80은 이 테스트 보강 전 동일 구현 코드 기준이다.
