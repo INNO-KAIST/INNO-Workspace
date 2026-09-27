@@ -432,3 +432,4 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 직전 목표 턴f23f7f8/656개 검증으로 progress. clean tree 확인 후 구현/PRD/공식문서 대조에서 실제 자동승격 불가능 경로 발견: non-null version gate와 actualModelVersion:null 기록, parent/batch마다 다른 비교ID.
 - 내부 계획에 추가했던 엄격한 serving-version 조건을 사용자 별도승인으로 해석하지 않음. 현재구독최적화 의도와의 불일치를 숨긴 채 작동하지 않는 자동gate만 추가하지 않는다.
 - CR004의 실행경로기반 평가(실제버전미확인 유지) 대안과 엄격한승격보류 대안을 구체적으로 작성. 품질근거 신뢰범위에 관한 사용자선택 대기. 코드/PRD/운영 변경·AI 실행 없음. 전체목표는 active; 다른 승인된 작업도 남아 있어 goal blocked 아님.
+- 독립 추가감사: production model_policy_availability writer 없음, 정상 review quality.critical:false 고정도 확인. 현재 자동승격/중대회귀 운영연결은 실효 검증되지 않았음을 제안서에 명시. CR004 A/B 사용자 선택 질문 제시, 추가 AI 소비 승인은 요청하지 않음.

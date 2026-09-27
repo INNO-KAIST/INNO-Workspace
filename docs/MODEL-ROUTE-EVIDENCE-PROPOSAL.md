@@ -34,3 +34,8 @@ B 선택: 코드 승격 조건 유지, 실운영 보류 사유를 UI/가이드�
 ## 공식 문서 대조
 2026-09-28 조회: https://learn.chatgpt.com/docs/non-interactive-mode 는 exec JSONL 이벤트와 사용량, 저장된 CLI 인증 재사용을 설명한다. 예시에는 serving-version 인증이 없다. 이것만으로 모든 실행 인터페이스가 버전을 제공하지 않는다고 단정하지 않으며, 위 장애 진단은 현재 저장소의 실제 실행 경로에 대한 것이다.
 https://learn.chatgpt.com/docs/developer-commands?surface=cli 는 실행 모델 선택 인터페이스를 설명한다. 모델 선택과 내부 제공 버전 입증을 동일시하지 않는다.
+
+## 독립 감사 추가 확인
+- model_policy_availability는 production 경로에 writer가 없고 현재 테스트 fixture만 값을 넣는다. Codex desktop_models는 요청 model/effort의 계정 노출 근거이며 capability/context/내부 serving-version 증명은 아니다. 선택 A 구현 시 이를 근거 수준별로 분리해야 한다.
+- 정상 verifyReviewObservation은 quality.critical:false로 기록한다. fail/unverifiable 기준은 부정 품질 근거지만 현재 자동 중대 회귀 철회 신호를 만들지는 않는다. 실패를 모두 중대 오류로 바꾸지 않으며, 사전에 정의된 중대 오류의 독립 검증 계약을 후속 설계해야 한다.
+- 추가 비교 예산0에서는 같은 입력·문맥에 대한 실제 자연발생 비교 사례가 없으면 A도 자동 승격하지 않는다. A는 근거를 위조하지 않고 실행 가능한 평가 단위를 추가하는 선택이며 즉시 토큰 절감이나 자동 승격을 보장하지 않는다.
