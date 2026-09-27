@@ -3,6 +3,7 @@ import {creationId,creationPayload} from '../public/core/create-requests.mjs';
 import {validateOfficeArtifact} from '../public/core/office-container.mjs';
 import {sanitizeArtifactChecks} from '../public/core/artifact-checks.mjs';
 import {executionUsage,usageHistory} from '../public/core/execution-usage.mjs';
+import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execution-evidence.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -212,7 +213,7 @@ export class SqliteTaskStore {
         version: current.version + 1,
         updatedAt: now,
         checkpoint: {
-          ...previous, failure: undefined,
+          ...previous, failure: undefined, executionEvidence: undefined, wallElapsedMs: undefined, completedAt: undefined,
           executionId,
           generation,
           provider,
@@ -237,11 +238,13 @@ export class SqliteTaskStore {
     }
   }
 
-  finishExecution(id, input) {
+  finishExecution(id, input, {allowDesktopEvidence = false} = {}) {
     const current = this.requireTask(id);
     return this.replaceTask(id, current.version, task => {
       this.assertExecution(task, input);
       const now = this.now();
+      const elapsed=wallElapsedMs(task.checkpoint?.claimedAt,now);
+      const executionEvidence=allowDesktopEvidence&&input.executionEvidence?validateOwnedExecutionEvidence(task,input.executionEvidence):null;
       const content = typeof input.content === 'string' ? input.content.trim() : '';
       if (!content) throw new ValidationError('execution result content is required');
       const generatedArtifacts = Array.isArray(input.artifacts) && input.artifacts.length
@@ -283,6 +286,8 @@ export class SqliteTaskStore {
           content: input.checkpoint ?? 'Execution completed.',
           updatedAt: now,
           completedAt: now,
+          wallElapsedMs:elapsed,
+          ...(executionEvidence?{executionEvidence:{...executionEvidence,wallElapsedMs:elapsed}}:{}),
         },
       };
     });

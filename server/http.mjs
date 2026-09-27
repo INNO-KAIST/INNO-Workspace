@@ -148,7 +148,8 @@ export function createInnoServer({
             checkpoint: result?.checkpoint,
             artifacts: result?.artifacts,
             usage: result?.usage,
-          });
+            executionEvidence:result?.executionEvidence,
+          },{allowDesktopEvidence:provider==='codex'});
         }
       } catch (error) {
         const current = store.requireTask(taskId);

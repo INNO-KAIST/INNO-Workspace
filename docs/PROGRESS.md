@@ -268,3 +268,13 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 메인 전체 Node481/481 및 Worker dry-run 통과. 로그 .inno/tmp/allocation-policy-tests.log 및 allocation-policy-dry-run.log. 새 도구/유료API/실제AI 실행 없음. 운영 미배포.
 - 검증 범위: 자동 선택 성공 HTTP fixture는 신뢰 가용성·실제 버전·능력 metadata를 시험 DB에 주입했다. 실제 구독의 serving-model/능력 관측 수집은 아직 없음. 현 운영 데이터에는 정책·충분한 증거가 없어 일반 배정은 명시적 fallback; 실제 자동 승격이나 토큰 절감 완료를 주장하지 않는다.
 - 다음: executionEvidence를 인증된 desktop 완료/outbox와 소유권 검증된 저장에 연결; 서버 claimedAt/completedAt의 경과 시간과 실제 usage 보존. 완료 부모 reviewReport와 자식 task/batch/epoch/execution을 서버에서 대조해 품질 근거 생성, executor 자기보고/실제 모델 미확인 분리. D1/SQLite parity, stale owner/재전송/위조 입력 회귀를 추가한다. 정책 관리·관측 화면은 M4. M2 전체 및 원래 플랫폼 목표 미완료.
+
+### 2026-09-27 실행 근거 완료 저장 및 검토 관측 검증
+- server/desktop-bridge outbox에 정제한 executionEvidence 보존; 인증된 CloudBridge와 로컬 server/http Codex 완료에서만 내부 allowDesktopEvidence 옵션으로 D1/SQLite 저장 허용. MCP/일반 finish 입력의 위조 증거는 신뢰하지 않음. 실행 소유권과 배정 model/effort 검증, actualModelVersion:null 유지. 신규 claim은 과거 executionEvidence/wallElapsedMs/completedAt 초기화.
+- 서버 claimedAt→completedAt wallElapsedMs와 실행기 processElapsedMs를 구분. 누락/역행 시 null. 임의 24시간/90일 상한 때문에 정상 장기 완료가 실패하지 않도록 수정. 완료 재전송은 기존 사실을 반환하며 오래된 소유자가 덮지 못함.
+- 새 worker/review-observation.mjs verifyReviewObservation(store,evidenceRef,state)는 저장된 부모 완료 리뷰/자식 완료·batch/epoch/실행 ID/세대·배정·평가기준을 대조. 검증된 관측 또는 not_attributable 사유 반환. 독립 검토는 별도 부모 AI 판단이며 사람의 검증 아님; critical:false로 미관측 중대성을 추정하지 않는다.
+- 현재 지원하지 않는 provider_attestation/server 표시만으로 실제 버전을 신뢰하던 경로는 독립 리뷰 후 제거. CLI 근거로 실제 제공 모델 버전을 추정하지 않는다. 현재 null-version 경로 관측만 귀속 가능하며 버전별 승격 증거로 쓰지 못함.
+- 비교 키는 선택된 source view 범위/hash와 부모·자식 자료 ID 일치를 검증하고 원문을 추가 저장하지 않음. 양측 view 없는 자료는 실행별 키로 분리, 한쪽 누락/잘못된 view/중복 ID는 진단 상태. 서로 다른 원본을 같은 비교 사례로 인정하지 않는다.
+- 검증: 메인 실행근거/bridge/server68개, 최종 전체 Node508/508, Worker dry-run 통과. 독립 검토28/28. 로그 .inno/tmp/completion-evidence-targeted.log, completion-evidence-tests.log, completion-evidence-dry-run.log. 실제 AI·새 도구·유료API 사용 없음. 운영 미배포.
+- 남은 연결: verifyReviewObservation은 아직 완료 후 후크/policy.observe에 연결되지 않았다. 다음은 부모 검토 완료 뒤 내구성 있는 관측 수집·중복 방지·실패 복구·관측 불가 사유 보존을 연결하고 정상 결과 완료와 부가 관측 실패를 분리한다. 실제 serving-version 관측은 외부/런타임 제약이며 미확인을 숨기지 않는다.
+- 중간 handoff/delegation 단계는 terminal completion을 통과하지 않아 이번 executionEvidence 저장 대상이 아님. M3에서 단계별 사용량/경과 시간의 누락과 보관 한도를 다룰 때 반영. M2/M3 및 전체 플랫폼 완료 아님.

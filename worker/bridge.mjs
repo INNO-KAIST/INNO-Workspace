@@ -58,7 +58,8 @@ export class CloudBridge {
     for(let attempt=0;attempt<3;attempt++){
       const t=await this.store.requireTask(id);
       if(t.status==='completed'&&t.checkpoint?.executionId===input.executionId&&t.checkpoint?.generation===input.generation)return t;
-      try{return await this.store.finishExecution(id,input,{recoverInterrupted:true});}
+      if(input.executionEvidence&&t.checkpoint?.provider!=='codex')throw new ValidationError('execution evidence provider does not match owner');
+      try{return await this.store.finishExecution(id,input,{recoverInterrupted:true,allowDesktopEvidence:true});}
       catch(e){if(!(e instanceof ConflictError)||attempt===2)throw e;}
     }
   }

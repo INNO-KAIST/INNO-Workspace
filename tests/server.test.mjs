@@ -142,7 +142,7 @@ test('run passes transient materials to the runner and stores only the generated
     available: async () => true,
     run: async input => {
       received = input;
-      return {content: 'Grounded result', usage: {inputTokens: 12, outputTokens: 3}};
+      return {content: 'Grounded result', usage: {inputTokens: 12, outputTokens: 3},executionEvidence:{provider:'codex',source:'cli_arguments',requestedModel:null,requestedEffort:null,cliAppliedModel:null,cliAppliedEffort:null,actualModelVersion:null,processElapsedMs:12,privateField:'never store'}};
     },
   };
   const app = await fixture({runners: {codex: runner}});
@@ -165,6 +165,9 @@ test('run passes transient materials to the runner and stores only the generated
   assert.equal(completed.messages.at(-1).content, 'Grounded result');
   assert.equal(completed.artifacts.at(-1).content, 'Grounded result');
   assert.equal(completed.artifacts.at(-1).mime, 'text/markdown');
+  assert.equal(completed.checkpoint.executionEvidence.processElapsedMs,12);
+  assert.equal(completed.checkpoint.executionEvidence.actualModelVersion,null);
+  assert.equal('privateField' in completed.checkpoint.executionEvidence,false);
   assert.equal(JSON.stringify(completed).includes('transient-secret'), false);
 });
 

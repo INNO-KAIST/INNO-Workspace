@@ -30,6 +30,22 @@ test('maintenance blocks execution and refuses pending results',async()=>{const 
 
 test('usage survives outbox retry without copying arbitrary runner fields',async()=>{const outbox=box();let calls=0;const bridge=createDesktopBridge({outbox,request:async p=>{if(p.endsWith('poll'))return {claim:{task:{id:'t'},executionId:'e',generation:1}};if(++calls===1)throw Error('lost response');},runner:{run:async()=>({content:'ok',usage:{inputTokens:12,outputTokens:3,secret:'PRIVATE'}})}});await assert.rejects(()=>bridge.tick());assert.equal(outbox.read().input.usage.inputTokens,12);assert.equal(JSON.stringify(outbox.read()).includes('PRIVATE'),false);await bridge.tick();assert.equal(outbox.read(),null);});
 
+test('desktop outbox replays bounded runner evidence without a second run',async()=>{
+ const outbox=box();let runs=0,deliveries=0;const received=[];
+ const evidence={provider:'codex',source:'cli_arguments',requestedModel:null,requestedEffort:null,cliAppliedModel:null,cliAppliedEffort:null,actualModelVersion:null,processElapsedMs:23,secret:'PRIVATE'};
+ const bridge=createDesktopBridge({outbox,request:async(path,input)=>{if(path.endsWith('/poll'))return {claim:{task:{id:'t'},executionId:'e',generation:1}};received.push(structuredClone(input));if(++deliveries===1)throw Error('lost response');},runner:{run:async()=>{runs++;return {content:'ok',executionEvidence:evidence};}}});
+ await assert.rejects(()=>bridge.tick(),/lost response/);
+ assert.deepEqual(outbox.read().input.executionEvidence,{provider:'codex',source:'cli_arguments',requestedModel:null,requestedEffort:null,cliAppliedModel:null,cliAppliedEffort:null,actualModelVersion:null,processElapsedMs:23});
+ assert.equal(JSON.stringify(outbox.read()).includes('PRIVATE'),false);
+ await bridge.tick();assert.equal(runs,1);assert.deepEqual(received[0].executionEvidence,received[1].executionEvidence);assert.equal(outbox.read(),null);
+});
+
+test('desktop delivers a valid process elapsed time longer than one day',async()=>{
+ const outbox=box();let delivered;
+ const bridge=createDesktopBridge({outbox,request:async(path,input)=>{if(path.endsWith('/poll'))return {claim:{task:{id:'long'},executionId:'e',generation:1}};delivered=input;},runner:{run:async()=>({content:'Done',executionEvidence:{provider:'codex',source:'cli_arguments',requestedModel:null,requestedEffort:null,cliAppliedModel:null,cliAppliedEffort:null,actualModelVersion:null,processElapsedMs:90_000_000}})}});
+ await bridge.tick();assert.equal(delivered.executionEvidence.processElapsedMs,90_000_000);assert.equal(outbox.read(),null);
+});
+
 test('direct master sends one verified model snapshot on start and delegation completion',async()=>{
  const models=[{model:'gpt-5.6-terra',efforts:['high'],isDefault:true}],requests=[];let modelReads=0;
  const task={id:'master',attachments:[]};

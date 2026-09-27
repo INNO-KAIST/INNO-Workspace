@@ -1,6 +1,7 @@
 import {usageCounts} from '../public/core/execution-usage.mjs';
 import {failureInput,runnerError} from '../public/core/failures.mjs';
 import {sanitizeMaterials} from '../public/core/tasks.mjs';
+import {boundedExecutionEvidence} from '../public/core/execution-evidence.mjs';
 export function createDesktopBridge({request,runner,outbox,heartbeatMs=15000,beforeClaim=async()=>{},onError=()=>{}}){
  let busy=false,stopped=false,controller,background=Promise.resolve();
  async function deliver(record){await request(`/api/desktop/${encodeURIComponent(record.taskId)}/${record.action}`,record.input);outbox.clear();}
@@ -14,7 +15,7 @@ export function createDesktopBridge({request,runner,outbox,heartbeatMs=15000,bef
   finally{clearInterval(timer);if(renewal)await renewal;}
   if(monitorError)throw monitorError;
   if(controller.signal.aborted)throw Error('Desktop execution stopped');
-  const record={taskId:task.id,action:runError?'fail':'complete',input:runError?{...owner,usage:usageCounts(runError.usage),...failureInput(runError.code?runError:runnerError(runError))}:{...owner,content:result.content,checkpoint:result.checkpoint,artifacts:result.artifacts,usage:usageCounts(result.usage),...(result.handoff?{handoff:result.handoff}:{}),...(result.delegation?{delegation:result.delegation,...(models!==undefined?{models}:{})}:{}),...(result.reviewReport?{reviewReport:result.reviewReport}:{})}};
+  const record={taskId:task.id,action:runError?'fail':'complete',input:runError?{...owner,usage:usageCounts(runError.usage),...failureInput(runError.code?runError:runnerError(runError))}:{...owner,content:result.content,checkpoint:result.checkpoint,artifacts:result.artifacts,usage:usageCounts(result.usage),...(result.executionEvidence?{executionEvidence:boundedExecutionEvidence(result.executionEvidence)}:{}),...(result.handoff?{handoff:result.handoff}:{}),...(result.delegation?{delegation:result.delegation,...(models!==undefined?{models}:{})}:{}),...(result.reviewReport?{reviewReport:result.reviewReport}:{})}};
   outbox.write(record);await deliver(record);return true;
  }
  return {

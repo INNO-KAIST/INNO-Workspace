@@ -4,6 +4,7 @@ import {sanitizeArtifactChecks} from '../public/core/artifact-checks.mjs';
 import {validateReviewReport} from '../public/core/delegation.mjs';
 import {handoffTask,isHandoffReplay} from '../public/core/provider-handoff.mjs';
 import {executionUsage,usageHistory} from '../public/core/execution-usage.mjs';
+import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execution-evidence.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
 import {
   ConflictError,
@@ -227,7 +228,7 @@ export class D1TaskStore {
         ...current, status: 'running', version: current.version + 1, updatedAt: now,
         ...(current.delegation?.state==='queued_for_review'?{delegation:{...current.delegation,state:'reviewing'}}:{}),
         checkpoint: {
-          ...previous, ...(previous.handoff?{handoff:{...previous.handoff,dispatched:true}}:{}), failure: undefined, ...claim, provider, sourceBound, status: 'running', claimedAt: now,
+          ...previous, ...(previous.handoff?{handoff:{...previous.handoff,dispatched:true}}:{}), failure: undefined, executionEvidence: undefined, wallElapsedMs: undefined, completedAt: undefined, ...claim, provider, sourceBound, status: 'running', claimedAt: now,
           expiresAt: new Date(nowMs + leaseMs).toISOString(), updatedAt: now,
         },
       };
@@ -254,7 +255,7 @@ export class D1TaskStore {
     }
   }
 
-  async finishExecution(id, input, {recoverInterrupted = false} = {}) {
+  async finishExecution(id, input, {recoverInterrupted = false, allowDesktopEvidence = false} = {}) {
     const snapshot = await this.requireTask(id);
     return this.replaceTask(id, snapshot.version, current => {
       const sameInterruptedOwner = recoverInterrupted
@@ -266,6 +267,8 @@ export class D1TaskStore {
       if (!sameInterruptedOwner) this.assertExecution(current, input);
       const reviewReport=current.delegation&&current.delegation.state!=='superseded'?validateReviewReport(sameInterruptedOwner?{...current,status:'running'}:current,input):undefined;
       const now = this.now();
+      const elapsed=wallElapsedMs(current.checkpoint?.claimedAt,now);
+      const executionEvidence=allowDesktopEvidence&&input.executionEvidence?validateOwnedExecutionEvidence(current,input.executionEvidence):null;
       const content = typeof input.content === 'string' ? input.content.trim() : '';
       if (!content) throw new ValidationError('execution result content is required');
       const sourceArtifacts = Array.isArray(input.artifacts) && input.artifacts.length
@@ -293,7 +296,7 @@ export class D1TaskStore {
         ...(reviewReport?{delegation:{...current.delegation,state:'completed',reviewReport}}:{}),
         messages: [...current.messages, {id: this.id(), role: 'assistant', content, createdAt: now}],
         artifacts: [...current.artifacts, ...artifacts],
-        checkpoint: {...current.checkpoint, resultArtifactIds:[...current.artifacts.filter(a=>a.executionId===input.executionId&&a.generation===input.generation),...artifacts].map(a=>a.id), usage: executionUsage(current.checkpoint,input.usage,now), usageHistory: usageHistory(current.checkpoint,input.usage,now), failure: undefined, status: 'completed', content: input.checkpoint ?? 'Execution completed.', completedAt: now, updatedAt: now},
+        checkpoint: {...current.checkpoint, resultArtifactIds:[...current.artifacts.filter(a=>a.executionId===input.executionId&&a.generation===input.generation),...artifacts].map(a=>a.id), usage: executionUsage(current.checkpoint,input.usage,now), usageHistory: usageHistory(current.checkpoint,input.usage,now), failure: undefined, status: 'completed', content: input.checkpoint ?? 'Execution completed.', completedAt: now, wallElapsedMs:elapsed, ...(executionEvidence?{executionEvidence:{...executionEvidence,wallElapsedMs:elapsed}}:{}), updatedAt: now},
       };
     });
   }
