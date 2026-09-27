@@ -39,6 +39,55 @@ test('legacy desktop model arrays cannot authorize HTTP delegation',async t=>{
  assert.equal((await f.store.requireTask(task.id)).status,'running');assert.equal(f.fires(),0);
 });
 
+test('authenticated child policy management derives its baseline and keeps null-version allocation usable',async t=>{
+ const f=await fixture(t);await f.post('/api/desktop/poll',{models:observedModels()});
+ const {task,claim}=await claimMaster(f);
+ const allocated=await f.post(`/api/desktop/${task.id}/complete`,{...owner(claim),delegation:{independent:true,children}});
+ assert.equal(allocated.status,200);
+ const child=allocated.task.delegation.children.find(x=>x.provider==='codex');
+ const path=`/api/tasks/${child.taskId}/model-policy`;
+ const before=await f.post(path,{operation:'initialize',expectedStateVersion:0,modelVersion:'forged'});
+ assert.equal(before.status,400);
+ const initialized=await f.post(path,{operation:'initialize',expectedStateVersion:0});
+ assert.equal(initialized.status,200);
+ assert.equal(initialized.policy.baseline.model,child.requestedModel);
+ assert.equal(initialized.policy.baseline.modelVersion,null);
+ assert.equal(initialized.policy.observationCount,0);
+ const read=await createWorker().fetch(new Request('https://inno.example'+path,{headers:{authorization:'Bearer test-secret-01234567890123456789'}}),{DB:f.db,ACCESS_TOKEN:'test-secret-01234567890123456789'});
+ assert.equal(read.status,200);
+ const current=await read.json();assert.equal(current.profile.family,'delegation_codex');
+ assert.equal(current.route.status,'fallback');assert.equal(current.route.reason,'baseline_version_unverified');
+ assert.equal(current.accountAvailability.provider,'codex');
+ const claude=allocated.task.delegation.children.find(x=>x.provider==='claude');
+ const claudeRead=await createWorker().fetch(new Request(`https://inno.example/api/tasks/${claude.taskId}/model-policy`,{headers:{authorization:'Bearer test-secret-01234567890123456789'}}),{DB:f.db,ACCESS_TOKEN:'test-secret-01234567890123456789'});
+ assert.equal((await claudeRead.json()).accountAvailability.status,'static_supported_models_unverified');
+ assert.equal((await f.post(`/api/tasks/${task.id}/model-policy`,{operation:'initialize',expectedStateVersion:0})).status,400);
+ const next=await claimMaster(f);
+ const second=await f.post(`/api/desktop/${next.task.id}/complete`,{...owner(next.claim),delegation:{independent:true,children}});
+ assert.equal(second.status,200,JSON.stringify(second));
+ assert.equal(second.task.delegation.children.find(x=>x.provider==='codex').selection.reason,'baseline_version_unverified');
+});
+
+test('child policy operations reject forged inputs and stale writes while preserving frozen assignments',async t=>{
+ const f=await fixture(t);await f.post('/api/desktop/poll',{models:{models:[...models,{model:'gpt-next',efforts:['low']}],observedAt:Date.now(),status:'fresh'}});
+ const {task,claim}=await claimMaster(f);
+ const allocated=await f.post(`/api/desktop/${task.id}/complete`,{...owner(claim),delegation:{independent:true,children}});
+ const child=allocated.task.delegation.children.find(x=>x.provider==='codex'),path=`/api/tasks/${child.taskId}/model-policy`;
+ const unauthorized=await createWorker().fetch(new Request('https://inno.example'+path),{DB:f.db,ACCESS_TOKEN:'test-secret-01234567890123456789'});
+ assert.equal(unauthorized.status,401);
+ assert.equal((await f.post(path,{operation:'initialize',expectedStateVersion:0})).status,200);
+ assert.equal((await f.post(path,{operation:'register_candidate',expectedStateVersion:1,candidate:{id:'next',model:'gpt-next',effort:'low',modelVersion:'fake'}})).status,400);
+ assert.equal((await f.post(path,{operation:'register_candidate',expectedStateVersion:1,candidate:{id:'next',model:'not-in-account',effort:'low'}})).status,400);
+ const registered=await f.post(path,{operation:'register_candidate',expectedStateVersion:1,candidate:{id:'next',model:'gpt-next',effort:'low'}});
+ assert.equal(registered.status,200);assert.equal(registered.policy.candidates.find(x=>x.id==='next').modelVersion,null);
+ assert.equal((await f.post(path,{operation:'register_candidate',expectedStateVersion:1,candidate:{id:'other',model:'gpt-next',effort:'low'}})).status,409);
+ const promotion=await f.post(path,{operation:'promote',expectedStateVersion:2,candidateId:'next'});
+ assert.equal(promotion.status,200);assert.equal(promotion.reason,'unobserved_model_version');
+ const withdrawn=await f.post(path,{operation:'withdraw',expectedStateVersion:2,candidateId:'next'});
+ assert.equal(withdrawn.status,200);assert.equal(withdrawn.reason,'withdrawn');
+ assert.deepEqual((await f.store.requireTask(child.taskId)).assignment,(({taskId,...rest})=>rest)(child));
+});
+
 async function seededPolicy(f,{promote=true}={}){
  const now=Date.now(),profile=await delegationProfile(children[0]);
  const baseline={id:'baseline',provider:'codex',model:'gpt-5.6-luna',modelVersion:'v1',effort:'low'};

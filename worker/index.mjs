@@ -20,6 +20,7 @@ import { handleMcp } from '../server/mcp.mjs';
 import { D1TaskStore } from './store.mjs';
 import {createReviewObservationPipeline} from './review-observation-pipeline.mjs';
 import {D1ModelPolicies} from './model-policies.mjs';
+import {createTaskPolicyManagement} from './policy-management.mjs';
 
 const ROUTINE_BETA = 'experimental-cc-routine-2026-04-01';
 
@@ -131,7 +132,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
   function runtime(env,context={}){
     const store=new D1TaskStore(env.DB),bridge=new CloudBridge(store,{sourceDelegationVersion}),hasRoutine=routineConfigured(env);
     const catalog=new ModelCatalog(store),discovery=new OfficialModelDiscovery(store,{fetchFn});
-    const reviewObservations=createReviewObservationPipeline(store),policyRetention=new D1ModelPolicies(store.db);
+    const reviewObservations=createReviewObservationPipeline(store),policyRetention=new D1ModelPolicies(store.db),policyManagement=createTaskPolicyManagement(store,catalog);
     const orchestration=createOrchestration({store,delegations:new Delegations(store,{sourceDelegationVersion,catalog}),hasRoutine,waitUntil:context.waitUntil?promise=>context.waitUntil(promise):undefined,fire:async claim=>fireRoutine(fetchFn,env,claim.task,[],claim,undefined,await catalog.read(),sourceDelegationVersion)});
     const handoff=async input=>{const task=await store.handoffExecution(input.taskId,input);return orchestration.dispatch(task.id);};
     const afterComplete=async task=>{
@@ -140,7 +141,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
       if(context.waitUntil){context.waitUntil(recovery);context.waitUntil(observation);}else await Promise.all([recovery,observation]);
     };
     const delegate=async(taskId,input)=>orchestration.allocate(taskId,input);
-    return {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention};
+    return {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement};
   }
   return {
     async scheduled(event,env,context={}) {
@@ -173,7 +174,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
         if (pathname.startsWith('/api/') || pathname === '/mcp') {
           if (!authorized(request, env)) return responseJson({error: 'unauthorized'}, 401, {...headers, 'www-authenticate': 'Bearer'});
         }
-        const {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention}=runtime(env,context);
+        const {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement}=runtime(env,context);
         const capabilities = {sourceDelegationVersion:sourceDelegationVersion===1?1:0,cloudCodex: true, localCodex: false, claudeRoutine: hasRoutine, cloud: true, connected: true};
 
         if (request.method === 'GET' && pathname === '/api/state') {
@@ -186,6 +187,11 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
         }
         if (request.method === 'GET' && pathname === '/api/model-policy-retention') {
           return responseJson(await policyRetention.retentionStatus(),200,headers);
+        }
+        const policyMatch=pathname.match(/^\/api\/tasks\/([^/]+)\/model-policy$/);
+        if(policyMatch&&['GET','POST'].includes(request.method)){
+          const taskId=decodeURIComponent(policyMatch[1]);
+          return responseJson(request.method==='GET'?await policyManagement.read(taskId):await policyManagement.apply(taskId,await body(request)),200,headers);
         }
         const observationMatch=pathname.match(/^\/api\/tasks\/([^/]+)\/review-observations$/);
         if(request.method==='GET'&&observationMatch){

@@ -299,3 +299,19 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 성능 한계: 작업 참조 SQL은 반환 행을513개로 제한하지만 JSON 조건 때문에 DB 내부 스캔 수까지 제한하지는 않는다. 오래된/한도 도달 정책의 정리에서 작업 수에 비례한 비용이 남으며, 빈/최신 정책에서는 해당 조회를 생략한다. 작업/첨부/산출물 삭제와 새 도구·실제 AI 실행·운영 배포 없음.
 - 다음: 정책 생성/관리·승격 연결 및 M3 추가 비교 실행 예산, M4 갱신·근거·고정·복구 UI, M5 실제 운영 반영. 실제 serving-model 버전 수집은 여전히 미확인. 이 하위 단계나 CR-003을 전체 플랫폼 완료로 표시하지 않는다.
 - 최종 연결 확인: 용량 때문에 관측을 추가하지 못한 철회는 duplicate가 아닌 not_attributable과 정확한 사유를 저장. 마지막 변경 후 메인 대상25/25 통과(.inno/tmp/model-retention-m3-final-targeted.log). 독립 검토 종료: 차단 결함 없음. 별도 검증자가 공개 정책 API만으로 만든 정상436관측/1,997,573바이트 상태에서 새 critical 근거가2MB를 넘을 때 기존436관측을 유지한 안전 철회 저장을 확인했다.
+
+### 2026-09-27 M2 정책 관리 연결 착수
+- 직전 목표 턴은 단계별 사용량·근거 보존 구현/검증/커밋741297b로 진행이 있었다. 현재 작업 트리 clean 확인. 전체 목표는 계속 진행 중.
+- 승인된 MOD-03/04/07 내에서 작업의 저장된 배정 프로필을 기준으로 인증된 정책 조회·초기화·후보 등록·승격·철회 연결을 구현한다. 입력으로 품질 근거·실제 모델 버전을 꾸며낼 수 없고 기존 evidence gate를 유지한다.
+- Ruling: 실제 버전 미확인 baseline 정책을 생성한 것만으로 기존 정상 배정이 막히지 않아야 한다. 계정에서 검증 가능한 기존 baseline만 명시적 unvalidated fallback으로 허용하며, 승격된 모델의 증거/가용성 검증과 배정 원자 조건은 우회하지 않는다. Claude 별칭 지원은 구독의 실제 버전 확인을 의미하지 않는다.
+- Sol 구현자에 정책 연결·회귀를 위임, 메인은 통합과 독립 검토를 담당. 추가 비교 예산과 UI는 연결 계약 검증 뒤 이어간다. 새 언어/런타임/유료API 없음.
+- MOD-05/07 사용량 UI 병행 구현: 기존 검증된 phase/transition/wallElapsedMs/requestedModel을 표시하고 실제 모델 버전 미확인을 명시. 메인 브라우저 검증은 합성 데이터만 든 메모리 SQLite 서버에서 수행: 1280x900 및390x844, 62.345초 표시/보고123·45와 미보고 구분, 모바일 document390px·카드335px 가로 넘침 없음. 사용한 미리보기 세션과 탭은 종료했다. 실제 AI·사용자 데이터 변경 없음.
+- 브라우저 갱신 주의: 로컬 서버의 이름 고정 JavaScript 자산 max-age=3600 때문에 일반 reload 뒤 이전 UI가 남았다. 별도 localhost origin의 새 캐시에서 최신 코드를 확인했다. M5 릴리스에서 캐시 재검증/버전 처리와 이전 열린 탭 갱신 검증을 수행할 필요가 있다. 이번 UI 변경이 전체 모바일 제스처 검증을 뜻하지는 않는다.
+
+### 2026-09-27 M2 정책 관리 API 및 M4 단계별 사용량 표시 완료
+- GET/POST /api/tasks/:childId/model-policy를 기존 인증 게이트에 연결. 저장된 부모·자식 배정 일치와 서버 재계산 프로필을 확인하며 일반/root/import 작업은 거절한다. initialize/register_candidate/promote/withdraw의 입력 필드 제한과 stateVersion CAS 적용. 프로필·실제 버전·품질 근거 입력 위조 불가.
+- 초기 baseline과 후보는 modelVersion:null, 실제 버전은 추정하지 않음. 기존 계정/별칭 검증을 유지하며 Codex 계정 관측과 Claude의 정적 별칭/실제 가용성 미확인을 구분해 응답. 조회는 정책/후보 요약·관측 수만 제공하고 전체 근거 본문은 반환하지 않음.
+- shared unverifiedBaselineRoute는 최초 policyVersion1, activeId=baselineId, 이전 정책/활성 근거 없음, 실제 버전null인 baseline만 허용. 현재 계정 검증과 원자 배정 guard를 유지하며 기존의 정상 배정을 초기화만으로 차단하지 않음. 독립 검토에서 확인한 GET wait/실제fallback 표시 불일치를 공통 규칙으로 수정. 기존 실행 배정은 바뀌지 않음.
+- public/core/usage-presentation.mjs와 사용량 카드 연결: 검증된 단계·전환, 서버 기준 경과 시간(대기 포함), 요청 모델과 실제 버전 미확인 표시. null·레거시·가져온 기록은 확인 불가, 실제0은0밀리초. 동적 텍스트 escaping 유지. 데스크톱/모바일 합성 기록 브라우저 검증은 위 기록 참조.
+- 메인 전체 Node545/545, Worker dry-run 및 diff check 통과. 독립 정책36/36, UI/사용량18/18. 로그 .inno/tmp/policy-management-tests.log 및 policy-management-dry-run.log. 실제 AI 추가 실행/새 도구/운영 배포 없음.
+- 남은 범위: 정책 관리 화면·계정/공식 갱신 표시·수동 고정/복구, 자동 초기화/승격 운영 연결, 추가 비교 실행 예산, 신뢰된 serving-model 버전 귀속 경로, M5 캐시 갱신/desktop 재시작/운영 반영. 이번 API의 null-version 후보는 아직 승격할 수 없다. 모델 최신화 전체나 최초 플랫폼 목표 완료 아님.
