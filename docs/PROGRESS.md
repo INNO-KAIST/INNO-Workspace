@@ -356,3 +356,17 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 구현자 core46/46, UI10/10, 독립56/56. 메인 전체 Node574/574, Worker dry-run 및 diff check 통과. 로그 .inno/tmp/policy-pin-tests.log 및 policy-pin-dry-run.log. SQLite 실제 파일 close/reopen 고정 보존과 레거시 복원, D1 배정 중 pin 변경 첫 CAS 0건/최신 재시도 성공, HTTP 위조/오래된 요청 거절 확인.
 - 브라우저 합성 데이터 + 실제 Worker/desktop 경로: Codex 초기화→고정→후보 등록(승격 버튼 없음)→해제(승격 버튼 복귀)→고정, Claude 별칭 초기화→모바일 고정 확인. 1280x900,390x844에서 모바일 문서390/dialog335 clientWidth=scrollWidth. 화면 .inno/tmp/policy-pin-desktop.png 및 policy-pin-mobile.png. 검증 서버68365와 탭 종료, viewport 복원. 최종 불일치 pin 방어는 독립/API 회귀로 확인했으며 브라우저는 정상 고정 흐름 확인이다.
 - 운영 미배포, 실제 구독 AI 실행·새 스택·추가 유료API 없음. 다음은 MOD06 추가 비교 실행 예산 및 실행 예약/취소 연결, MOD03/04 자동 정책 초기화·승격과 serving-version 귀속 제약·baseline 회귀, M5 실제 배포/desktop 갱신. 전체 원래 플랫폼과 CR003 완료로 표시하지 않는다.
+
+### 2026-09-27 MOD06 비교 실행 예산 기반 착수
+- 직전 턴은 고정/해제 구현·574개 검증·커밋28b3a66로 진행. clean 작업 트리 확인.
+- 현 실행 구조 조사: 기존 위임은 Codex+Claude 각1개 독립 업무용으로 동일 입력·동일 제공자 기준선/후보 비교를 대체하지 못한다. 별도 비교 job의 실행 예약을 실제 claim에 연결해야 하며 설정값만 추가한 상태를 완료로 보지 않는다.
+- 공식 Routine fire 문서(https://platform.claude.com/docs/en/api/claude-code/routines-fire, 2026-09-27 확인)는 트리거 전용 토큰·즉시 세션 반환·idempotency 없음·text 입력만 명시한다. 원격 실행 중단/시간 한도 계약은 확인되지 않았다. 현재 코드도 원격 취소를 구현하지 않음. 단순 시작 허용 기한을 총 실행시간 한도로 바꾸어 주장하지 않는다.
+- 승인 범위의 구현계획 docs/superpowers/plans/2026-09-27-evaluation-budget-ledger.md 작성. 첫 하위 단계는 기본0회/시간·보수적 예약·검증된 종료 정산·D1/SQLite 영구 기록. Sol 구현자와 독립 검토자 분리. 실제 claim 원자 결합·Codex 종료타이머/능력협상·Claude 시간제한 제약·동일입력 평가·UI는 이어질 필수 작업이며 기반만으로 기능활성화/완료/운영배포 금지.
+
+### 2026-09-27 MOD06 비교 예산 영구 예약 기록 기반 완료
+- 새 public/core/evaluation-budget.mjs는 job별 불변 한도(기본0회/0ms, 최대100회/24시간)와 실행별 최대시간 예약/정산을 처리. 추가 실행 모든 단계(master/baseline/candidate/review/retry/handoff)를 구분하며 횟수는 반환하지 않는다. 동일 실행·세대·phase·시간 한도의 재전송만 변경 없이 반환, 다른 내용 재사용은 충돌.
+- 새 worker/evaluation-budgets.mjs 및 server/evaluation-budgets.mjs는 D1/SQLite CAS와 원자 revision 갱신. 최대32개 job/각256KiB/100예약 상한, 임의 삭제 없음. 32개는 초기 안전 상한이며 정상 비교 기능 공개 전 종료 job 보관·정리 흐름도 필요하다. 저장 상태의 ID·합계·시각·버전 일관성을 검증하고 훼손 상태에서 진행하지 않는다.
+- settle은 생성자에 주입된 서버 신뢰 종료 검증기만 허용. job/실행/세대/단계 일치를 확인하며 클라이언트 elapsedMs·확인 플래그는 수용하지 않는다. 종료 미확인 예약은 시간만 지나도 환불하지 않고, 만료 미정산 예약이 있으면 새 실행 예약을 차단한다. 정확한 재전송은 허용. 실제 경과시간이 한도를 넘으면 overrun 보존·새 실행 금지; 전달만 늦고 실제 시간은 정상인 정산은 초과로 오인하지 않음.
+- 독립 검토 보완: SQL LIKE 밑줄 와일드카드로 다른 metadata가 상한에 포함되지 않도록 정확한 GLOB 접두어 사용, 정책 metadata sentinel·세대/phase 충돌·큰 상태 거절 검증 추가. 독립24/24, 메인 전체 Node598/598와 Worker dry-run 통과. 로그 .inno/tmp/evaluation-budget-ledger-tests.log 및 evaluation-budget-ledger-dry-run.log.
+- SQLite 실제 파일 close/reopen 뒤 미정산 예약 보존 확인. D1은 TestD1 시뮬레이션이며 실제 클라우드DB 검증 아님. 원장 모듈은 현재 실행 경로에서 호출하지 않는 내부 기반이다. Worker dry-run은 기존 패키지 비회귀를 확인하며 새 예산이 실제 실행을 제한한다는 근거가 아니다. 실AI/새 스택/추가 비용/운영 배포 없음.
+- 필수 다음 단계: 전용 비교job 생성·동일입력/평가기준 보존 및 actual claim+budget을 하나의 원자 작업으로 결합, Codex 종료 타이머·검증기·capability 협상, 시간 종료를 확인할 수 없는 Claude 경로 보류, 사용자가 설정하는 예산·예약/소모/보류 UI. 이 연결 전 MOD06 또는 전체 최신화 완료를 주장하지 않는다. 다른 원래 플랫폼 목표도 유지.
