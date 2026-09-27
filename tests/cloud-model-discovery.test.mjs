@@ -53,7 +53,7 @@ test('scheduled refresh stays in background and its authenticated endpoint expos
  assert.equal((await worker.fetch(new Request('https://inno.test/api/model-discovery'),env)).status,401);
  const scheduled=worker.scheduled({},env,{waitUntil:promise=>pending.push(promise)});
  await Promise.race([scheduled,new Promise((_,reject)=>setTimeout(()=>reject(Error('orchestration delayed')),200))]);
- assert.equal(pending.length,1);release();await Promise.all(pending);
+ assert.equal(pending.length,2);release();await Promise.all(pending);
  const result=await worker.fetch(new Request('https://inno.test/api/model-discovery',{headers:{authorization:'Bearer '+env.ACCESS_TOKEN}}),env);
  assert.equal(result.status,200);const body=await result.json();assert.equal(body.candidates.length,5);assert.ok(body.candidates.every(c=>c.accountAvailability==='unknown'));
 });

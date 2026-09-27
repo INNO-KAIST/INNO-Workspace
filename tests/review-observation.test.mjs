@@ -34,6 +34,14 @@ test('derives every quality criterion from a separate completed parent review an
  assert.equal(result.verdict,'independent_reviewed_model_judgment');
 });
 
+test('only a genuine missing evidence task becomes a terminal missing diagnostic',async()=>{
+ const f=await fixture();
+ const missing={requireTask:async id=>{if(id==='child')throw Object.assign(Error('missing'),{statusCode:404});return f.tasks[id];}};
+ assert.deepEqual(await verifyReviewObservation(missing,f.ref,f.state),{status:'not_attributable',reason:'evidence_task_missing'});
+ const unavailable={requireTask:async id=>{if(id==='child')throw Error('D1 unavailable');return f.tasks[id];}};
+ await assert.rejects(verifyReviewObservation(unavailable,f.ref,f.state),/D1 unavailable/);
+});
+
 test('uses durable data only and gives deterministic bounded identifiers',async()=>{
  const f=await fixture();const a=await verifyReviewObservation(f.store,{...f.ref,quality:{criteria:[]},modelVersion:'forged',usage:{inputTokens:0}},f.state);
  assert.equal(a.status,'not_attributable');assert.equal(a.reason,'invalid_evidence_reference');

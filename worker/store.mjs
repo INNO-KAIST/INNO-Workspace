@@ -294,6 +294,7 @@ export class D1TaskStore {
       return {
         ...current, status: 'completed', version: current.version + 1, updatedAt: now,
         ...(reviewReport?{delegation:{...current.delegation,state:'completed',reviewReport}}:{}),
+        ...(reviewReport?{reviewObservation:{createdAt:now,reviewExecutionId:current.checkpoint.executionId,reviewGeneration:current.checkpoint.generation,batchId:current.delegation.batchId,epoch:current.delegation.epoch,children:current.delegation.children.map(child=>({childTaskId:child.taskId,...(child.selection?.profile?{status:'pending',attempts:0}:{status:'not_attributable',reason:'saved_profile_missing',attempts:0,nextAt:null})}))}}:{}),
         messages: [...current.messages, {id: this.id(), role: 'assistant', content, createdAt: now}],
         artifacts: [...current.artifacts, ...artifacts],
         checkpoint: {...current.checkpoint, resultArtifactIds:[...current.artifacts.filter(a=>a.executionId===input.executionId&&a.generation===input.generation),...artifacts].map(a=>a.id), usage: executionUsage(current.checkpoint,input.usage,now), usageHistory: usageHistory(current.checkpoint,input.usage,now), failure: undefined, status: 'completed', content: input.checkpoint ?? 'Execution completed.', completedAt: now, wallElapsedMs:elapsed, ...(executionEvidence?{executionEvidence:{...executionEvidence,wallElapsedMs:elapsed}}:{}), updatedAt: now},

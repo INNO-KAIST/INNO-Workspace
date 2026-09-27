@@ -278,3 +278,13 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 검증: 메인 실행근거/bridge/server68개, 최종 전체 Node508/508, Worker dry-run 통과. 독립 검토28/28. 로그 .inno/tmp/completion-evidence-targeted.log, completion-evidence-tests.log, completion-evidence-dry-run.log. 실제 AI·새 도구·유료API 사용 없음. 운영 미배포.
 - 남은 연결: verifyReviewObservation은 아직 완료 후 후크/policy.observe에 연결되지 않았다. 다음은 부모 검토 완료 뒤 내구성 있는 관측 수집·중복 방지·실패 복구·관측 불가 사유 보존을 연결하고 정상 결과 완료와 부가 관측 실패를 분리한다. 실제 serving-version 관측은 외부/런타임 제약이며 미확인을 숨기지 않는다.
 - 중간 handoff/delegation 단계는 terminal completion을 통과하지 않아 이번 executionEvidence 저장 대상이 아님. M3에서 단계별 사용량/경과 시간의 누락과 보관 한도를 다룰 때 반영. M2/M3 및 전체 플랫폼 완료 아님.
+
+### 2026-09-27 검토 관측 자동 처리·복구 연결 완료
+- 새 worker/review-observation-pipeline.mjs를 완료 afterComplete와 scheduled에 연결. 부모 reviewReport 완료와 reviewObservation 표식(실행ID/세대/batch/epoch/자식별상태)을 같은 D1 CAS에 저장. 정책관측 후 표식저장 전 장애는 실행식별 중복제거로 복구. 결과 완료와 부가 관측 실패 분리.
+- 크론은 due 조건+내구 cursor로 최대10부모/회 처리. 자식별 최대3회·지수 대기 재시도, 상한 후 failed 진단. 정책 없음/귀속 불가/프로필 없음은 terminal 진단이라 반복 조회하지 않음. 이전 검토의 지연 처리와 stale retry 상태가 새 검토를 덮지 못하게 식별자·행상태/attempt CAS 확인.
+- 인증된 작업별 관측 진단 GET 경로 추가. 모델이 보낸 품질/출처/시각을 그대로 정책 근거로 받지 않고 저장된 리뷰 검증 후 D1ModelPolicies.observe 호출. 정상 완료의 원본·결과파일은 바꾸지 않음.
+- 독립 리뷰 수정: 실제404만 evidence_task_missing, 일시적 DB조회 실패는 제한 재시도. 한 자식의 프로필 누락이 다른 유효 자식을 막지 않도록 독립 처리. legacy unmarked 작업은 적어도1개의 저장프로필이 있는 대상만 복구해 무의미한 전체 과거 backfill 방지.
+- MOD05 작은 수정: MCP checkpoint_task에 기존 bounded optional usage schema를 연결하고 finishExecution으로 전달. executor_report 출처 유지, 미보고/부적절 수치는 null, stale owner 거절, 완료 replay가 사용량을 덮지 못함.
+- 메인 전체 Node522/522, Worker dry-run 통과. 독립 대상검토37/37. 최초 전체실행521/522의 유일 실패는 scheduled waitUntil 작업수가1→2가 된 기존시험기대값; 양쪽 Promise 완료 대기와 비차단·인증 검증을 유지해 수정. 로그 .inno/tmp/review-pipeline-tests.log 및 review-pipeline-dry-run.log.
+- 운영 미배포, 새 도구/유료API/실제AI 실행 없음. 실제모델 버전 미확인·정책 미생성 상태에서는 진단을 남기며 자동승격/절감 성공을 주장하지 않음. 현재 정책 관리/초기화 UI와 승격 처리 연결 등 M2 남은 범위, M3 단계별 사용량/기록 정리, M4 표시·고정·복구, M5 운영반영이 남음.
+- 다음: handoff/delegation 같은 비종료 단계의 usage/시간/미보고 관측 손실을 보완하고, 정책·관측·활성 작업 참조를 보존하는 보관 한도/정리 상태를 구현·검증한다. 전체 최초 플랫폼 목표는 계속 유지.

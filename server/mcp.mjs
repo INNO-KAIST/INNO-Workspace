@@ -50,7 +50,7 @@ const TOOLS = Object.freeze([
     inputSchema: {
       type: 'object', required: ['taskId', 'executionId', 'generation', 'content'], additionalProperties: false,
       properties: {
-        taskId: {type: 'string'}, executionId: {type: 'string'}, generation: {type: 'integer'}, content: {type: 'string'},
+        taskId: {type: 'string'}, executionId: {type: 'string'}, generation: {type: 'integer'}, usage:OBSERVED_USAGE, content: {type: 'string'},
         status: {enum: ['running', 'completed']}, summary: {type: 'string'}, reviewReport:REVIEW,
       },
     },
@@ -139,6 +139,7 @@ async function callTool(store, name, args = {}, handlers = {}) {
         const task = await store.finishExecution(args.taskId, {
           executionId: args.executionId,
           generation: args.generation,
+          usage: args.usage,
           content: args.summary || args.content,
           checkpoint: args.content,
           reviewReport: args.reviewReport,

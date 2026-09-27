@@ -58,7 +58,7 @@ function sourceSignature(parent,child){
 export async function verifyReviewObservation(store,evidenceRef,state){
  if(!validRef(evidenceRef))return no('invalid_evidence_reference');
  let parent,child;
- try{[parent,child]=await Promise.all([store.requireTask(evidenceRef.parentTaskId),store.requireTask(evidenceRef.childTaskId)]);}catch{return no('evidence_task_missing');}
+ try{[parent,child]=await Promise.all([store.requireTask(evidenceRef.parentTaskId),store.requireTask(evidenceRef.childTaskId)]);}catch(error){if(error?.statusCode===404)return no('evidence_task_missing');throw error;}
  if(parent?.id!==evidenceRef.parentTaskId||child?.id!==evidenceRef.childTaskId||parent.id===child.id||parent.status!=='completed'||child.status!=='completed'||parent.delegation?.state!=='completed')return no('incomplete_or_self_review');
  const d=parent.delegation,review=parent.checkpoint,owner=child.checkpoint;
  if(!matchesOwner(parent,evidenceRef.reviewExecutionId,evidenceRef.reviewGeneration)||!matchesOwner(child,evidenceRef.childExecutionId,evidenceRef.childGeneration)||review.executionId===owner.executionId||review.provider!==d.masterProvider||owner.provider!==child.assignment?.provider)return no('stale_execution_owner');
