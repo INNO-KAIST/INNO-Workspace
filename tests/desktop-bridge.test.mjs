@@ -15,6 +15,19 @@ test('transient HTTP errors remain retryable while permanent errors stop',()=>{f
 
 test('stop during poll never launches the arriving claim',async()=>{let release,runs=0;const bridge=createDesktopBridge({outbox:box(),request:()=>new Promise(r=>release=r),runner:{run:()=>{runs++;}}});const tick=bridge.tick();await new Promise(setImmediate);bridge.stop();release({claim:{task:{id:'t'},executionId:'e',generation:1}});await tick;assert.equal(runs,0);});
 
+for(const mode of ['direct','tick'])test(`stop while ${mode} waits for model snapshot never asks for new ownership`,async()=>{
+ let releaseModels,enteredModels,requests=0,runs=0;
+ const entered=new Promise(resolve=>{enteredModels=resolve;});
+ const models=new Promise(resolve=>{releaseModels=resolve;});
+ const bridge=createDesktopBridge({outbox:box(),request:async()=>{requests++;return {claim:{task:{id:'t'},executionId:'e',generation:1}};},runner:{models:()=>{enteredModels();return models;},run:async()=>{runs++;return {content:'unexpected'};}}});
+ const waiting=mode==='direct'?bridge.startTask('t',{expectedVersion:1,materials:[]}):bridge.tick();
+ await entered;assert.equal(bridge.status().busy,true);
+ bridge.stop();releaseModels([{model:'fake',efforts:['low']}]);
+ if(mode==='direct')await assert.rejects(waiting,{status:409});else assert.equal(await waiting,false);
+ assert.equal(requests,0);assert.equal(runs,0);
+ assert.deepEqual(bridge.status(),{busy:false,stopped:true,pending:false,sourceDelegationVersion:0});
+});
+
 // Direct execution must pass sources only to the local runner, never the cloud API or outbox.
 test('direct material execution keeps source bytes off cloud requests and durable outbox',async()=>{const requests=[],writes=[];let supplied;const task={id:'t',attachments:[{name:'paper.txt',source:'file'}]};const bridge=createDesktopBridge({outbox:{read:()=>null,write:r=>writes.push(r),clear:()=>{}},request:async(p,b)=>{requests.push({p,b});return p.endsWith('start')?{claim:{task,executionId:'e',generation:1}}:{task:{status:'completed'}};},runner:{run:async input=>{supplied=input.materials;return {content:'Summary only'};}}});await bridge.startTask('t',{expectedVersion:1,materials:[{name:'paper.txt',text:'PRIVATE_SOURCE_BYTES'}]});await bridge.settled();assert.equal(supplied[0].text,'PRIVATE_SOURCE_BYTES');assert.equal(JSON.stringify(requests).includes('PRIVATE_SOURCE_BYTES'),false);assert.equal(JSON.stringify(writes).includes('PRIVATE_SOURCE_BYTES'),false);});
 test('direct start refuses while another local task or pending result exists',async()=>{const pending=box();pending.write({taskId:'old'});const bridge=createDesktopBridge({outbox:pending,request:async()=>{throw Error('must not request');},runner:{}});await assert.rejects(()=>bridge.startTask('t',{expectedVersion:1,materials:[]}),{status:409});});

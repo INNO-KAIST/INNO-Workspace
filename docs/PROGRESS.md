@@ -504,3 +504,11 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 배포전후18개 작업(completed16/paused1/cancelled1) 보존, active0/outbox없음. PID4620이 desktop-bridge임과 재차idle확인후종료. root E:\Develop\INNO Workspace clean에서10bfbd0 fast-forward, PID9488 hidden기동. authenticated local state로 cloud sync/idle/pendingfalse 및 양쪽sourcegate1 확인, stderr0bytes. 비인증cloudstate401 확인.
 - 별도 실구독AI smoke는 이번에추가하지않음. 세 프롬프트본문 경로는 직전합성688개회귀 및 독립검증, 이번운영확인은배포ID·인증·연결·기존상태보존에한정. 실제토큰절감/Claude실행을 이번배포에서실측했다고주장하지않는다.
 - 전체goal active. CR004 선택대기와자동선택 실근거/비교예산격리·정산/유동에이전트/연구문서·기기·장기복구 남음. 다음 작업은 승인범위 내 잔여실사용흐름 검토에서 이어간다.
+
+### 2026-09-28 SRC02/06 모델 목록 조회 중 종료 경계 수정
+- 직전b2b1886 프롬프트패치운영반영은progress. clean현재상태에서 장기복구 독립감사 수행.
+- modelSnapshot 대기중 stop()되면 이후 /start 또는 /poll에서 새소유권을요청하고 실제runner는시작하지않는경합 확인. 두경로 모두모델조회직후 stopped재검사. 기존요청후guard와기존프로세스close대기는유지.
+- 구현자 deferred snapshot RED20/22→GREEN22/22 및인접34/34. 메인·독립 outbox/desktop/source recovery27/27(.inno/tmp/stop-model-lookup-tests.log), 구문/diff검사통과. 실제AI/운영변경없음. 개발트리수정이며아직운영미반영.
+- 다음우선복구결함1: outbox가endpoint/account에결합되지않아 A결과미전달중현재endpoint/token을B로변경하면B에old본문POST가능. 서버404/409거절도전송자체를막지못함. 현재운영에서발생했다고주장하지않으며코드경로확인. 결과보존+서버가발급한안정workspace식별/정규화origin일치검사계약필요; 비밀평문저장금지.
+- 다음복구결함2: 실제TestD1합성재현에서 완료저장후응답유실→사용자후속message(completed→ready)→보관완료재전송이409. outbox가남고실제script는비재시도종료하여새작업차단. 단순409무시/old결과삭제/AI재실행금지; 원자적완료수신기록으로이미수락된동일전송만확인하는후속설계필요. 새generation/인계/위임도포함할것.
+- 위결함은기존승인 SRC02/03/06의복구·계정격리요구 범위. 전체목표active, CR004선택대기와독립적으로다음수정진행가능.

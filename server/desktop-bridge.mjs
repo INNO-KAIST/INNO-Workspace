@@ -31,7 +31,7 @@ export function createDesktopBridge({request,runner,outbox,heartbeatMs=15000,bef
    const materials=sanitizeMaterials(input.materials);busy=true;
    try{
     await beforeClaim();if(stopped)throw Object.assign(Error('Desktop is stopping'),{status:409});
-    const models=await modelSnapshot();
+    const models=await modelSnapshot();if(stopped)throw Object.assign(Error('Desktop is stopping'),{status:409});
     const {claim}=await request(`/api/desktop/${encodeURIComponent(taskId)}/start`,{expectedVersion:input.expectedVersion,sourceDelegationVersion:runner.sourceDelegationVersion===1?1:0,sourceNames:materials.map(m=>m.name),...(models!==undefined?{models}:{})});
     if(stopped)throw Object.assign(Error('Desktop is stopping'),{status:409});
     background=execute(claim,materials,models).catch(onError).finally(()=>{busy=false;controller=null;});
@@ -43,7 +43,8 @@ export function createDesktopBridge({request,runner,outbox,heartbeatMs=15000,bef
    try{
     const pending=outbox.read();if(pending){await deliver(pending);return true;}
     await beforeClaim();if(stopped)return false;
-    const models=await modelSnapshot();const {claim}=await request('/api/desktop/poll',models===undefined?{}:{models});if(!claim||stopped)return false;
+    const models=await modelSnapshot();if(stopped)return false;
+    const {claim}=await request('/api/desktop/poll',models===undefined?{}:{models});if(!claim||stopped)return false;
     return await execute(claim,[],models);
    }finally{busy=false;controller=null;}
   }
