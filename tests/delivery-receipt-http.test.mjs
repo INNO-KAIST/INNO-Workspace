@@ -10,11 +10,11 @@ import {Delegations} from '../worker/delegations.mjs';
 const token='receipt-http-test-token-0123456789';
 const assignments=['codex','claude'].map(provider=>({role:provider+' check',provider,requestedModel:provider==='codex'?'gpt-5.6-luna':'haiku',effort:'low',sufficientReason:'Independent calculation',acceptanceCriteria:['Result is 4'],instructions:'Calculate 2+2'}));
 const reviewReport=(children,status='pass')=>children.map(child=>({childTaskId:child.id,criteria:child.assignment.acceptanceCriteria.map(criterion=>({criterion,status,evidence:'Checked arithmetic'}))}));
-async function fixture(t,{enabled=true}={}){
+async function fixture(t,{enabled=true,versioned=true}={}){
  const db=new TestD1();t.after(()=>db.close());
  let external=0;const worker=createWorker({deliveryReceiptVersion:enabled?1:0,fetchFn:async()=>{external++;throw Error('AI must not run');}}),env={DB:db,ACCESS_TOKEN:token};
  const store=new D1TaskStore(db),workspaceId=await workspaceIdentity(db);
- const task=await store.createTask({prompt:'Check 2+2'}),owner=await store.claimExecution(task.id,{provider:'codex',expectedVersion:task.version});
+ const task=await store.createTask({prompt:'Check 2+2'}),owner=await store.claimExecution(task.id,{provider:'codex',expectedVersion:task.version},versioned?{deliveryReceiptVersion:1,workspaceId}:{});
  const post=async(id,action,input,{version='1',workspace=workspaceId,auth=true}={})=>{
   const headers={'content-type':'application/json',...(auth?{authorization:'Bearer '+token}:{}),...(version!==null?{'x-inno-delivery-receipt-version':version}:{}),...(workspace!==null?{'x-inno-workspace-id':workspace}:{})};
   const response=await worker.fetch(new Request(`https://inno.example/api/desktop/${encodeURIComponent(id)}/${action}`,{method:'POST',headers,body:typeof input==='string'?input:JSON.stringify(input)}),env);
@@ -28,10 +28,10 @@ async function fixture(t,{enabled=true}={}){
 const input=owner=>({executionId:owner.executionId,generation:owner.generation,content:'4'});
 
 async function reviewFixture(t){
- const f=await fixture(t),delegations=new Delegations(f.store);
+ const f=await fixture(t,{versioned:false}),delegations=new Delegations(f.store);
  const allocated=await delegations.allocate(f.task.id,{...f.owner,independent:true,children:assignments});
  for(const child of allocated.children){const claimed=await f.store.claimExecution(child.id,{provider:child.assignment.provider,expectedVersion:child.version});await f.store.finishExecution(child.id,{...claimed,content:'4'});}
- const ready=await delegations.reconcile(f.task.id),review=await f.store.claimExecution(f.task.id,{provider:'codex',expectedVersion:ready.parent.version});
+ const ready=await delegations.reconcile(f.task.id),review=await f.store.claimExecution(f.task.id,{provider:'codex',expectedVersion:ready.parent.version},{deliveryReceiptVersion:1,workspaceId:f.workspaceId});
  return {...f,allocated,review};
 }
 
@@ -45,9 +45,10 @@ test('HTTP accepts a receipt then lost-response replay before model report or ta
  assert.equal(replay.status,200,JSON.stringify(replay));assert.equal(replay.replayed,true);assert.equal(replay.task,undefined);assert.deepEqual(replay.deliveryReceipt,first.deliveryReceipt);
  assert.equal(taskReads,0);assert.equal(modelCalls,0);assert.equal(await f.revision(),before);assert.equal(f.external(),0);
  f.db.prepare=original;
+ const downgrade=await f.post(f.task.id,'complete',result,{version:null});assert.equal(downgrade.status,409);
  const changed=await f.store.applyAction(f.task.id,{action:'message',expectedVersion:first.task.version,content:'Do one more check'});
  assert.ok(changed.version>first.task.version);
- const newOwner=await f.store.claimExecution(f.task.id,{provider:'codex',expectedVersion:changed.version});
+ const newOwner=await f.store.claimExecution(f.task.id,{provider:'codex',expectedVersion:changed.version},{deliveryReceiptVersion:1,workspaceId:f.workspaceId});
  assert.ok(newOwner.generation>f.owner.generation);
  const current=await f.store.requireTask(f.task.id),currentRevision=await f.revision();
  assert.equal(current.status,'running');assert.equal(current.checkpoint.executionId,newOwner.executionId);
@@ -75,9 +76,18 @@ test('version and workspace headers gate all receipt requests before body or tas
 });
 
 test('legacy preaccepted result has no receipt and opt-in replay cannot manufacture one',async t=>{
- const f=await fixture(t),result=input(f.owner),legacy=await f.post(f.task.id,'complete',result,{version:null});assert.equal(legacy.status,200);assert.equal(legacy.deliveryReceipt,undefined);
+ const f=await fixture(t,{versioned:false}),result=input(f.owner),beforeUnversioned=await f.revision();
+ const unsupported=await f.post(f.task.id,'complete',result);assert.equal(unsupported.status,409);assert.equal((await f.store.requireTask(f.task.id)).status,'running');assert.equal(await f.revision(),beforeUnversioned);
+ const legacy=await f.post(f.task.id,'complete',result,{version:null});assert.equal(legacy.status,200);assert.equal(legacy.deliveryReceipt,undefined);
  const descriptor=await f.receipt(f.task.id,'complete',result);assert.equal(await f.saved(descriptor.id),null);
  const before=await f.revision(),replay=await f.post(f.task.id,'complete',result);assert.equal(replay.status,409);assert.equal(await f.saved(descriptor.id),null);assert.equal(await f.revision(),before);
+});
+
+test('an opted execution refuses an unreceipted HTTP result before acceptance',async t=>{
+ const f=await fixture(t),result=input(f.owner),before=await f.revision();
+ const response=await f.post(f.task.id,'complete',result,{version:null});assert.equal(response.status,409);
+ assert.equal((await f.store.requireTask(f.task.id)).status,'running');assert.equal(await f.revision(),before);
+ assert.equal(await f.saved((await f.receipt(f.task.id,'complete',result)).id),null);
 });
 
 test('receipt insert failure rolls task and revision back; later retry can accept exactly once',async t=>{
@@ -95,15 +105,15 @@ test('HTTP fail, handoff, and delegation save the wire-input receipt before any 
 });
 
 test('HTTP review retry, decision, and pass save receipts derived from original wire input',async t=>{
- const retried=await reviewFixture(t),report=reviewReport(retried.allocated.children);report[0].criteria[0].status='fail';const retryInput={...input(retried.review),reviewReport:report},retry=await retried.post(retried.task.id,'complete',retryInput);assert.equal(retry.status,200,JSON.stringify(retry));assert.ok(await retried.saved(retry.deliveryReceipt.id));assert.equal(retry.replayed,false);
- const decided=await reviewFixture(t),unverifiable={...input(decided.review),reviewReport:reviewReport(decided.allocated.children,'unverifiable')},decision=await decided.post(decided.task.id,'complete',unverifiable);assert.equal(decision.status,200,JSON.stringify(decision));assert.equal(decision.task.status,'waiting_user');assert.ok(await decided.saved(decision.deliveryReceipt.id));assert.equal(decision.deliveryReceipt.payloadDigest,(await decided.receipt(decided.task.id,'complete',unverifiable)).payloadDigest);
+ const retried=await reviewFixture(t),report=reviewReport(retried.allocated.children);report[0].criteria[0].status='fail';const retryInput={...input(retried.review),reviewReport:report},retry=await retried.post(retried.task.id,'complete',retryInput);assert.equal(retry.status,200,JSON.stringify(retry));assert.ok(await retried.saved(retry.deliveryReceipt.id));assert.equal(retry.replayed,false);assert.equal((await retried.post(retried.task.id,'complete',retryInput,{version:null})).status,409);
+ const decided=await reviewFixture(t),unverifiable={...input(decided.review),reviewReport:reviewReport(decided.allocated.children,'unverifiable')},decision=await decided.post(decided.task.id,'complete',unverifiable);assert.equal(decision.status,200,JSON.stringify(decision));assert.equal(decision.task.status,'waiting_user');assert.ok(await decided.saved(decision.deliveryReceipt.id));assert.equal(decision.deliveryReceipt.payloadDigest,(await decided.receipt(decided.task.id,'complete',unverifiable)).payloadDigest);assert.equal((await decided.post(decided.task.id,'complete',unverifiable,{version:null})).status,409);
  const passed=await reviewFixture(t),passInput={...input(passed.review),reviewReport:reviewReport(passed.allocated.children)},pass=await passed.post(passed.task.id,'complete',passInput);assert.equal(pass.status,200,JSON.stringify(pass));assert.equal(pass.task.status,'completed');assert.ok(await passed.saved(pass.deliveryReceipt.id));
 });
 
 test('an older accepted receipt replays after a later execution generation completes',async t=>{
  const f=await fixture(t),firstInput=input(f.owner),first=await f.post(f.task.id,'complete',firstInput);assert.equal(first.status,200);
  const followUp=await f.store.applyAction(f.task.id,{action:'message',expectedVersion:first.task.version,content:'Check it again'});
- const secondOwner=await f.store.claimExecution(f.task.id,{provider:'codex',expectedVersion:followUp.version});
+ const secondOwner=await f.store.claimExecution(f.task.id,{provider:'codex',expectedVersion:followUp.version},{deliveryReceiptVersion:1,workspaceId:f.workspaceId});
  const second=await f.post(f.task.id,'complete',{...input(secondOwner),content:'Still 4'});assert.equal(second.status,200);
  assert.notEqual(second.deliveryReceipt.id,first.deliveryReceipt.id);
  const before=await f.revision(),replay=await f.post(f.task.id,'complete',firstInput);

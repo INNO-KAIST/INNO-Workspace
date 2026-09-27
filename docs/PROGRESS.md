@@ -1,9 +1,9 @@
 # SDD ledger — plan: docs/IMPLEMENTATION.md
 ## 현재 재개 지점 (2026-09-28)
-- 전체 목표: 진행 중. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
+- 전체 목표: 사용자 요청으로 일시중지 (2026-09-28). 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
-- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. 아직 예약의 receipt 전환·ACK 및 클라이언트 정리 연결 없음.
-- 다음: 예약→receipt 원자 전환 및 서버 ACK → 클라이언트 ack_pending 정리 프로토콜 → 통합·독립 검증 후 배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다.
+- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. 공개 ACK/claim 협상 및 클라이언트 정리 연결은 미완료.
+- 재개 시 다음: 공개 claim/ACK 협상 및 클라이언트 ack_pending 정리 프로토콜 → 통합·독립 검증 후 배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -586,3 +586,11 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 검증: RED 8건 실패 후 최종 대상 12/12, 인접 74/74, 전체 765/765 (.inno/tmp/receipt-reservation-full.log); 메인 대상 12/12, 독립 71/71, 구문·diff 및 Wrangler dry-run 통과. 마지막 한 슬롯 동시 요청/동일 작업 CAS/INSERT 실패·0행/작업실 교체/평가예산 롤백을 포함한다.
 - 미완료: Task3b reservation→receipt 전환과 unreceipted 결과 거절, ACK 해제; 공개 claim 협상, 클라이언트 pending→ack_pending, no-result 명시 복구와 UI. 운영 기본 protocol은 계속 비활성이다. 새 스택·AI 실행·배포 없음.
 - 클라이언트 설계 검토에서 초기 outbox 쓰기 실패 후 새 claim 차단, Codex 로그인과 독립적인 pending drain, Windows power-loss 보장 한계를 계획에 추가했다.
+## 2026-09-28 — Task3b 완료 후 사용자 요청 일시중지
+- 현재 세부 단계 완료: version1 claim의 정확한 owner 예약을 raw CAS로 삭제하고 같은 batch에서 receipt를 저장한다. missing/손상/변경된 예약은 거절, task·children·revision·예약은 실패 시 함께 rollback. cap 1024에서도 기존 슬롯을 교체하므로 결과 수락 가능하다.
+- 모든 새 receipt는 version1 claim+예약 필수다. 미배포 Task2 테스트 fixture를 최종 계약에 맞게 갱신했다. opted 결과의 무영수증 수락/상태 replay는 거절하고 legacy no-receipt, renew/pause/cancel/reconcile는 유지한다.
+- 별도 내부 releaseDeliveryReceipt helper는 exact9필드·ID hash·workspace·저장값을 검증 후 raw CAS DELETE. 동시 ACK의 missing은 멱등 처리, 다른 내용/계속 남은 row는 거절. task/revision은 바꾸지 않는다. 아직 HTTP 노출 없음.
+- 검증: 최종 전체 785/785 (.inno/tmp/receipt-acceptance-full.log); 메인 acceptance+ACK 18/18; 독립 인접 142/142; 변경 Worker 구문·diff 검사 및 Wrangler dry-run 통과. 마지막 HTTP 테스트 보강도 최종 전체 실행에 포함됨. 실제 AI·운영 DB 변경·배포 없음.
+- 사용자 요청: 현재 작업까지만 마무리한 뒤 토큰 절약을 위해 일시중지. 새 세부 단계와 배포를 시작하지 않는다. 전체 플랫폼 목표는 미완료다.
+- 재개 지점: Task3 공개 claim/ACK 협상, 클라이언트 pending→검증된 ack_pending 영속화→서버 release→local clear. missing ACK 성공만으로 초기 pending 원문을 삭제하지 말 것. 예약 없는 실행의 명시적 복구, 로컬 쓰기 실패 후 새 claim 차단, 로그인과 독립적인 outbox drain도 남아 있다.
+- 운영은 기존 c925a00 문서 / 1e504e3 실행 코드 유지. 새 receipt protocol은 기본 비활성. 전체 목표 및 CR004 대기 상태는 유지한다.

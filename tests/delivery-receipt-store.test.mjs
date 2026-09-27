@@ -9,17 +9,18 @@ import {createTask} from '../public/core/tasks.mjs';
 const key=id=>'desktop_receipt:'+id;
 const read=(db,id)=>db.prepare('SELECT value FROM metadata WHERE key=?1').bind(key(id)).first();
 const revision=db=>db.prepare("SELECT value FROM metadata WHERE key='revision'").first();
-async function fixture(t){
+async function fixture(t,{versioned=true}={}){
  const db=new TestD1();t.after(()=>db.close());
  const store=new D1TaskStore(db,{now:()=>new Date('2026-09-28T00:00:00.000Z').toISOString()});
  const workspaceId=await workspaceIdentity(db);
  const created=await store.createTask({prompt:'Check one result'});
  const queued=await store.replaceTask(created.id,created.version,c=>({...c,status:'queued',version:c.version+1,updatedAt:store.now(),checkpoint:{...c.checkpoint,provider:'codex',status:'queued'}}));
- const owner=await store.claimExecution(queued.id,{provider:'codex',expectedVersion:queued.version});
+ const owner=await store.claimExecution(queued.id,{provider:'codex',expectedVersion:queued.version},versioned?{deliveryReceiptVersion:1,workspaceId}:{});
  const input={executionId:owner.executionId,generation:owner.generation,content:'saved'};
  const descriptor=await createDeliveryReceipt({workspaceId,taskId:queued.id,action:'complete',input});
+ const reservation=()=>db.prepare("SELECT key,value FROM metadata WHERE key GLOB 'desktop_reservation:*'").first();
  const complete=c=>({...c,status:'completed',version:c.version+1,updatedAt:store.now(),checkpoint:{...c.checkpoint,status:'completed'}});
- return {db,store,workspaceId,current:owner.task,descriptor,input,complete};
+ return {db,store,workspaceId,current:owner.task,descriptor,input,complete,reservation};
 }
 
 test('opt-in completion atomically stores only a validated descriptor alongside task and revision',async t=>{
@@ -36,12 +37,13 @@ test('ordinary update stays receipt-free and receipt cannot attach to a renew-ru
  await assert.rejects(()=>f.store.replaceTask(f.current.id,f.current.version,c=>({...c,version:c.version+1,updatedAt:f.store.now(),checkpoint:{...c.checkpoint,expiresAt:'2026-09-29T00:00:00.000Z'}}),undefined,{deliveryReceipt:f.descriptor}),e=>e?.statusCode===400);
  assert.equal((await f.store.requireTask(f.current.id)).version,f.current.version);
  assert.equal(await read(f.db,f.descriptor.id),null);
- await f.store.replaceTask(f.current.id,f.current.version,f.complete);
- assert.equal(await read(f.db,f.descriptor.id),null);
+ await assert.rejects(()=>f.store.replaceTask(f.current.id,f.current.version,f.complete),e=>e?.statusCode===409);
+ const legacy=await fixture(t,{versioned:false});await legacy.store.replaceTask(legacy.current.id,legacy.current.version,legacy.complete);
+ assert.equal(await read(legacy.db,legacy.descriptor.id),null);
 });
 
 test('CAS loser and receipt insert error leave no receipt or half transition',async t=>{
- const f=await fixture(t),original=f.db.batch.bind(f.db),beforeRevision=Number((await revision(f.db)).value);
+ const f=await fixture(t),original=f.db.batch.bind(f.db),beforeRevision=Number((await revision(f.db)).value),held=await f.reservation();
  f.db.batch=async statements=>{
   f.db.batch=original;
   const changed={...f.current,version:f.current.version+1,status:'paused'};
@@ -50,13 +52,15 @@ test('CAS loser and receipt insert error leave no receipt or half transition',as
  };
  await assert.rejects(()=>f.store.replaceTask(f.current.id,f.current.version,f.complete,undefined,{deliveryReceipt:f.descriptor}),e=>e?.statusCode===409);
  assert.equal(await read(f.db,f.descriptor.id),null);
+ assert.deepEqual(await f.reservation(),held);
  assert.equal(Number((await revision(f.db)).value),beforeRevision);
- const g=await fixture(t),secondRevision=Number((await revision(g.db)).value);
+ const g=await fixture(t),secondRevision=Number((await revision(g.db)).value),secondHeld=await g.reservation();
  g.db.db.exec("CREATE TRIGGER receipt_abort BEFORE INSERT ON metadata WHEN NEW.key GLOB 'desktop_receipt:*' BEGIN SELECT RAISE(ABORT, 'receipt disk failure'); END");
  await assert.rejects(()=>g.store.replaceTask(g.current.id,g.current.version,g.complete,undefined,{deliveryReceipt:g.descriptor}),/receipt disk failure/);
  assert.equal((await g.store.requireTask(g.current.id)).status,'running');
  assert.equal(Number((await revision(g.db)).value),secondRevision);
  assert.equal(await read(g.db,g.descriptor.id),null);
+ assert.deepEqual(await g.reservation(),secondHeld);
 });
 
 test('invalid descriptor, owner, workspace, and digest are rejected without writes',async t=>{
@@ -112,12 +116,13 @@ test('delegation receipt requires every child insert and rolls back a zero-write
  const children=['a','b'].map(id=>({...createTask({prompt:id},{now:f.store.now,id:()=>id}),id,parentTaskId:parent.id,batchId,parentEpoch:1,status:'queued',checkpoint:{provider:'codex',status:'queued',generation:0}}));
  const next={...parent,status:'waiting_children',version:parent.version+1,updatedAt:f.store.now(),delegation:{state:'waiting_children',batchId,epoch:1,sourceExecutionId:parent.checkpoint.executionId,sourceGeneration:parent.checkpoint.generation,children:children.map(child=>({taskId:child.id}))},checkpoint:{...parent.checkpoint,status:'waiting_children',executionId:undefined}};
  f.db.db.exec("CREATE TRIGGER child_ignore BEFORE INSERT ON tasks WHEN NEW.id='b' BEGIN SELECT RAISE(IGNORE); END");
- const before=Number((await revision(f.db)).value);
+ const before=Number((await revision(f.db)).value),held=await f.reservation();
  await assert.rejects(()=>f.store.replaceDelegation(parent,next,children.map(child=>({next:child})),[],{deliveryReceipt:f.descriptor}));
  assert.equal((await f.store.requireTask(parent.id)).status,'running');
  assert.equal((await f.store.listTasks()).length,1);
  assert.equal(Number((await revision(f.db)).value),before);
  assert.equal(await read(f.db,f.descriptor.id),null);
+ assert.deepEqual(await f.reservation(),held);
 });
 
 test('accepted fail and handoff transitions retain the original execution owner in the receipt',async t=>{
@@ -140,7 +145,7 @@ test('accepted delegation stores one receipt with parent, both children, and one
 });
 
 test('workspace rotation between validation and batch prevents any accepted write',async t=>{
- const f=await fixture(t),before=Number((await revision(f.db)).value),original=f.db.batch.bind(f.db);
+ const f=await fixture(t),before=Number((await revision(f.db)).value),original=f.db.batch.bind(f.db),held=await f.reservation();
  f.db.batch=async statements=>{
   f.db.batch=original;
   f.db.db.prepare("UPDATE metadata SET value=? WHERE key='desktop_workspace_id'").run('4f97f3de-f454-4fd0-b125-d4033ff8a5c8');
@@ -150,6 +155,7 @@ test('workspace rotation between validation and batch prevents any accepted writ
  assert.equal((await f.store.requireTask(f.current.id)).status,'running');
  assert.equal(Number((await revision(f.db)).value),before);
  assert.equal(await read(f.db,f.descriptor.id),null);
+ assert.deepEqual(await f.reservation(),held);
 });
 
 test('existing receipt key cannot be overwritten or leave a later transition committed',async t=>{

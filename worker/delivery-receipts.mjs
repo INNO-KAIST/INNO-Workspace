@@ -1,4 +1,5 @@
 import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
+import {prepareReceiptReservation} from './delivery-reservations.mjs';
 
 const workspaceUuid=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const hex=/^[0-9a-f]{64}$/;
@@ -46,6 +47,13 @@ function acceptedTransition(receipt,current,next,delegation){
  return false;
 }
 
+export function requiresDeliveryReceipt(current,next,{delegation=false}={}){
+ const checkpoint=current.checkpoint;
+ if(checkpoint?.deliveryReceiptVersion!==1)return false;
+ const owner={executionId:checkpoint.executionId,generation:checkpoint.generation};
+ return ['complete','fail'].some(action=>acceptedTransition({...owner,action},current,next,delegation));
+}
+
 export async function prepareDeliveryReceipt(db,receipt,current,next,acceptedAt,{delegation=false,records=[]}={}){
  if(!receipt||typeof receipt!=='object'||Array.isArray(receipt)||Object.keys(receipt).length!==fields.length||fields.some(key=>!Object.hasOwn(receipt,key)))invalid();
  receipt=Object.fromEntries(fields.map(key=>[key,receipt[key]]));
@@ -79,10 +87,11 @@ export async function prepareDeliveryReceipt(db,receipt,current,next,acceptedAt,
  if(receipt.id!==await sha256(JSON.stringify([1,receipt.workspaceId,receipt.taskId,receipt.executionId,receipt.generation,receipt.action])))invalid();
  const row=await db.prepare("SELECT value FROM metadata WHERE key='desktop_workspace_id'").first();
  if(row?.value!==receipt.workspaceId)invalid();
- return {key:'desktop_receipt:'+receipt.id,value:JSON.stringify({...Object.fromEntries(fields.map(key=>[key,receipt[key]])),acceptedAt}),workspaceId:receipt.workspaceId};
+ const reservation=await prepareReceiptReservation(db,receipt,current);
+ return {key:'desktop_receipt:'+receipt.id,value:JSON.stringify({...Object.fromEntries(fields.map(key=>[key,receipt[key]])),acceptedAt}),workspaceId:receipt.workspaceId,reservation};
 }
 
-// Must immediately follow the existing revision UPDATE. The assertion rolls
+// Must immediately follow the reservation DELETE. The assertion rolls
 // the entire D1 batch back if the receipt was not inserted after a successful
 // accepted transition. No receipt is written on a losing parent/task CAS.
 export function receiptStatements(db,receipt,next,{operationId}={}){

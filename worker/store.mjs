@@ -8,8 +8,8 @@ import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execu
 import {failureRecord} from '../public/core/failures.mjs';
 import {assertEvaluationAttachable,assertEvaluationBindingPreserved,evaluationBinding,reserveClaimBudget} from '../public/core/evaluation-claim.mjs';
 import {encodeStoredEvaluationBudget,parseStoredEvaluationBudget} from './evaluation-budgets.mjs';
-import {prepareDeliveryReceipt,receiptStatements} from './delivery-receipts.mjs';
-import {DesktopDeliveryCapacityError,prepareClaimReservation,reservationCapacity,reservationCapacityGuard,reservationStatements,MAX_DESKTOP_DELIVERIES} from './delivery-reservations.mjs';
+import {prepareDeliveryReceipt,receiptStatements,requiresDeliveryReceipt} from './delivery-receipts.mjs';
+import {DesktopDeliveryCapacityError,prepareClaimReservation,reservationCapacity,reservationCapacityGuard,reservationDeleteStatement,reservationStatements,MAX_DESKTOP_DELIVERIES} from './delivery-reservations.mjs';
 import {createSelectionState} from '../public/core/model-selection.mjs';
 import {MAX_MODEL_POLICY_PROFILES,profileKey} from './model-policies.mjs';
 import {delegationProfile} from './allocation-policy.mjs';
@@ -115,6 +115,7 @@ export class D1TaskStore {
     if (!next || next.id !== current.id || next.version !== current.version + 1) {
       throw new Error('task updater must increment version exactly once');
     }
+    if(deliveryReceipt===undefined&&requiresDeliveryReceipt(current,next))throw new ConflictError('Versioned desktop result requires a delivery receipt',current.version);
     assertEvaluationBindingPreserved(current,next,authorization===EVALUATION_ATTACH);
     if(current.checkpoint?.confirmationRequired&&authorization!==REMOTE_RECOVERY&&(['ready','queued','queued_for_review','running'].includes(next.status)||JSON.stringify(next.checkpoint?.confirmationRequired)!==JSON.stringify(current.checkpoint.confirmationRequired)))throw new ConflictError('Confirm the previous remote execution through dedicated recovery',current.version);
     if(current.parentTaskId && next.status==='queued' && current.status!=='queued')throw new ConflictError('Child retry requires the delegation coordinator',current.version);
@@ -137,7 +138,7 @@ export class D1TaskStore {
     statements.push(this.db.prepare("UPDATE metadata SET value = value + 1 WHERE key = 'revision' AND changes() = 1"));
     if(budget&&!reservation)statements.push(this.db.prepare("INSERT INTO metadata (key,value) SELECT 'revision',0 WHERE changes()!=1"));
     if(reservation)statements.push(...reservationStatements(this.db,reservation,next));
-    if(receipt)statements.push(...receiptStatements(this.db,receipt,next));
+    if(receipt)statements.push(reservationDeleteStatement(this.db,receipt.reservation,next),...receiptStatements(this.db,receipt,next));
     let results;
     try{results=await this.db.batch(statements);}
     catch(error){
@@ -210,6 +211,8 @@ export class D1TaskStore {
       if(record.current&&(await this.requireTask(record.current.id)).evaluationBudget)
         throw new ConflictError('Evaluation budget task cannot use ordinary delegation',current.version);
     }
+    if(deliveryReceipt===undefined&&requiresDeliveryReceipt(authoritative,next,{delegation:true}))
+      throw new ConflictError('Versioned desktop result requires a delivery receipt',authoritative.version);
     const receipt=deliveryReceipt!==undefined?await prepareDeliveryReceipt(this.db,deliveryReceipt,authoritative,next,this.now(),{delegation:true,records}):null;
     next.delegation={...next.delegation,operationId:this.id()};
     const values=[next.version,next.updatedAt,JSON.stringify(next),current.id,current.version];
@@ -257,7 +260,7 @@ export class D1TaskStore {
       if(missing.length)statements.push(this.db.prepare(`INSERT INTO metadata(key,value) SELECT 'revision',0 WHERE EXISTS (SELECT 1 FROM tasks p WHERE p.id=?1 AND json_extract(p.body,'$.delegation.operationId')=?2) AND (${missing.join(' OR ')})`).bind(...childValues));
     }
     statements.push(this.db.prepare(`UPDATE metadata SET value = value + 1 WHERE key = 'revision' AND EXISTS (SELECT 1 FROM tasks p WHERE p.id = ?1 AND json_extract(p.body,'$.delegation.operationId') = ?2)`).bind(next.id,next.delegation.operationId));
-    if(receipt)statements.push(...receiptStatements(this.db,receipt,next,{operationId:next.delegation.operationId}));
+    if(receipt)statements.push(reservationDeleteStatement(this.db,receipt.reservation,next,{operationId:next.delegation.operationId}),...receiptStatements(this.db,receipt,next,{operationId:next.delegation.operationId}));
     let results;
     try{results=await this.db.batch(statements);}
     catch(error){
@@ -383,7 +386,7 @@ export class D1TaskStore {
     for(let attempt=0;attempt<3;attempt++){
       const task=await this.requireTask(id);
       if(isHandoffReplay(task,input)){
-        if(deliveryReceipt!==undefined)throw new ConflictError('Delivery receipt replay requires stored verification',task.version);
+        if(deliveryReceipt!==undefined||task.checkpoint?.deliveryReceiptVersion===1)throw new ConflictError('Delivery receipt replay requires stored verification',task.version);
         return task;
       }
       try{return await this.replaceTask(id,task.version,current=>handoffTask(current,input,{now:this.now,id:this.id,recoverInterrupted:true}),undefined,{deliveryReceipt});}

@@ -53,7 +53,7 @@ export class CloudBridge {
     if(deliveryReceipt===null)throw new ValidationError('Invalid desktop delivery receipt');
     const t=await this.store.requireTask(id);
     if(['failed','waiting_quota','waiting_connection'].includes(t.status)&&t.checkpoint?.executionId===input.executionId&&t.checkpoint?.generation===input.generation){
-      if(deliveryReceipt!==undefined)throw new ConflictError('Delivery receipt replay requires stored verification',t.version);
+      if(deliveryReceipt!==undefined||t.checkpoint?.deliveryReceiptVersion===1)throw new ConflictError('Delivery receipt replay requires stored verification',t.version);
       return t;
     }
     return this.store.failExecution(id,input,{deliveryReceipt});
@@ -63,7 +63,7 @@ export class CloudBridge {
     for(let attempt=0;attempt<3;attempt++){
       const t=await this.store.requireTask(id);
       if(t.status==='completed'&&t.checkpoint?.executionId===input.executionId&&t.checkpoint?.generation===input.generation){
-        if(deliveryReceipt!==undefined)throw new ConflictError('Delivery receipt replay requires stored verification',t.version);
+        if(deliveryReceipt!==undefined||t.checkpoint?.deliveryReceiptVersion===1)throw new ConflictError('Delivery receipt replay requires stored verification',t.version);
         return t;
       }
       if(input.executionEvidence&&t.checkpoint?.provider!=='codex')throw new ValidationError('execution evidence provider does not match owner');

@@ -273,11 +273,11 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
             const parent=await store.requireTask(id);
             const replay=parent.delegation?.lastReviewRetry;
             if(replay?.executionId===input.executionId&&replay?.generation===input.generation&&!['superseded','cancelled'].includes(parent.delegation.state)){
-              if(deliveryReceipt)throw new ConflictError('Delivery receipt replay requires stored verification',parent.version);
+              if(deliveryReceipt||parent.checkpoint?.deliveryReceiptVersion===1)throw new ConflictError('Delivery receipt replay requires stored verification',parent.version);
               return responseJson({task:parent},200,headers);
             }
             if(parent.status==='waiting_user'&&parent.checkpoint?.executionId===input.executionId&&parent.checkpoint?.generation===input.generation){
-              if(deliveryReceipt)throw new ConflictError('Delivery receipt replay requires stored verification',parent.version);
+              if(deliveryReceipt||parent.checkpoint?.deliveryReceiptVersion===1)throw new ConflictError('Delivery receipt replay requires stored verification',parent.version);
               return responseJson({task:parent},200,headers);
             }
             if(parent.status==='running'&&parent.delegation?.state==='reviewing'){

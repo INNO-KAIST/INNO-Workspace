@@ -18,7 +18,7 @@ export class Delegations {
   for(let attempt=0;attempt<3;attempt++){
    const parent=await this.store.requireTask(parentId);
    if(isDelegationReplay(parent,input)){
-    if(deliveryReceipt!==undefined)throw new ConflictError('Delivery receipt replay requires stored verification',parent.version);
+    if(deliveryReceipt!==undefined||parent.checkpoint?.deliveryReceiptVersion===1)throw new ConflictError('Delivery receipt replay requires stored verification',parent.version);
     return {parent,children:await this.children(parent),replayed:true};
    }
    const validated=validateAssignments(parent,input,{sourceDelegationVersion:this.sourceDelegationVersion});
@@ -83,7 +83,7 @@ export class Delegations {
    const parent=await this.store.requireTask(parentId);
    const previous=parent.delegation?.lastReviewRetry;
    if(previous&&previous.executionId===input.executionId&&previous.generation===input.generation&&!['superseded','cancelled'].includes(parent.delegation.state)){
-    if(deliveryReceipt!==undefined)throw new ConflictError('Delivery receipt replay requires stored verification',parent.version);
+    if(deliveryReceipt!==undefined||parent.checkpoint?.deliveryReceiptVersion===1)throw new ConflictError('Delivery receipt replay requires stored verification',parent.version);
     return {parent,children:await this.children(parent),replayed:true};
    }
    this.store.assertExecution(parent,input);
