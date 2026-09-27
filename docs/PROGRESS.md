@@ -531,3 +531,10 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 개발브랜치검증완료이며이번patch는아직운영미반영. 다음릴리스는기존idle/outboxempty확인후Worker→bridge순서. 무헤더구bridge는보호미적용; same-origin identity확인후DB교체의본문네트워크전송자체는보장불가(서버mutation은차단),같은ID복제DB구별불가.
 - 남은장기복구핵심: 이미수락된완료응답유실후후속message/newgeneration 재전송수신기록계약, 식별자없는legacy명시귀속도구, renew오류로outbox생성전중단되는결과보존범위. 이번패치로전체장기복구/전체플랫폼완료를주장하지않음. 전체goal active.
 - 검증순서보충: 전체709/709·독립43/43 이후소스변경없음. 동일ID의인증토큰교체를테스트만보강했고최종메인대상12/12(.inno/tmp/workspace-binding-final-target.log)로재확인. 실제자격증명교체나운영호출은없음.
+
+### 2026-09-28 작업실 귀속·중단 경계 운영 반영
+- 직전1e504e3 구현/709개검증은progress. 기존main/Cloudflare승인에따라61679b2중단수정과1e504e3작업실귀속을함께배포. code main1e504e3, GitHub Verify36333735375 success, Python4/4 추가검증.
+- Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445 배포(.inno/tmp/workspace-binding-deploy.log). 정적자산변경/업로드없음, 스키마migration없음. 인증identity GET 및 새bridge poll에서 기존metadata에고정identity한행초기화.
+- 배포전후18작업(completed16/paused1/cancelled1), active0/outbox없음확인. 기존PID9488의desktop-bridge/idle재확인후종료, root clean b2b1886→1e504e3 fast-forward, 새PID26892 hidden실행. 양측sourcegate1, localbusyfalse/stoppedfalse/pendingfalse, stderr0bytes.
+- 실제Worker identity반복GET동일ID, 비인증401, 임의다른workspaceID+malformedbody POST /api/desktop/poll은본문검사/claim전409. 새bridge인증state조회정상, 기존작업상태보존. 토큰/작업본문/identity값출력없음. 실제구독AI실행은추가하지않았고 실제outbox동일결과회수는직전fakeWorker+실제파일통합증거에한정.
+- 남은복구: 수락완료응답유실후후속메시지/세대변경의receipt재전송, legacy명시귀속도구, 실행renew실패전후결과보존. CR004결정과전체기획도미완료. 전체goal active.
