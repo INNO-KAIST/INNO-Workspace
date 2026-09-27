@@ -13,6 +13,7 @@ import {failureGuidance} from './core/failures.mjs';
 import {createRecordImportUI} from './record-import.mjs';
 import {createModelPolicyUI} from './model-policy-ui.mjs';
 import {createModelDiagnosticsUI} from './model-diagnostics-ui.mjs';
+import {reviewObservationSection} from './review-observation-ui.mjs';
 import {WorkspaceClient,exportBundle,parseBundle,validateEndpoint} from './core/client.mjs';
 import {childRecoveryState,delegationPanel,delegationStateLabel,executionRecoveryState,taskControlState,taskDisplayStatus,taskListGroups} from './delegation-ui.mjs?v=parallel-ui-2';
 import {AttachmentSession} from './core/attachments.mjs';
@@ -92,6 +93,7 @@ function renderDelegation(){
  section.classList.toggle('hidden',!panel);if(!panel){$('delegation-list').replaceChildren();$('delegation-resume').hidden=true;return;}
  $('delegation-state').textContent=delegationStateLabel(panel.state);
  $('delegation-list').innerHTML=panel.children.map(child=>{const sessionUrl=linkSafe(child.recovery.sessionUrl);return `<article class="delegation-child"><div class="delegation-child-head"><strong>${esc(child.role)}</strong><span class="status ${esc(child.status)}">${esc(statusNames[child.status]||child.status)}</span></div><div class="delegation-assignment"><span>${esc(providerName(child.provider))}</span><span>요청 모델 · ${esc(child.requestedModel||'미기재')}</span>${child.effort?`<span>추론 강도 · ${esc(child.effort)}</span>`:''}</div>${child.sufficientReason?`<p class="delegation-reason">배정 이유 · ${esc(child.sufficientReason)}</p>`:''}${child.acceptanceCriteria.length?`<ul class="delegation-criteria" aria-label="검증 기준">${child.acceptanceCriteria.map(criterion=>`<li>${esc(criterion)}</li>`).join('')}</ul>`:''}${child.recovery.requiresConfirmation?`<p class="delegation-warning">확인 필요 · ${esc(recoveryReasonName(child.recovery.reason))} 기존 실행이 종료되기 전에 복구하면 중복 실행될 수 있습니다.</p>`:child.confirmationReason?`<p class="delegation-warning">확인 필요 · ${esc(recoveryReasonName(child.confirmationReason))} 자동으로 다시 실행하지 않습니다.</p>`:''}${child.summary?`<p class="delegation-summary">검토 기록 · ${esc(child.summary)}</p>`:''}${child.artifacts.length?`<div class="delegation-artifacts">결과물 · ${child.artifacts.map(artifact=>esc(artifact.name||artifact.id||'이름 미기재')).join(' · ')}</div>`:''}<div class="delegation-card-actions">${sessionUrl?`<a class="text-button" href="${esc(sessionUrl)}" target="_blank" rel="noopener noreferrer">이전 실행 세션 확인 ↗</a>`:''}<button class="delegation-open text-button" type="button" data-task="${esc(child.taskId)}">작업 기록 보기 ↗</button>${child.recovery.eligible&&client?.remote?`<button class="secondary-button delegation-recover" type="button" data-recover-child="${esc(child.taskId)}">${child.recovery.requiresConfirmation?'종료 확인 후 복구':'이 작업 다시 실행'}</button>`:''}</div></article>`;}).join('');
+ $('delegation-list').insertAdjacentHTML('beforeend',reviewObservationSection(current()));
  if(client?.remote&&state().capabilities?.modelPolicyManagement===true){
   for(const card of $('delegation-list').querySelectorAll('.delegation-child')){
    const childId=card.querySelector('.delegation-open')?.dataset.task;

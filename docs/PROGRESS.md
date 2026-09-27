@@ -448,3 +448,11 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 보존 범위 확인: 모델정책 observation은 프로필별90일/1000건(참조된 근거 예외), 작업 실행 usageHistory는 작업별 최근100회이며 전역90일/1000건 규칙이 아님. UI도 해당 차이를 명시한다.
 - 남은 복구 항목: review observation pipeline은 재시도 소진 후 failed 행을 자동 재수집하지 않는다. 이번 수정은 이미 failed인 기록을 재처리하지 않으며 실제 운영 발생 여부도 확인하지 않았다. 릴리스 전 진단/명시적 복구 검증 필요.
 - 새 언어/런타임·CR004 평가 기준 변경·AI 실행·운영 배포 없음. 전체 목표와 자동 모델 선택/비교 실행 및 릴리스는 진행 중.
+
+### 2026-09-28 MOD07 부모 작업의 관측 수집 진단 UI 연결
+- 직전 턴7971e53 보존 결함 수정/660개 검증으로 progress. 승인 MOD07 상태 확인 범위에서 완료 부모의 reviewObservation을 기존 작업 화면에 연결했다. CR004 평가 기준은 그대로 대기.
+- 기존 task snapshot만 읽어 최대2개 frozen child의 관측 저장/기존 기록/대기/재시도 시각/재시도 종료/정책 미등록/귀속 불가를 표시한다. 관측 수집 실패와 작업 결과 실패를 구분하고 저장 성공을 품질 통과나 승격으로 표현하지 않는다. 새 GET/poll/AI 실행/복구 mutation 없음.
+- 현재 완료 부모·완료 배정 및 executionId/generation/batchId/epoch와 정확히 일치하는 자식2건만 신뢰. 누락/오래된 marker·중복/잘못된 ID는 미확인. 원인 코드는 own-property allowlist, 역할명80문자/HTML escape, 원시 상태/원인 미노출.
+- RED: 표시누락, prototype 원인키, 숫자ID의 regex 강제변환 재현 후 수정. 메인 중간전체는 마지막 숫자ID RED와 겹쳐664/665 실패했으며, 구현 동결 후 최종전체665/665 통과(.inno/tmp/observation-status-final-tests.log). 독립 대상/pipeline17/17은 마지막 타입guard 이전 검토이며, 최종guard는 구현자 대상5/5와 메인전체로 검증. Worker dry-run 통과는 타입guard 이전 패키징; 신규파일/모듈연결은 동일. diff check 통과.
+- 실제 합성 TestD1+Worker+desktop UI fixture를 CUA로1280x900/390x844 검증: 저장/실패 상태 표시, 모바일doc390/viewport390 및panel329/client329로 가로넘침없음, 진단블록1개, 새작업전환0개. 최종코드 reload 후 상태 재확인. screenshot .inno/tmp/observation-status-mobile.png. 운영DB·실구독 실행 없음.
+- 남은 범위: failed 관측의 명시적 재수집/원인 복구, CR004 및 자동선택 실경로, MOD06 비교/정산, 릴리스. index.html 앱script cache version 갱신은 릴리스에 포함해 기존 브라우저 갱신 확인 필요. 신규스택·운영배포 없음.
