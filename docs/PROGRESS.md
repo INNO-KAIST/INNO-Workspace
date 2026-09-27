@@ -427,3 +427,8 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 슬롯이 부족하면 입력 순서대로 가능한 초기화만 준비하고 남은 profile은 현재 카탈로그 검증을 거친 요청 경로로 배정. policyVersion:null/policy_capacity_unavailable 사유 및 한국어 표시, 자동 삭제 없음. 기존 과거 미등록 작업의 수동 initialize는 테스트 fixture를 분리해 보존. 32개는 누적 한도이므로 향후 수명주기 정리/재사용 개선은 남아 있다.
 - RED: 최초 초기화/저장실패/용량사유, 정책0건·자식0건·UI 원시사유 노출 재현 후 수정. 최종 구현자·독립 대상40/40, 메인 전체 Node656/656·Worker dry-run·diff check 통과. 로그 .inno/tmp/auto-initial-policy-tests.log 및 auto-initial-policy-dry-run.log. D1은 TestD1이며 운영DB 실제 검증 아님. UI는 기존 레이아웃의 사유 문자열만 변경하고 렌더 단위 검증함.
 - 신규 언어/런타임/의존성·실제 AI 호출·추가 API 비용·운영 배포 없음. 자동 초기화는 자동 모델 변경/품질 검증/승격 완료를 뜻하지 않는다.
+
+### 2026-09-28 자동 승격 실경로 감사 및 CR004 제안
+- 직전 목표 턴f23f7f8/656개 검증으로 progress. clean tree 확인 후 구현/PRD/공식문서 대조에서 실제 자동승격 불가능 경로 발견: non-null version gate와 actualModelVersion:null 기록, parent/batch마다 다른 비교ID.
+- 내부 계획에 추가했던 엄격한 serving-version 조건을 사용자 별도승인으로 해석하지 않음. 현재구독최적화 의도와의 불일치를 숨긴 채 작동하지 않는 자동gate만 추가하지 않는다.
+- CR004의 실행경로기반 평가(실제버전미확인 유지) 대안과 엄격한승격보류 대안을 구체적으로 작성. 품질근거 신뢰범위에 관한 사용자선택 대기. 코드/PRD/운영 변경·AI 실행 없음. 전체목표는 active; 다른 승인된 작업도 남아 있어 goal blocked 아님.
