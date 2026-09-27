@@ -28,6 +28,35 @@ function task(f,id,status,own,children){
 }
 
 for(const kind of ['D1','SQLite']){
+ test(`${kind} ignores 513 empty fallback snapshots but preserves mixed real task pins`,async t=>{
+  const f=setup(kind);t.after(f.close);
+  const initial=await f.store.create({profile,baseline,expectedStateVersion:0});
+  await seed(f,{...initial,observations:[evidence('own-pin'),evidence('child-pin'),evidence('orphan')]});
+  for(let i=0;i<513;i++)task(f,`empty-${i}`,'queued',i%2?[]:null,i%2?null:[[],[]]);
+  task(f,'owner','paused',['own-pin']);
+  task(f,'parent','waiting_children',[],[['child-pin'],[]]);
+  const result=await f.store.prune({profile,expectedStateVersion:1});
+  assert.equal(result.removed,1);
+  assert.deepEqual(result.state.observations.map(row=>row.id),['own-pin','child-pin']);
+  const added=await f.store.observe({profile,evidenceRef:observation('new'),expectedStateVersion:result.state.stateVersion});
+  assert.ok(added.state.observations.some(row=>row.id==='new'));
+ });
+
+ test(`${kind} still defers at 513 real pins and on malformed or unsupported selections`,async t=>{
+  const f=setup(kind);t.after(f.close);
+  const initial=await f.store.create({profile,baseline,expectedStateVersion:0});
+  await seed(f,{...initial,observations:[evidence('old')]});
+  for(let i=0;i<513;i++)task(f,`real-${i}`,'queued',[`pin-${i}`]);
+  await assert.rejects(f.store.prune({profile,expectedStateVersion:1}),/task pin scan limit/);
+  f.sql.prepare('DELETE FROM tasks').run();
+  for(let i=0;i<513;i++)task(f,`empty-${i}`,'queued',[]);
+  task(f,'malformed','paused','not-an-array');
+  await assert.rejects(f.store.prune({profile,expectedStateVersion:1}),/invalid task evidence/);
+  f.sql.prepare('DELETE FROM tasks WHERE id=?').run('malformed');
+  task(f,'unknown','paused',null,[[],[],[]]);
+  await assert.rejects(f.store.prune({profile,expectedStateVersion:1}),/unsupported task selection shape/);
+ });
+
  test(`${kind} keeps active and paused task evidence past 90 days, trims to 1000, and no-ops`,async t=>{
   const f=setup(kind);t.after(f.close);let state=await f.store.create({profile,baseline,expectedStateVersion:0});
   state={...state,activeEvidenceIds:['active'],observations:[evidence('active'),evidence('paused'),...Array.from({length:1000},(_,i)=>evidence(`old${i}`,i<1?now-91*DAY:now))]};await seed(f,state);

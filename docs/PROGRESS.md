@@ -439,3 +439,12 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - MODEL-ROUTING.md의 오래된 미구현 설명을 수정하고 개발 브랜치 기준 사용 순서, 실제 버전 미확인, 정책 저장 한도, 비교/중대 회귀 연결의 남은 범위를 기록.
 - 소규모 안내 변경이며 평가 규칙·실행 동작·PRD는 변경하지 않았다. CR004 A/B 선택은 계속 대기. 새 스택·AI 호출·운영 배포 없음.
 - 기존 UI 테스트12/12 및 git diff --check 통과. 로그 .inno/tmp/model-readiness-copy-tests.log. 브라우저 시각 검증은 이번 문구 변경에서 수행하지 않음.
+
+### 2026-09-28 MOD06 빈 근거 목록의 정리 한도 오계산 수정
+- 직전 목표 턴은3e9348a 안내 수정으로 progress. CR004 선택 대기와 독립적인 승인 MOD06 보존 경로 감사 후 실제 결함 수정.
+- 신규 fallback 배정은 evidenceIds:[]를 정상 저장한다. 기존 TASK_PINS_SQL이 빈 배열도 한도에 포함해 비종료 작업513개에서 실제 보호참조가 없어도 정리/관측 추가가 scan limit으로 보류되는 것을 독립 TestD1 재현 및 D1/SQLite RED로 확인.
+- 유효한 빈 배열만 SQL 대상에서 제외. 비어 있지 않은 참조·비정상 타입·2개 초과 자식 shape는 기존 검사 유지. 실제513개 보호행 한도와 revision CAS는 보존한다. 결과 행 상한의 오계산 수정이며 전체 tasks 테이블 조회 비용을 없애는 인덱스 최적화는 아니다.
+- D1/SQLite 회귀:513 빈 snapshot와 혼합 실제 pin에서 오래된 비보호 관측 삭제 및 관측 추가 성공, 실제 pin 보존; 진짜513 보호행과 손상/알 수 없는 shape는 보류. 독립18/18, 메인 전체660/660, Worker dry-run 및 diff check 통과. 로그 .inno/tmp/empty-pin-full-tests.log 및 empty-pin-dry-run.log. 실제 운영 D1 검증은 아님.
+- 보존 범위 확인: 모델정책 observation은 프로필별90일/1000건(참조된 근거 예외), 작업 실행 usageHistory는 작업별 최근100회이며 전역90일/1000건 규칙이 아님. UI도 해당 차이를 명시한다.
+- 남은 복구 항목: review observation pipeline은 재시도 소진 후 failed 행을 자동 재수집하지 않는다. 이번 수정은 이미 failed인 기록을 재처리하지 않으며 실제 운영 발생 여부도 확인하지 않았다. 릴리스 전 진단/명시적 복구 검증 필요.
+- 새 언어/런타임·CR004 평가 기준 변경·AI 실행·운영 배포 없음. 전체 목표와 자동 모델 선택/비교 실행 및 릴리스는 진행 중.

@@ -1,6 +1,7 @@
 // Reads only saved selection references from nonterminal tasks. The result cap is
 // deliberately fail closed: cleanup and observation ingestion must not guess pins.
 export const TASK_PIN_LIMIT=512;
+const hasEvidenceIds=path=>`(json_type(body,'${path}') IS NOT NULL AND (json_type(body,'${path}') != 'array' OR json_array_length(body,'${path}') > 0))`;
 export const TASK_PINS_SQL=`SELECT
  json_extract(body,'$.assignment.selection.evidenceIds') AS own,
  json_extract(body,'$.delegation.children[0].selection.evidenceIds') AS first_child,
@@ -8,9 +9,9 @@ export const TASK_PINS_SQL=`SELECT
  json_array_length(body,'$.delegation.children') AS child_count
  FROM tasks
  WHERE json_extract(body,'$.status') IN ('ready','queued','waiting_children','queued_for_review','running','paused','waiting_user','waiting_quota','waiting_connection','failed')
- AND (json_type(body,'$.assignment.selection.evidenceIds') IS NOT NULL
-   OR json_type(body,'$.delegation.children[0].selection.evidenceIds') IS NOT NULL
-   OR json_type(body,'$.delegation.children[1].selection.evidenceIds') IS NOT NULL
+ AND (${hasEvidenceIds('$.assignment.selection.evidenceIds')}
+   OR ${hasEvidenceIds('$.delegation.children[0].selection.evidenceIds')}
+   OR ${hasEvidenceIds('$.delegation.children[1].selection.evidenceIds')}
    OR json_array_length(body,'$.delegation.children')>2)
  LIMIT ${TASK_PIN_LIMIT+1}`;
 
