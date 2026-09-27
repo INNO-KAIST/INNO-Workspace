@@ -471,3 +471,15 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 실제합성TestD1+Worker+desktop+C UA브라우저:390x844모바일에서버튼click→두failed가pending→합성8초scheduler의기존pipeline.process→두recorded로전환, 정상결과보존/버튼제거확인. 실제운영cron은기존5분이며8초는검증fixture전용. desktop기존1280폭흐름에서도버튼표시확인. doc390==viewport390/panel329==client329로가로넘침없음. screenshot .inno/tmp/observation-recovered-mobile.png. 마지막token-only패치는자동회귀로검증했고최종브라우저전체복구재실행은하지않음.
 - 가이드 MODEL-ROUTING.md에복구순서/자동반복금지/정책미등록·귀속불가제외/저장성공≠품질검증기록. PRD와새스택변경없음. 실제AI·운영DB변경·운영배포없음.
 - 남은전체범위 유지: CR004선택과실제모델/가용성·비교근거연결, MOD06전용비교/실행격리/정산, M5기존클라이언트캐시·bridge갱신/배포, 유동에이전트·연구/문서·장기복구등. 이번완료는관측재수집하위단계에한정.
+
+### 2026-09-28 검증 기능 운영 반영 — 부분 릴리스
+- 직전 fab7ca7 관측복구 구현/682개 검증으로 progress. 기존 main 반영·Cloudflare 배포 명시승인에 따라 release 수행. 전체목표와 CR004선택은 미완료 유지.
+- 배포내용: 공식모델발견/계정목록수집, 초기정책·관리·고정/진단, 단계사용량, 근거보존, 관측수집/명시재수집. 자동승격 실경로/추가비교실행은 활성화하지 않음. 예산/기한/claim 내부기반은 포함되지만 공개비교capability는 미광고.
+- 검증: Node682/682, Python4/4, Worker dry-run, 독립호환74/74. main 코드 a830cf3 GitHub Verify run36330950415 success. Pages run36331069052 success. app入口query model-recovery-20260928. 실제페이지부팅/no JS error 및양쪽정적asset확인.
+- 최초push는 GH007 이메일공개보호로거절되어원격불변. 미게시5커밋의author/committer email을GitHub noreply로정규화, 전후treehash동일검증후재push성공. 이전history는 codex/pre-model-release-email-normalization 참조로보존. 문서의 fab7ca7 등기존기록은정규화전검증시점ID이며운영code는a830cf3.
+- Worker b7116d21-aa78-4cf9-9d4b-d57a6f93df00 배포후 root E:\Develop\INNO Workspace를c67546a→a830cf3 fast-forward. 루트수정문서11개는source사본과동일함을확인하고stash e7175eb7af283064e25846c5f6856dff946230a5에보존(복원불필요,동일내용최신tree에포함). 원본/비밀/로컬DB 삭제없음.
+- 운영전 기존17작업(completed15/paused1/cancelled1), active0/outbox없음 및localbusyfalse재확인. 기존bridgePID26568 idle에서종료, 새bridgePID4620 hidden기동. sourceDelegationVersion1 및busyfalse/pendingfalse 확인, 모델계정관측fresh/7개, stderr비어있음. Worker→bridge 순서는 DEPLOYMENT.md에기록.
+- 운영후 인증없는state401, 인증capabilities modelPolicyManagement/modelDiagnostics/reviewObservationRecovery true, 실제모델discovery진단/retention조회정상(retentioncomplete,lastErrornull). 기존17작업상태유지.
+- 실구독최소smoke1건 75b5debf-b50d-449a-8dad-00b5e06ebf1e: 도구/자료/위임없는Codex한줄요청 queued→completed/version4, INNO 연결 확인 결과클라우드회수. 실행ID579cad8a-76e3-424b-8398-4b8a930c5dd3, reported input18871/output46/cachedInput12416(입력포함), phase1기록. 실제Claude는이번릴리스에서재호출하지않음; MCPhelper불변/호환회귀와기존실증거에한정. 이smoke는추가모델품질비교가아님.
+- 짧은요청의기본입력문맥18871token관측: 품질유지조건에서고정prompt/도구/설정문맥의불필요소모분석이후속필요. 무조건모델하향/컨텍스트삭제로절감했다고주장하지않음.
+- 잔여: 실제여러기기/오프라인장기여정, 자동선택CR004/availability/comparison근거, 전용평가실행격리/정산, 유동에이전트및연구/문서제작품질. 부분릴리스완료이며PRD M5전체/전체플랫폼완료선언아님.
