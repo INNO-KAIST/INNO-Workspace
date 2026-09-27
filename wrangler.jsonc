@@ -20,7 +20,8 @@
     }
   ],
   "vars": {
-    "CORS_ORIGINS": "https://inno-kaist.github.io"
+    "CORS_ORIGINS": "https://inno-kaist.github.io",
+    "INNO_SOURCE_DELEGATION_VERSION": "1"
   },
   "triggers": {
     "crons": [

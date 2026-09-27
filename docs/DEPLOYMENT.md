@@ -44,7 +44,7 @@ Pages 화면에서 Worker API에 접속할 경우 Worker의 `CORS_ORIGINS` 환�
 
 ## 3. 배포 후 확인
 
-원본 협업 capability는 Worker 환경변수 `INNO_SOURCE_DELEGATION_VERSION`의 정확한 문자열 `1`로만 켜집니다. 미설정·그 밖의 값은 버전 0입니다. 이 변수는 현재 배포 설정에 추가하지 않았습니다. 검증된 릴리스에서 데스크톱 연결기의 같은 게이트를 먼저 준비하고, 운영 활성화 시 Worker 환경에 별도로 적용한 뒤 인증된 `/api/state`의 `capabilities.sourceDelegationVersion`을 확인합니다. 되돌릴 때 Worker 변수를 제거하거나 `0`으로 변경하고 재배포한 뒤 같은 상태가 0인지 확인합니다. 현재 실행 중인 작업의 소유권과 저장된 결과를 확인한 다음 데스크톱 연결기도 환경변수를 제거하고 재시작합니다. 요청 본문으로 capability를 활성화할 수 없습니다.
+원본 협업 capability는 Worker 환경변수 `INNO_SOURCE_DELEGATION_VERSION`의 정확한 문자열 `1`로만 켜집니다. 미설정·그 밖의 값은 버전 0입니다. 2026-09-27 검증 릴리스의 wrangler.jsonc에는 이 변수를 문자열 1로 명시합니다. 실제 혼합 제공자 검증 완료 여부는 PROGRESS.md에서 확인합니다. 검증된 릴리스에서 데스크톱 연결기의 같은 게이트를 먼저 준비하고, 운영 활성화 시 Worker 환경에 별도로 적용한 뒤 인증된 `/api/state`의 `capabilities.sourceDelegationVersion`을 확인합니다. 되돌릴 때 Worker 변수를 제거하거나 `0`으로 변경하고 재배포한 뒤 같은 상태가 0인지 확인합니다. 현재 실행 중인 작업의 소유권과 저장된 결과를 확인한 다음 데스크톱 연결기도 환경변수를 제거하고 재시작합니다. 요청 본문으로 capability를 활성화할 수 없습니다.
 
 1. 로그인하지 않은 `/api/state` 요청이 401로 거부되는지 확인합니다.
 2. 두 기기에서 같은 작업의 메시지와 일시정지 상태가 동기화되는지 확인합니다.
