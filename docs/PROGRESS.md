@@ -1,4 +1,13 @@
 # SDD ledger — plan: docs/IMPLEMENTATION.md
+## 현재 재개 지점 (2026-09-28)
+- 전체 목표: 진행 중. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
+- 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
+- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2a 내부 원자 저장 hook 검증 완료/최신 하단 기록 참조. 아직 HTTP replay/ack 및 클라이언트 정리 연결 없음.
+- 다음: 모든 결과 전이에 명시적 receipt 전달 및 HTTP replay 연결 → claim 슬롯/보관 상한과 ack_pending 정리 프로토콜 → 통합·독립 검증 후 배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다.
+- CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
+- 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
+
+## 과거 단계 기록
 
 User approved implementation; input files/folders are connected references, not permanently uploaded.
 
@@ -546,3 +555,12 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - Task1 public/core/delivery-receipt.mjs의createDeliveryReceipt는JSONwire정규화·객체key순서무관/배열순서보존으로owner tuple id와전체payloadDigest SHA256생성. 반환은version/workspace/task/execution/generation/action/id/digest만, 원문없음. 700000UTF8bytes/depth64/식별자200문자/positiveSafeGeneration/UUIDv4와complete|fail검증. prototype형key·undefined/nonfinite/toJSON·cycle/BigInt 경계확인.
 - 구현자RED stub7/7실패→대상/인접15/15, 전체717/717보고. 메인대상8/8직접통과(.inno/tmp/delivery-receipt-target.log). 서버body파싱결과와클라이언트실제wirepayload기준으로만사용해야함. 아직productionimport/API연결/자동복구활성화/운영배포없음. Task2atomic전이와Task3ack/정리/예산슬롯을이어구현해야함.
 - 동결후독립대상8/8·모듈구문·diff검사통과, 차단결함없음. 전체goal active이며수신기록실연결/정리/legacy복구및전체기획잔여를유지한다.
+
+### 2026-09-28 SRC02/06 Task2a 내부 원자 수신 기록 저장
+- 직전47ea757 shareddescriptor구현은progress. 현재clean확인후Task2a명시옵션hook구현: replaceTask(...,authorization,{deliveryReceipt}) / replaceDelegation(...,policyPlan,{deliveryReceipt}). 프로덕션route는아직옵션을전달하지않으며기존경로유지.
+- worker/delivery-receipts는정확필드/owner tupleSHA/실제DBworkspace/현재Codex실행/수락전이검증. 첫await전descriptor복사, acceptedAt서버시각. 완료·실패·인계·배정·검토재시도·사용자결정대기의허용형태를구분하며running갱신이나task-onlywaiting_children기록거절. payloadDigest와실제HTTP본문대조는후속route에서필수.
+- 기존budget/revision changes()순서보존후receiptINSERT를같은D1batch에추가. taskversion/parentoperation/DBworkspace조건및0write sentinel로작업·자식·revision·receipt전체rollback. 기존receiptkey덮어쓰기불가. evaluation budget commit과receipt동시옵션은명시거절. CAS실패는수신기록없음/Conflict분류보존.
+- 독립중간발견반영: delegation은authoritativeparentowner, 정확한frozen2children/records집합, 실제child부모·batch·버전, before/after동일ID와1증분검사. unchanged완료형제보존reviewretry허용. 부모만갱신하거나child0쓰기/다른ID혼합은receipt와부모전이모두없음.
+- 구현자RED에서기존receipt누락·mutabledescriptor·부모only·위조snapshot·child누락/crossID/version·불완전decision을재현후수정. 최종target18/18, 인접103/103, 전체735/735(.inno/tmp/receipt-store-full.log) 메인로그확인+메인target18/18(.inno/tmp/receipt-store-main-target.log). Worker dry-run(.inno/tmp/receipt-store-dry-run.log)은마지막decision형태predicate보강전이며모듈/의존구조동일, 최종구문검사통과. 실제D1/AI/외부HTTP실행없음.
+- Task2전체는미완료: domainaccepting메서드옵션전달/HTTPupfrontreplay·CAS패자재조회/receipt응답아직없음. Task3claimslot/상한·ack_pending·서버release·fileflush복구도남음. capability미광고/운영배포없음. 전체goalactive.
+- 최종동결본독립58/58 및모듈구문/diff검사통과, 차단결함없음. 다음은Task2의수락메서드/HTTP replay를이hook에명시연결하되Task3수명관리검증전공개활성화하지않는단계.

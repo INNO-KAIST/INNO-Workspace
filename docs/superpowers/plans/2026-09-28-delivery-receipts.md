@@ -19,3 +19,13 @@ Design questions being resolved before Task2/3: explicit store hook for replaceT
 - Existing temp-file+rename is atomic replacement but not proof of power-loss durability. Flush/rename behavior and recovery tests must substantiate any stronger crash-durability claim. Do not advertise more than tested.
 
 Task1 integration rule: derive the server descriptor from body(request) parsed JSON, and the client from the exact JSON-wire payload it will send. No separate unsent pre-serialization object. Descriptor module is not imported by production routes yet.
+
+## Task2a atomic store hooks (implementation slice)
+- Explicit fifth options parameter deliveryReceipt on replaceTask and replaceDelegation; never global mutable request context. Production routes remain disconnected in this slice.
+- Validate exact descriptor fields, UUID/hex64/safe generation, recompute owner tuple ID, match current Codex task/execution/generation and accepting transition. Copy descriptor; acceptedAt comes from server clock. Payload digest equivalence is enforced later from parsed HTTP input, not asserted by this internal hook alone.
+- Workspace metadata equality must be checked inside the atomic batch, not only before it. Ordinary task CAS and revision changes chain remains in original order. Receipt insertion follows the successful revision update and checks changes()=1; receipt failure rolls the full batch back. Receipt intent and existing evaluation-budget commit authorization are explicitly incompatible for this slice.
+- Delegation additionally checks every changed child before revision/receipt, guarded by the new parent operationId. Preserve old no-receipt behavior and budget tests. No receipt may appear on a zero-write parent CAS. Preserve useful conflict classification when rollback assertions fire.
+- Tests: full task+receipt commit, stale CAS, receipt constraint failure rollback, forged descriptors, workspace swap at transaction time, child zero-write rollback, legacy/budget regression. No HTTP protocol/capability, ack, TTL or unbounded production writes enabled yet.
+- Ownership is checked against the pre-transition task protected by CAS. Handoff/delegation/review-retry may clear the next checkpoint owner; receipt insertion must bind the accepted version/operation, not require the cleared next owner to equal the old execution.
+
+Task2a implemented: explicit store hooks and atomic rollback tests pass. Task2 remains unchecked because accepting domain methods and HTTP replay/receipt responses are not connected. Capacity reservations, ACK cleanup, and client phases remain Task3. Final Node suite 735/735 and main store target 18/18; see PROGRESS.

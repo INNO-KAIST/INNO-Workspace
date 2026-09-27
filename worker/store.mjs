@@ -8,6 +8,7 @@ import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execu
 import {failureRecord} from '../public/core/failures.mjs';
 import {assertEvaluationAttachable,assertEvaluationBindingPreserved,evaluationBinding,reserveClaimBudget} from '../public/core/evaluation-claim.mjs';
 import {encodeStoredEvaluationBudget,parseStoredEvaluationBudget} from './evaluation-budgets.mjs';
+import {prepareDeliveryReceipt,receiptStatements} from './delivery-receipts.mjs';
 import {createSelectionState} from '../public/core/model-selection.mjs';
 import {MAX_MODEL_POLICY_PROFILES,profileKey} from './model-policies.mjs';
 import {delegationProfile} from './allocation-policy.mjs';
@@ -102,7 +103,7 @@ export class D1TaskStore {
     return {revision,tasks,usage:usage.results.map(row=>JSON.parse(row.body)),capabilities};
   }
 
-  async replaceTask(id, expectedVersion, updater, authorization) {
+  async replaceTask(id, expectedVersion, updater, authorization, {deliveryReceipt} = {}) {
     const current = await this.requireTask(id);
     if (!Number.isInteger(expectedVersion)) throw new ValidationError('expectedVersion is required');
     if (current.version !== expectedVersion) {
@@ -120,13 +121,21 @@ export class D1TaskStore {
     const bindings=[next.version,next.updatedAt,JSON.stringify(next),id,expectedVersion];
     if(current.parentTaskId)bindings.push(current.parentTaskId,current.batchId,current.parentEpoch);
     const budget=authorization?.[BUDGET_COMMIT];
+    if(deliveryReceipt!==undefined&&budget)throw new ValidationError('Evaluation budget cannot carry a desktop receipt');
+    const receipt=deliveryReceipt!==undefined?await prepareDeliveryReceipt(this.db,deliveryReceipt,current,next,this.now()):null;
     const budgetGuard=budget?' AND EXISTS (SELECT 1 FROM metadata m WHERE m.key = ?'+(bindings.length+1)+' AND m.value = ?'+(bindings.length+2)+')':'';
     if(budget)bindings.push(budget.key,budget.raw);
     const statements=[this.db.prepare('UPDATE tasks SET version = ?1, updated_at = ?2, body = ?3 WHERE id = ?4 AND version = ?5' + guard + budgetGuard).bind(...bindings)];
     if(budget)statements.push(this.db.prepare(`UPDATE metadata SET value=?1 WHERE key=?2 AND value=?3 AND changes()=1 AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=?4 AND t.version=?5 AND json_extract(t.body,'$.checkpoint.executionId')=?6 AND json_extract(t.body,'$.checkpoint.generation')=?7)`).bind(budget.nextRaw,budget.key,budget.raw,id,next.version,next.checkpoint.executionId,next.checkpoint.generation));
     statements.push(this.db.prepare("UPDATE metadata SET value = value + 1 WHERE key = 'revision' AND changes() = 1"));
     if(budget)statements.push(this.db.prepare("INSERT INTO metadata (key,value) SELECT 'revision',0 WHERE changes()!=1"));
-    const results = await this.db.batch(statements);
+    if(receipt)statements.push(...receiptStatements(this.db,receipt,next));
+    let results;
+    try{results=await this.db.batch(statements);}
+    catch(error){
+      if(receipt){const latest=await this.db.prepare('SELECT version FROM tasks WHERE id=?1').bind(id).first();if(latest?.version!==expectedVersion)throw new ConflictError('task changed during update',latest?.version);}
+      throw error;
+    }
     if (Number(results[0]?.meta?.changes ?? 0) !== 1) {
       const latest = await this.requireTask(id);
       throw new ConflictError('task changed during update', latest.version);
@@ -148,7 +157,7 @@ export class D1TaskStore {
 
   // The parent CAS checks every child snapshot before any row changes. Every
   // subsequent statement is gated by the unique operation token installed by it.
-  async replaceDelegation(current,next,records=[],policyPlan=[]){
+  async replaceDelegation(current,next,records=[],policyPlan=[],{deliveryReceipt}={}){
     // Only the allocator may propose initial policies. Other callers keep the legacy guard-array form.
     if(!Array.isArray(policyPlan)&&(!policyPlan||typeof policyPlan!=='object'||Object.keys(policyPlan).some(key=>!['guards','initialPolicies'].includes(key))))
       throw new ValidationError('Invalid initial policy plan');
@@ -191,6 +200,7 @@ export class D1TaskStore {
       if(record.current&&(await this.requireTask(record.current.id)).evaluationBudget)
         throw new ConflictError('Evaluation budget task cannot use ordinary delegation',current.version);
     }
+    const receipt=deliveryReceipt!==undefined?await prepareDeliveryReceipt(this.db,deliveryReceipt,authoritative,next,this.now(),{delegation:true,records}):null;
     next.delegation={...next.delegation,operationId:this.id()};
     const values=[next.version,next.updatedAt,JSON.stringify(next),current.id,current.version];
     let guard='';
@@ -226,7 +236,7 @@ export class D1TaskStore {
       statements.push(this.db.prepare(`INSERT INTO metadata(key,value) SELECT ?1,?2 WHERE EXISTS (SELECT 1 FROM tasks p WHERE p.id=?3 AND json_extract(p.body,'$.delegation.operationId')=?4)`).bind(item.key,item.text,next.id,next.delegation.operationId));
       statements.push(this.db.prepare(`INSERT INTO metadata(key,value) SELECT 'revision',0 WHERE changes()!=1 AND EXISTS (SELECT 1 FROM tasks p WHERE p.id=?1 AND json_extract(p.body,'$.delegation.operationId')=?2)`).bind(next.id,next.delegation.operationId));
     }
-    if(initialPolicies.length){
+    if(initialPolicies.length||receipt){
       const childValues=[next.id,next.delegation.operationId],missing=[];
       for(const record of records){
         if(!record.next)continue;
@@ -237,7 +247,13 @@ export class D1TaskStore {
       if(missing.length)statements.push(this.db.prepare(`INSERT INTO metadata(key,value) SELECT 'revision',0 WHERE EXISTS (SELECT 1 FROM tasks p WHERE p.id=?1 AND json_extract(p.body,'$.delegation.operationId')=?2) AND (${missing.join(' OR ')})`).bind(...childValues));
     }
     statements.push(this.db.prepare(`UPDATE metadata SET value = value + 1 WHERE key = 'revision' AND EXISTS (SELECT 1 FROM tasks p WHERE p.id = ?1 AND json_extract(p.body,'$.delegation.operationId') = ?2)`).bind(next.id,next.delegation.operationId));
-    const results=await this.db.batch(statements);
+    if(receipt)statements.push(...receiptStatements(this.db,receipt,next,{operationId:next.delegation.operationId}));
+    let results;
+    try{results=await this.db.batch(statements);}
+    catch(error){
+      if(receipt){const latest=await this.db.prepare('SELECT version FROM tasks WHERE id=?1').bind(current.id).first();if(latest?.version!==current.version)throw new ConflictError('Delegation changed during update',latest?.version);}
+      throw error;
+    }
     if(Number(results[0]?.meta?.changes??0)!==1)throw new ConflictError('Delegation changed during update',(await this.requireTask(current.id)).version);
     return next;
   }
