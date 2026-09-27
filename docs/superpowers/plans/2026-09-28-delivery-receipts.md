@@ -29,3 +29,9 @@ Task1 integration rule: derive the server descriptor from body(request) parsed J
 - Ownership is checked against the pre-transition task protected by CAS. Handoff/delegation/review-retry may clear the next checkpoint owner; receipt insertion must bind the accepted version/operation, not require the cleared next owner to equal the old execution.
 
 Task2a implemented: explicit store hooks and atomic rollback tests pass. Task2 remains unchecked because accepting domain methods and HTTP replay/receipt responses are not connected. Capacity reservations, ACK cleanup, and client phases remain Task3. Final Node suite 735/735 and main store target 18/18; see PROGRESS.
+
+## Task2b accepting domain propagation (completed internal slice)
+- Optional deliveryReceipt is forwarded explicitly through store finish/fail/handoff/decision, bridge complete/fail, delegation allocation/review retry, and orchestration allocation/retry. Subsequent dispatch/reconciliation never inherits the option.
+- Opt-in status-only replay cannot return success before stored receipt verification; legacy no-option behavior remains. No HTTP index or capability activation in this slice.
+- Seven domain tests cover ordinary/child/review completion, quota/normal failure, handoff, allocation, review retry/decision, legacy replay and null rejection. Full suite 742/742; independent relevant suite 120/120; main target 7/7 and Wrangler dry-run passed.
+- Task2 remains open for HTTP upfront replay lookup, descriptor matching, CAS-loser reread and response contract. Task3 capacity and local ACK lifecycle remain required before activation.

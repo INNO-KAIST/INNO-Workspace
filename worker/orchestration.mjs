@@ -10,10 +10,10 @@ export function createOrchestration({store,delegations,hasRoutine,fire,waitUntil
  async function reconcileTask(taskId){const task=await store.requireTask(taskId);const parentId=task.parentTaskId??(task.delegation?task.id:null);if(!parentId)return null;const result=await delegations.reconcile(parentId);return dispatchChildren(result);}
  return {
   dispatch,
-  allocate:async(taskId,input)=>dispatchChildren(await delegations.allocate(taskId,input)),
+  allocate:async(taskId,input,options)=>dispatchChildren(await delegations.allocate(taskId,input,options)),
   recoverChild:async(taskId,input)=>dispatchChildren(await delegations.recoverChild(taskId,input)),
   resume:async(taskId,input)=>dispatchChildren(await delegations.resume(taskId,input)),
-  retryReview:async(taskId,input)=>dispatchChildren(await delegations.retryReview(taskId,input)),
+  retryReview:async(taskId,input,options)=>dispatchChildren(await delegations.retryReview(taskId,input,options)),
   reconcileTask,
   hydrateClaim:async claim=>{
    if(!claim)return null;

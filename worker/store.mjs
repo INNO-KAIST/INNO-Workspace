@@ -275,7 +275,7 @@ export class D1TaskStore {
     });
   }
 
-  async requestDecision(id, input) {
+  async requestDecision(id, input, {deliveryReceipt} = {}) {
     const snapshot = await this.requireTask(id);
     return this.replaceTask(id, snapshot.version, current => {
       this.assertExecution(current, input);
@@ -288,7 +288,7 @@ export class D1TaskStore {
         ...(reviewReport?{delegation:{...current.delegation,reviewReport}}:{}),
         checkpoint: {...current.checkpoint, status: 'waiting_user', usageHistory:usageHistory(current.checkpoint,input.usage,now,{task:current,transition:'decision'}), content: decision.prompt, updatedAt: now},
       };
-    });
+    },undefined,{deliveryReceipt});
   }
 
   markWaiting(id, {expectedVersion, provider, reason}) {
@@ -359,20 +359,24 @@ export class D1TaskStore {
     ) throw new ConflictError('stale execution owner cannot write this task', task.version);
   }
 
-  async handoffExecution(id,input){
+  async handoffExecution(id,input,{deliveryReceipt}={}){
+    if(deliveryReceipt===null)throw new ValidationError('Invalid desktop delivery receipt');
     const snapshot=await this.requireTask(id);
     if(snapshot.evaluationBudget)throw new ValidationError('Evaluation budget task cannot use ordinary handoff');
     if(snapshot.parentTaskId)throw new ValidationError('A child cannot perform nested handoff');
     if(snapshot.delegation&&snapshot.delegation.state!=='superseded')throw new ValidationError('Active delegation master cannot hand off review');
     for(let attempt=0;attempt<3;attempt++){
       const task=await this.requireTask(id);
-      if(isHandoffReplay(task,input))return task;
-      try{return await this.replaceTask(id,task.version,current=>handoffTask(current,input,{now:this.now,id:this.id,recoverInterrupted:true}));}
+      if(isHandoffReplay(task,input)){
+        if(deliveryReceipt!==undefined)throw new ConflictError('Delivery receipt replay requires stored verification',task.version);
+        return task;
+      }
+      try{return await this.replaceTask(id,task.version,current=>handoffTask(current,input,{now:this.now,id:this.id,recoverInterrupted:true}),undefined,{deliveryReceipt});}
       catch(error){if(!(error instanceof ConflictError)||attempt===2)throw error;}
     }
   }
 
-  async finishExecution(id, input, {recoverInterrupted = false, allowDesktopEvidence = false} = {}) {
+  async finishExecution(id, input, {recoverInterrupted = false, allowDesktopEvidence = false, deliveryReceipt} = {}) {
     const snapshot = await this.requireTask(id);
     return this.replaceTask(id, snapshot.version, current => {
       const sameInterruptedOwner = recoverInterrupted
@@ -416,7 +420,7 @@ export class D1TaskStore {
         artifacts: [...current.artifacts, ...artifacts],
         checkpoint: {...current.checkpoint, resultArtifactIds:[...current.artifacts.filter(a=>a.executionId===input.executionId&&a.generation===input.generation),...artifacts].map(a=>a.id), usage: executionUsage(current.checkpoint,input.usage,now), usageHistory: usageHistory(current.checkpoint,input.usage,now,{task:current,transition:'completion'}), failure: undefined, status: 'completed', content: input.checkpoint ?? 'Execution completed.', completedAt: now, wallElapsedMs:elapsed, ...(executionEvidence?{executionEvidence:{...executionEvidence,wallElapsedMs:elapsed}}:{}), updatedAt: now},
       };
-    });
+    },undefined,{deliveryReceipt});
   }
 
   async leaveExecutionRunning(id, input) {
@@ -431,7 +435,7 @@ export class D1TaskStore {
     });
   }
 
-  async failExecution(id, input) {
+  async failExecution(id, input, {deliveryReceipt} = {}) {
     const snapshot = await this.requireTask(id);
     return this.replaceTask(id, snapshot.version, current => {
       this.assertExecution(current, input);
@@ -442,7 +446,7 @@ export class D1TaskStore {
         ...current, status, version: current.version + 1, updatedAt: now,
         checkpoint: {...current.checkpoint, usageHistory:usageHistory(current.checkpoint,input.usage,now,{task:current,transition:'failure'}), status, failure, updatedAt: now},
       };
-    });
+    },undefined,{deliveryReceipt});
   }
 
   async recoverRemoteExecution(id,input){

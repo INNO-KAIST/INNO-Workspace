@@ -2,8 +2,8 @@
 ## 현재 재개 지점 (2026-09-28)
 - 전체 목표: 진행 중. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
-- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2a 내부 원자 저장 hook 검증 완료/최신 하단 기록 참조. 아직 HTTP replay/ack 및 클라이언트 정리 연결 없음.
-- 다음: 모든 결과 전이에 명시적 receipt 전달 및 HTTP replay 연결 → claim 슬롯/보관 상한과 ack_pending 정리 프로토콜 → 통합·독립 검증 후 배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다.
+- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2a 내부 원자 저장 hook 및 Task2b 수락 도메인 명시 전달 검증 완료/최신 하단 기록 참조. 아직 HTTP replay/ack 및 클라이언트 정리 연결 없음.
+- 다음: HTTP replay 선조회·일치 확인·응답 연결 → claim 슬롯/보관 상한과 ack_pending 정리 프로토콜 → 통합·독립 검증 후 배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -564,3 +564,10 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 구현자RED에서기존receipt누락·mutabledescriptor·부모only·위조snapshot·child누락/crossID/version·불완전decision을재현후수정. 최종target18/18, 인접103/103, 전체735/735(.inno/tmp/receipt-store-full.log) 메인로그확인+메인target18/18(.inno/tmp/receipt-store-main-target.log). Worker dry-run(.inno/tmp/receipt-store-dry-run.log)은마지막decision형태predicate보강전이며모듈/의존구조동일, 최종구문검사통과. 실제D1/AI/외부HTTP실행없음.
 - Task2전체는미완료: domainaccepting메서드옵션전달/HTTPupfrontreplay·CAS패자재조회/receipt응답아직없음. Task3claimslot/상한·ack_pending·서버release·fileflush복구도남음. capability미광고/운영배포없음. 전체goalactive.
 - 최종동결본독립58/58 및모듈구문/diff검사통과, 차단결함없음. 다음은Task2의수락메서드/HTTP replay를이hook에명시연결하되Task3수명관리검증전공개활성화하지않는단계.
+
+## 2026-09-28 — SRC02/06 Task2b 수락 경로 연결
+- 완료: store finish/fail/handoff/requestDecision, CloudBridge complete/fail, Delegations allocate/retryReview/requeue, orchestration allocate/retryReview에 선택적 deliveryReceipt를 명시적으로 전달한다. 실제 수락 DB 변경에만 붙으며 dispatch/reconcile로 전달하지 않는다.
+- 기존 호출은 유지한다. receipt를 사용하는 상태 기반 replay는 저장된 기록 확인 전 409로 거절하고 null은 해당 shortcut에서 400으로 거절한다. 기존 성공 상태로 새 receipt를 만들지 않는다.
+- 검증: 새 domain RED 6건 및 null replay RED 후 GREEN 7/7; 구현자 인접 127/127, 최종 전체 742/742 (.inno/tmp/receipt-domain-full.log). 메인 별도 대상 7/7, 독립 검토 대상·인접 120/120, 구문·diff 검사 및 기존 Wrangler dry-run 통과 (.inno/tmp/receipt-domain-dry-run.log).
+- 운영 변경/실제 AI 실행/새 스택 없음. HTTP index 및 capability는 미연결이다. Task2 전체, Task3 보관 상한·claim 예약·ack_pending 정리와 통합 배포는 미완료다.
+- 다음: 원본 parsed HTTP input에서 descriptor 생성, catalog/report·상태 shortcut·dispatch보다 앞선 저장 receipt 조회, CAS 패배 재조회 및 일치한 요청만 성공 응답. 프로토콜 활성화는 Task3 완료 이후.
