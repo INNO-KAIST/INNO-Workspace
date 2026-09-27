@@ -215,3 +215,9 @@ Claude child에는 beta-result.txt와final.md가저장됐지만 checkpoint.resul
 수정 커밋f8dc81d/Worker f3b7669a-6c60-44d1-8ad6-7cc8ab5d74cc 배포 후 추가 Claude 실행은1건만사용했다. task3f3af851-988a-4cd5-9911-d6131a25281c completed/version6, owned-callback.txt 내용일치, 실행Id/generation일치, resultArtifactIds에 owned-callback.txt + inno-model-routing.json + final.md 포함을실제API에서확인(.inno/owned-callback-result.json). 수정전실험파일을소급편집하거나3실행혼합여정을재실행하지않았다. 수정후전체혼합구독3회를다시실행한증거가아니며, 기존혼합경계증거+수정경로8개회귀+실제등록/완료선택검증의조합이다.
 
 서버gate1재활성화설정을반영한다. 전체플랫폼의유동적에이전트수/모델최신화, 실행중사용량, 실제연구·문서품질과기기장기운영은여전히미완료다. CR003은아직별도PRD개정승인대상. 기존실험의누락기록은그대로보존한다.
+
+### 2026-09-27 현재 마일스톤 체크포인트
+
+원본 협업 W3/W4 구현·검증·배포 완료 범위를 PRD에 갱신했다. 서버 Worker b48c5d2c-0ecc-445f-a715-18fb809d7390, 코드3f4248b, CI36314128571 success, Pages36314160045 success. 실제사용폴더는최신main코드로ff갱신. 사용자환경변수 INNO_SOURCE_DELEGATION_VERSION=1 영속설정 완료(기존터미널에는재설정/재시작필요). 실제 local GETstate 서버1/로컬1/교집합1/busyfalse/pendingfalse 확인. 데스크톱PID26568은계속운영, 별도예약생성없음.
+
+전체목표는완료되지않음. 다음은 CR003 모델자동최신화와 유동적에이전트/품질·사용량최적화의 다음PRD를구체화하고, 사용자변경관리원칙에따라개정승인을받는것. 기존실험후수정에대한증거조합(432회귀, 실제혼합실행, 수정후Claude1회)을정확히유지한다. 수정후3실행혼합전체를재실행했다고주장하지않는다. 모든기기실물장기운영·모든연구/문서종류품질완료를주장하지않는다.
