@@ -187,3 +187,19 @@ Worker 실제 기본 export와 데스크톱 시작 스크립트가 동일한 `IN
 이전 goal turn은 main/Worker/Pages 실제 반영과 live Claude callback 완료로 진전됨. 이번 재개 clean/HEADcc07a53 확인. 실제 사용자 폴더 E:/Develop/INNO Workspace는 기존 codex/inno-workspace(4a93387)를 보존하고 codex/desktop-release를 origin/main에서 생성해 최신화했다. 전환 전 미커밋 변경, 4174/4175 listener, pending 결과 파일 없음 확인. 격리 구현 폴더는 codex/source-release 유지.
 
 기본 비활성 gate를 서버와 데스크톱 각각 명시적 INNO_SOURCE_DELEGATION_VERSION=1로 활성화하는 운영 설정과 회귀검증을 Sol 구현자에게 위임했다. 별도 Sol은 실제 2child+1review 혼합 구독 시험의 단계별 스크립트만 준비 중이며, 양측 gate를 확인하기 전 실구독 시험/운영 task 생성은 하지 않는다. 신규 기능 범위 확장이 아닌 승인된 SRC04/REL01 활성화 작업이다.
+
+### 2026-09-27 원본 협업 capability 활성화
+
+Sol 구현/메인 독립 코드검토: 환경변수 INNO_SOURCE_DELEGATION_VERSION의 정확한 문자열1만 활성화, Worker fetch/scheduled 및 desktop runner 공통 판정. 실제 Worker export RED→GREEN, 전체429/429(.inno/tmp/source-gate-node-tests.log). 커밋27f30de. 실제 사용자 폴더에 ff 반영 후 숨김 desktop bridge PID26568 시작. 운영서버0/로컬1/교집합0을 실제 GETstate로 확인했고, busyfalse와 기존작업 completed11/cancelled1/paused1 확인.
+
+Wrangler vars에1 명시, dry-run통과 후 커밋e8f3312를 정상mainpush, GitHub Verify36313001238 success. Worker version06f213ac-bde6-45b4-8bb8-140cb10a338c 배포. 이후 서버1/로컬1/교집합1/busyfalse 확인. 실제 MCP catalog에 gpt-6-luna low 등 계정모델이 제공됨을 읽기로 확인. 요청모델과 실제 관측모델을 구분한다.
+
+현재 원본 협업 capability는 켜졌으나 마지막 실제혼합 시험을 아직 완료하지 않았다. 실행 중 desktop 프로세스는 사용자 폴더의 .inno/desktop-source-process.txt에 PID, stdout/stderr별도기록. 이번 시작의 환경변수1은 프로세스 범위이며 재시작 설정 영속화는 실험통과후 진행한다. 혼합시험 스크립트는 합성원본에 한정, 부모배정은harness이고 planningAI품질시험으로주장하지 않는다. 원격POST불확실시자동반복금지.
+
+### 2026-09-27 실제 혼합 시험 — 파일 전달 누락 발견, gate 복구
+
+합성 parent e29fec91-86fb-4181-b6db-7293744e8c03, Codex child a2fc5dcc-45e9-4763-aabd-ca50fdbf5881(gpt-6-luna 요청), Claude child92fa4902-ace1-4e1f-b424-3296a027e305(haiku 요청)가 각각completed, childgeneration1/parentreviewgeneration2. 기존smoke status 최종assert는통과했으나 메인의 산출물직접검토에서 중요한 전달누락을 발견했다. 따라서 W3 전체통과로처리하지않는다.
+
+Claude child에는 beta-result.txt와final.md가저장됐지만 checkpoint.resultArtifactIds와 parent.delegation.review.children의목록에는final.md만있었다. 마스터는 beta-result.txt를제공받지못했다고정확히보고했지만 generic수치+textartifact기준은final.md로통과했다. 좁은smokeassert통과가전체생성파일전달을보장하지못했다. 원인추적/등록→완료→reviewInputs 회귀시험 및수정을 Sol에위임. 기존실험DB기록은변경하지않음.
+
+안전복구: wrangler gate0으로되돌려 Worker3654b036-42b3-463f-b128-1f3932489cab 배포, 실제GETstate gate0확인. 데스크톱은support1이지만교집합으로새원본협업차단. 모든시험작업completed; AI 재실행없음. 사용량 actualCodexchild input17484/output77/cache11008, masterreview input38611/output1256/cache31360; Claude미보고는null, 배정모델haiku의실제served모델은미관측. 초기부모배정은harness이며AI계획평가아님. .inno/mixed-source-result.json에합성결과보존.

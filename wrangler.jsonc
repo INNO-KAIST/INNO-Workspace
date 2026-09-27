@@ -21,7 +21,7 @@
   ],
   "vars": {
     "CORS_ORIGINS": "https://inno-kaist.github.io",
-    "INNO_SOURCE_DELEGATION_VERSION": "1"
+    "INNO_SOURCE_DELEGATION_VERSION": "0"
   },
   "triggers": {
     "crons": [

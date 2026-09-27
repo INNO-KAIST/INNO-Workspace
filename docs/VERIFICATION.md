@@ -332,3 +332,11 @@ Evidence: .inno/source-live-review.mjs and .inno/tmp/source-live-review/result.j
 The production Worker export now selects fixed gate-0 or gate-1 instances from the exact string `INNO_SOURCE_DELEGATION_VERSION='1'`; both fetch and scheduled use the same selection. The desktop launcher passes the same strict environment gate into createCodexRunner. The existing createWorker() default and local/server capability intersection remain unchanged. Missing, numeric, approximate and other values fail closed. No Wrangler variable, machine environment, live AI run, or deployment was changed.
 
 TDD evidence: the new test against the real default Worker export failed before implementation because opt-in still advertised version 0; after implementation, the focused source/desktop tests passed 32/32. Final focused gate test passed 2/2; full Node suite passed 429/429 with `node --test --test-isolation=none tests/*.test.mjs` (log: `.inno/tmp/source-gate-node-tests.log`). `npm` is unavailable in this shell, so the package script's Node command was run directly. This verifies local wiring and regression behavior, not operational activation or a mixed-provider source run.
+
+### 2026-09-27 실제 혼합 시험 — 파일 전달 누락 발견, gate 복구
+
+합성 parent e29fec91-86fb-4181-b6db-7293744e8c03, Codex child a2fc5dcc-45e9-4763-aabd-ca50fdbf5881(gpt-6-luna 요청), Claude child92fa4902-ace1-4e1f-b424-3296a027e305(haiku 요청)가 각각completed, childgeneration1/parentreviewgeneration2. 기존smoke status 최종assert는통과했으나 메인의 산출물직접검토에서 중요한 전달누락을 발견했다. 따라서 W3 전체통과로처리하지않는다.
+
+Claude child에는 beta-result.txt와final.md가저장됐지만 checkpoint.resultArtifactIds와 parent.delegation.review.children의목록에는final.md만있었다. 마스터는 beta-result.txt를제공받지못했다고정확히보고했지만 generic수치+textartifact기준은final.md로통과했다. 좁은smokeassert통과가전체생성파일전달을보장하지못했다. 원인추적/등록→완료→reviewInputs 회귀시험 및수정을 Sol에위임. 기존실험DB기록은변경하지않음.
+
+안전복구: wrangler gate0으로되돌려 Worker3654b036-42b3-463f-b128-1f3932489cab 배포, 실제GETstate gate0확인. 데스크톱은support1이지만교집합으로새원본협업차단. 모든시험작업completed; AI 재실행없음. 사용량 actualCodexchild input17484/output77/cache11008, masterreview input38611/output1256/cache31360; Claude미보고는null, 배정모델haiku의실제served모델은미관측. 초기부모배정은harness이며AI계획평가아님. .inno/mixed-source-result.json에합성결과보존.
