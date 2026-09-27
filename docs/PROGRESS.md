@@ -497,3 +497,10 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 변경은 실행 프롬프트 렌더만이며 원요청, 저장 대화, 첨부, checkpoint, 라우팅/가용성/품질기준은 보존한다. 아주짧은 요청은 대체문구가 더길면 기존중복을 유지한다. 실제 tokenizer/구독소비 절감률은 미측정. 18871token 고정 문맥의 전체원인은 아직 확정하지 않았다.
 - PRD M1의 오래된 운영미배포 상태를 이미검증된 2026-09-28 a830cf3 부분릴리스 상태로 정정(범위변경없음). 이번 프롬프트 패치는 개발트리 검증완료이며 main/운영에는 아직 미반영. 다음 릴리스에서 브리지 idle/outbox 및 클라우드 작업상태 확인후 반영할 것.
 - CR004결정, 실제 자동선택/비교근거, 예산실행격리/정산, 유동에이전트와 연구·문서·기기/장기복구 여정은 여전히 미완료. 전체goal active 유지.
+
+### 2026-09-28 원요청 중복 절감 운영 반영
+- 직전10bfbd0은 세 구독 실행 경로 변경/전체688개 검증으로 progress. 코드 변경 없이 기존 main/Cloudflare 배포 승인 범위로 릴리스.
+- main10bfbd060705f64ada3ba8590bd1723536c4b717 반영. GitHub Verify run36332146715 success. 추가 Python4/4 통과. Cloudflare Worker fea12b63-66f3-49a2-bc2a-5eb063703f55 배포(.inno/tmp/prompt-dedup-deploy.log). 정적자산 변경없음/업로드없음, D1마이그레이션없음.
+- 배포전후18개 작업(completed16/paused1/cancelled1) 보존, active0/outbox없음. PID4620이 desktop-bridge임과 재차idle확인후종료. root E:\Develop\INNO Workspace clean에서10bfbd0 fast-forward, PID9488 hidden기동. authenticated local state로 cloud sync/idle/pendingfalse 및 양쪽sourcegate1 확인, stderr0bytes. 비인증cloudstate401 확인.
+- 별도 실구독AI smoke는 이번에추가하지않음. 세 프롬프트본문 경로는 직전합성688개회귀 및 독립검증, 이번운영확인은배포ID·인증·연결·기존상태보존에한정. 실제토큰절감/Claude실행을 이번배포에서실측했다고주장하지않는다.
+- 전체goal active. CR004 선택대기와자동선택 실근거/비교예산격리·정산/유동에이전트/연구문서·기기·장기복구 남음. 다음 작업은 승인범위 내 잔여실사용흐름 검토에서 이어간다.
