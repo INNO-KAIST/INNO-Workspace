@@ -14,7 +14,7 @@ function normalizedProfile(value){
  for(const [key,max] of arrays)if(!Array.isArray(value[key])||value[key].length<1||value[key].length>max||value[key].some(x=>typeof x!=='string'||!identifier.test(x))||new Set(value[key]).size!==value[key].length)fail(key);
  return {family:value.family,requirementsVersion:value.requirementsVersion,evaluationVersion:value.evaluationVersion,criteria:[...value.criteria],requiredCapabilities:[...value.requiredCapabilities],contextClass:value.contextClass};
 }
-async function profileKey(profile){
+export async function profileKey(profile){
  const encoded=new TextEncoder().encode(JSON.stringify(normalizedProfile(profile)));
  if(encoded.byteLength>3000)fail('profile size');
  const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',encoded));

@@ -125,11 +125,21 @@ export class D1TaskStore {
 
   // The parent CAS checks every child snapshot before any row changes. Every
   // subsequent statement is gated by the unique operation token installed by it.
-  async replaceDelegation(current,next,records=[]){
+  async replaceDelegation(current,next,records=[],metadataGuards=[]){
     next.delegation={...next.delegation,operationId:this.id()};
     const values=[next.version,next.updatedAt,JSON.stringify(next),current.id,current.version];
     let guard='';
     for(const record of records){if(record.current){const n=values.length;values.push(record.current.id,record.current.version);guard+=` AND EXISTS (SELECT 1 FROM tasks c WHERE c.id = ?${n+1} AND c.version = ?${n+2})`;}}
+    for(const check of metadataGuards){
+      if(check.expiresAt!==undefined&&Date.parse(this.now())>=check.expiresAt)throw new ConflictError('Allocation evidence expired during update',current.version);
+      const n=values.length;values.push(check.key);
+      if(check.stateVersion!==undefined){
+        if(check.stateVersion===null)guard+=` AND NOT EXISTS (SELECT 1 FROM metadata m WHERE m.key = ?${n+1})`;
+        else{values.push(check.stateVersion);guard+=` AND EXISTS (SELECT 1 FROM metadata m WHERE m.key = ?${n+1} AND json_extract(m.value,'$.stateVersion') = ?${n+2})`;}
+      }else if(check.value===null)guard+=` AND NOT EXISTS (SELECT 1 FROM metadata m WHERE m.key = ?${n+1})`;
+      else{values.push(check.value);guard+=` AND EXISTS (SELECT 1 FROM metadata m WHERE m.key = ?${n+1} AND m.value = ?${n+2})`;}
+      if(check.expiresAt!==undefined){const at=values.length;values.push(check.expiresAt);guard+=` AND CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) < ?${at+1}`;}
+    }
     const statements=[this.db.prepare('UPDATE tasks SET version = ?1, updated_at = ?2, body = ?3 WHERE id = ?4 AND version = ?5'+guard).bind(...values)];
     for(const {current:before,next:after} of records){
       if(!after)continue;

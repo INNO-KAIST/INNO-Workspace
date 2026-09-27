@@ -129,10 +129,10 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
   function runtime(env,context={}){
     const store=new D1TaskStore(env.DB),bridge=new CloudBridge(store,{sourceDelegationVersion}),hasRoutine=routineConfigured(env);
     const catalog=new ModelCatalog(store),discovery=new OfficialModelDiscovery(store,{fetchFn});
-    const orchestration=createOrchestration({store,delegations:new Delegations(store,{sourceDelegationVersion}),hasRoutine,waitUntil:context.waitUntil?promise=>context.waitUntil(promise):undefined,fire:async claim=>fireRoutine(fetchFn,env,claim.task,[],claim,undefined,await catalog.read(),sourceDelegationVersion)});
+    const orchestration=createOrchestration({store,delegations:new Delegations(store,{sourceDelegationVersion,catalog}),hasRoutine,waitUntil:context.waitUntil?promise=>context.waitUntil(promise):undefined,fire:async claim=>fireRoutine(fetchFn,env,claim.task,[],claim,undefined,await catalog.read(),sourceDelegationVersion)});
     const handoff=async input=>{const task=await store.handoffExecution(input.taskId,input);return orchestration.dispatch(task.id);};
     const afterComplete=async task=>{const recovery=orchestration.reconcileTask(task.id).catch(()=>null);if(context.waitUntil)context.waitUntil(recovery);else await recovery;};
-    const delegate=async(taskId,input)=>{const current=await store.requireTask(taskId);if(current.delegation?.sourceExecutionId!==input.executionId)await catalog.validate(input.children);return orchestration.allocate(taskId,input);};
+    const delegate=async(taskId,input)=>orchestration.allocate(taskId,input);
     return {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate};
   }
   return {

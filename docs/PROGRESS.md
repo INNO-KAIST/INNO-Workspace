@@ -259,3 +259,12 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 메인 독립 통합 실행: 정책/저장23/23, 전체 Node473/473 통과. 로그 .inno/tmp/model-policy-m2-targeted.log 및 model-policy-m2-tests.log. diff check 통과. 새 도구·유료 API·실제 AI 실행 없음.
 - M2 전체는 진행 중: 저장 클래스와 순수 코어가 아직 API/마스터 배정 경로에 연결되지 않음. 프로덕션 자동 모델 교체·절감 효과를 주장하지 않는다. 운영 미배포.
 - 다음 작업: worker/index의 delegate → worker/delegations.allocate 원자 배정에 선택기 연결, 부모/자식 양쪽 selection snapshot 보존 및 replay 불변. 서버에서 소유권·배치·실제 모델·독립 검토를 확인한 관측만 policy.observe에 전달. D1/SQLite 지원 범위 차이를 유지. 기존 master가 내놓은 임의 policy/evidence 필드는 신뢰하지 않음. 프로필/가용성/실제 모델 근거 없으면 기존 경로와 evidence-insufficient 사유를 기록하고 자동 승격 보류.
+
+### 2026-09-27 M2 실제 배정 연결 하위 단계 완료
+- worker/index의 HTTP/MCP 공통 Delegations.allocate에 서버 resolveAllocationPolicy 연결. 서버가 역할/지시/완료 기준/자료 참조에서 해시 프로필을 생성하고 caller selection/policy/evidence 필드는 버린다. 선택 metadata를 부모 delegation.children과 자식 assignment에 동일 원자 저장. profileKey는 기존 정책 저장소와 공유.
+- 정책이 없으면 기존 계정 검증된 모델을 unvalidated fallback으로 기록. 정책이 있으면 선택 또는 정책 baseline 사용, 유효 경로가 없으면 거절. 재전송은 저장된 배정을 반환하고 재시도 중 배정을 바꾸지 않는다. 정책·계정·가용성 원문 snapshot 및 missing-policy 조건을 부모 CAS에 포함.
+- 독립 리뷰의 만료 경계 결함 수정: 선택/fallback 가용성 및 선택의 90일 품질 근거 만료를 확인하며 SQL UPDATE 시점에도 julianday 기반 deadline 검사. 배치650ms지연 후 선택 모델 만료→baseline 재계산 및 fallback 만료→자식0건 거절 확인. HTTP11/11, 별도 독립 재검토 통과.
+- Codex runner 결과에 서버 생성 executionEvidence 추가: 요청 모델/effort, 실제 CLI 인자 모델/effort, actualModelVersion:null, processElapsedMs(신뢰 시계, 잘못된/역행 시 null). AI JSON의 위조 필드는 반영하지 않음. root/review 기본 모델은 추정하지 않음. 이 필드는 아직 bridge 전송/완료 저장에 연결되지 않았다.
+- 메인 전체 Node481/481 및 Worker dry-run 통과. 로그 .inno/tmp/allocation-policy-tests.log 및 allocation-policy-dry-run.log. 새 도구/유료API/실제AI 실행 없음. 운영 미배포.
+- 검증 범위: 자동 선택 성공 HTTP fixture는 신뢰 가용성·실제 버전·능력 metadata를 시험 DB에 주입했다. 실제 구독의 serving-model/능력 관측 수집은 아직 없음. 현 운영 데이터에는 정책·충분한 증거가 없어 일반 배정은 명시적 fallback; 실제 자동 승격이나 토큰 절감 완료를 주장하지 않는다.
+- 다음: executionEvidence를 인증된 desktop 완료/outbox와 소유권 검증된 저장에 연결; 서버 claimedAt/completedAt의 경과 시간과 실제 usage 보존. 완료 부모 reviewReport와 자식 task/batch/epoch/execution을 서버에서 대조해 품질 근거 생성, executor 자기보고/실제 모델 미확인 분리. D1/SQLite parity, stale owner/재전송/위조 입력 회귀를 추가한다. 정책 관리·관측 화면은 M4. M2 전체 및 원래 플랫폼 목표 미완료.

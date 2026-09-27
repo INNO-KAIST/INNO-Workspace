@@ -2,9 +2,11 @@ import {usageHistory} from '../public/core/execution-usage.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
 import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
 import {allocateDelegation,isDelegationReplay,buildReview,validateReviewReport} from '../public/core/delegation.mjs';
+import {validateAssignments} from '../public/core/delegation.mjs';
+import {resolveAllocationPolicy} from './allocation-policy.mjs';
 const mayStillRun=child=>child.status==='running'||(child.status==='paused'&&Boolean(child.checkpoint?.executionId));
 export class Delegations {
- constructor(store,{sourceDelegationVersion=0}={}){this.store=store;this.sourceDelegationVersion=sourceDelegationVersion===1?1:0;}
+ constructor(store,{sourceDelegationVersion=0,catalog}={}){this.store=store;this.sourceDelegationVersion=sourceDelegationVersion===1?1:0;this.catalog=catalog;}
  async children(parent){return Promise.all(parent.delegation.children.map(c=>this.store.requireTask(c.taskId)));}
  async pending(limit=20){
   if(!Number.isInteger(limit)||limit<1||limit>100)throw new ValidationError('Recovery limit must be 1 to 100');
@@ -15,8 +17,10 @@ export class Delegations {
   for(let attempt=0;attempt<3;attempt++){
    const parent=await this.store.requireTask(parentId);
    if(isDelegationReplay(parent,input))return {parent,children:await this.children(parent),replayed:true};
-   const allocation=allocateDelegation(parent,input,{now:this.store.now,id:this.store.id,sourceDelegationVersion:this.sourceDelegationVersion});
-   try{await this.store.replaceDelegation(parent,allocation.parent,allocation.children.map(next=>({next})));return {...allocation,replayed:false};}
+   const validated=validateAssignments(parent,input,{sourceDelegationVersion:this.sourceDelegationVersion});
+   const resolved=this.catalog?await resolveAllocationPolicy(this.store,this.catalog,validated):null;
+   const allocation=allocateDelegation(parent,input,{now:this.store.now,id:this.store.id,sourceDelegationVersion:this.sourceDelegationVersion,...(resolved?{assignments:resolved.assignments}:{})});
+   try{await this.store.replaceDelegation(parent,allocation.parent,allocation.children.map(next=>({next})),resolved?.guards??[]);return {...allocation,replayed:false};}
    catch(error){if(!(error instanceof ConflictError)||attempt===2)throw error;}
   }
  }

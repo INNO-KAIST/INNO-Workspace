@@ -29,9 +29,11 @@ export function validateAssignments(parent,input,options={}){
  return children;
 }
 export function isDelegationReplay(parent,input){const d=parent.delegation;return !!d&&d.state!=='superseded'&&d.sourceExecutionId===input.executionId&&d.sourceGeneration===input.generation;}
-export function allocateDelegation(parent,input,{now,id,sourceDelegationVersion=0}){
+export function allocateDelegation(parent,input,{now,id,sourceDelegationVersion=0,assignments:resolvedAssignments}={}){
  const options={sourceDelegationVersion};
- const assignments=validateAssignments(parent,input,options);
+ const validated=validateAssignments(parent,input,options);
+ const assignments=resolvedAssignments??validated;
+ if(resolvedAssignments&&(!Array.isArray(resolvedAssignments)||resolvedAssignments.length!==validated.length||resolvedAssignments.some((x,i)=>x.provider!==validated[i].provider||x.role!==validated[i].role)))throw new ValidationError('Invalid resolved delegation assignments');
  if(parent.delegation&&parent.delegation.state!=='superseded')throw new ConflictError('Task already has a delegation batch',parent.version);
  if(parent.status!=='running'||parent.checkpoint?.executionId!==input.executionId||parent.checkpoint?.generation!==input.generation)throw new ConflictError('Stale delegation execution owner',parent.version);
  const content=input.content===undefined?undefined:bounded(input.content,'master interpretation',12000);

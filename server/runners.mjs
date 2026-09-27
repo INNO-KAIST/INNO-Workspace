@@ -368,6 +368,7 @@ export function createCodexRunner({
   sourceDelegationVersion = 0,
   mcpUrl,
   mcpToken,
+  now = Date.now,
 } = {}) {
   const env = withoutApiEnvironment(processEnv);
   const readCatalog=async()=>{
@@ -413,7 +414,7 @@ export function createCodexRunner({
           '-c', 'mcp_servers.inno.bearer_token_env_var="INNO_MCP_TOKEN"',
         );
       }
-      const child = spawnProcess('codex', [
+      const codexArgs = [
         'exec',
         '--json',
         '--color', 'never',
@@ -428,7 +429,9 @@ export function createCodexRunner({
             : models.length ? ['--enable','multi_agent','-c','agents.max_concurrent_threads_per_session=2'] : ['--disable','multi_agent']),
         ...mcpArguments,
         '-',
-      ], {
+      ];
+      const processStartedAt=now();
+      const child = spawnProcess('codex', codexArgs, {
         cwd: executionDirectory,
         env: runEnv,
         shell: false,
@@ -437,6 +440,13 @@ export function createCodexRunner({
       });
       const modelPolicy=mode==='child'?codexChildPolicy(task,assignedRoute):mode==='review'?codexReviewPolicy(task):managedDelivery?delegationRoutingPolicy(models,{sourceDelegationVersion:sourceContext?1:0}):routingPolicy(models);
       const result = await collectProcess(child, {input: taskPrompt(task, materials, {executionId, generation, managedDelivery, handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, allowDelegation:managedDelivery&&mode==='root', allowHandoff:managedDelivery&&mode==='root'}), signal, stdoutCollector:createEventCollector()});
+      const processFinishedAt=now();
+      const elapsed=processFinishedAt-processStartedAt;
+      const processElapsedMs=Number.isSafeInteger(processStartedAt)&&Number.isSafeInteger(processFinishedAt)&&processStartedAt>=0&&processFinishedAt>=processStartedAt&&Number.isSafeInteger(elapsed)?elapsed:null;
+      const modelArg=codexArgs.indexOf('-m');
+      const effortArg=codexArgs.find(arg=>typeof arg==='string'&&arg.startsWith('model_reasoning_effort='));
+      const cliAppliedModel=modelArg>=0?codexArgs[modelArg+1]:null;
+      const cliAppliedEffort=effortArg?JSON.parse(effortArg.slice('model_reasoning_effort='.length)):null;
       let observedUsage;
       try {
       const parsed = parseCodexEvents(result.stdout);
@@ -464,6 +474,7 @@ export function createCodexRunner({
         checkpoint: structured?.checkpoint ?? (parsed.threadId ? `Codex thread ${parsed.threadId} completed.` : 'Codex execution completed.'),
         artifacts,
         usage: parsed.usage,
+        executionEvidence:{provider:'codex',source:'cli_arguments',requestedModel:mode==='child'?task.assignment.requestedModel:null,requestedEffort:mode==='child'?task.assignment.effort:null,cliAppliedModel,cliAppliedEffort,actualModelVersion:null,processElapsedMs},
         ...(managedDelivery && mode==='root' && structured?.handoff ? {handoff:structured.handoff} : {}),
         ...(delegation ? {delegation} : {}),
         ...(reviewReport ? {reviewReport} : {}),
