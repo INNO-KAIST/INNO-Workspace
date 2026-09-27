@@ -108,6 +108,14 @@ export class WorkspaceClient {
     if(!this.remote)throw new Error('모델 정책을 보려면 서버 연결이 필요합니다.');
     return this.request(`/api/tasks/${encodeURIComponent(id)}/model-policy`);
   }
+  async readModelDiscovery(){
+    if(!this.remote)throw new Error('모델 발견 상태를 보려면 서버 연결이 필요합니다.');
+    return this.request('/api/model-discovery');
+  }
+  async readModelPolicyRetention(){
+    if(!this.remote)throw new Error('모델 정책 정리 상태를 보려면 서버 연결이 필요합니다.');
+    return this.request('/api/model-policy-retention');
+  }
   async changeModelPolicy(id,input){
     if(!this.remote)throw new Error('모델 정책을 바꾸려면 서버 연결이 필요합니다.');
     return this.request(`/api/tasks/${encodeURIComponent(id)}/model-policy`,input);

@@ -175,7 +175,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
           if (!authorized(request, env)) return responseJson({error: 'unauthorized'}, 401, {...headers, 'www-authenticate': 'Bearer'});
         }
         const {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement}=runtime(env,context);
-        const capabilities = {sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,cloudCodex: true, localCodex: false, claudeRoutine: hasRoutine, cloud: true, connected: true};
+        const capabilities = {sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,cloudCodex: true, localCodex: false, claudeRoutine: hasRoutine, cloud: true, connected: true};
 
         if (request.method === 'GET' && pathname === '/api/state') {
           return responseJson({...await store.getState(capabilities,parseRevision(url.searchParams.get('since'))), desktop: await bridge.presence()}, 200, headers);

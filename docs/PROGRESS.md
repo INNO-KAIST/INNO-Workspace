@@ -329,3 +329,15 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 메인 브라우저 검증: TestD1 메모리 DB + 실제 Worker + 실제 데스크톱 HTTP 프록시, 합성 작업으로 Codex 초기화→후보 등록→근거 부족 승격 보류→철회, Claude 초기화→sonnet 후보 등록→승격 보류 확인. 1280x900 데스크톱 및390x844 모바일 확인, 모바일 dialog clientWidth/scrollWidth 모두350px로 가로 넘침 없음. 화면 .inno/tmp/policy-ui-desktop.png 및 policy-ui-mobile.png. 실제 구독 실행 없음. 검증 탭·viewport·서버 세션13516 종료.
 - 전체 Node554/554, Worker dry-run, diff check 통과. 로그 .inno/tmp/policy-ui-m4-tests.log 및 policy-ui-m4-dry-run.log. 독립 UI/client16개, 구현자 관련34개, metadata/proxy23개 확인. 마지막 Claude 문구 변경은 전용6개 및 최종전체에 포함.
 - 아직 운영 미배포. MOD07 전체 남은 항목은 공식 갱신/정리 진단 표시와 수동 고정/복구 정책 통합이며, MOD03/04 자동 초기화·승격/실제 serving-version 귀속 경로, MOD06 추가 비교 실행 예산, M5 운영·캐시 갱신 검증도 남는다. 구독의 모델 버전 미확인을 숨기거나 후보 등록을 품질 최적화 완료로 표시하지 않는다. 최초 전체 플랫폼 목표 유지.
+
+### 2026-09-27 M4 공식 발견·정리 진단 표시 착수
+- 승인된 MOD01/02/06/07 범위에서 사용량 화면에 필요할 때만 여는 진단 패널 연결. 공식 문서 후보와 계정 가용성/검증된 품질을 구분하며 추가 AI 실행·강제 외부 새로고침은 만들지 않는다.
+- Sol 구현자와 독립 리뷰어를 분리. 실제 Worker + 메모리 D1 + 데스크톱 프록시의 합성 데이터로 UI를 확인한다. 신규 스택/유료API 없음. 정책 고정·비교 예산은 이 하위 단계 이후의 남은 범위.
+
+### 2026-09-27 M4 공식 발견·정리 진단 표시 하위 단계 완료
+- 사용량 화면의 기본 닫힌 패널에서 공식 출처/확인·만료·다음 시도/오류와 최대100개 후보, 정책 근거 정리 상태/건수/보존 예외/다음 점검 표시. 공식 API 문서와 Claude Code 별칭을 구분하고 계정 가용성·실제 버전·품질 미확인을 명시한다. 링크는 기존 공식 두 URL로 제한.
+- 최초 펼침/명시적 갱신에서 인증된 GET 두 개만 병렬 조회. 5초 동기화는 조회를 추가하지 않는다. 재열기는 캐시를 유지하며 버튼으로 서버 저장 상태만 다시 읽는다. 외부 공식 문서의 즉시 수집이나 AI 실행을 만들지 않는다.
+- 클라이언트/기능 지원 변경 시 과거 자료 제거, 오래된 요청의 응답 무시. 요청 중 닫힘 후 재열기 고착 방지, 중복 요청 버튼 잠금, 각 경로 독립 실패 및 마지막 정상 자료/조회 오류 병행 표시를 검증. 데스크톱 프록시는 인증된 두 GET만 허용하며 POST는 거절.
+- 독립 리뷰 차단 결함 없음, 전용8/8. 메인 전체 Node562/562, Worker dry-run 통과. 로그 .inno/tmp/model-diagnostics-tests.log 및 model-diagnostics-dry-run.log. 구현자 인접 SQLite 시험의 샌드박스 EPERM은 쓰기 권한 승인 실행에서13/13 통과했으며 메인 전체에도 포함.
+- 실제 Worker + TestD1 메모리 DB + 실제 desktop 프록시의 합성 자료로 브라우저 확인. 1280x900 및390x844, 모바일 문서390px/패널335px clientWidth=scrollWidth. 화면 .inno/tmp/model-diagnostics-desktop.png 및 model-diagnostics-mobile.png. 검증 서버 세션53880과 탭 종료, viewport 복원. 실제 구독 AI 실행·추가 유료API·운영 배포 없음.
+- 다음: 정책 수동 고정/해제·복구 통합, 추가 비교 실행 예산, 자동 초기화·승격 운영 연결과 실제 serving-version 귀속 제약 처리, M5 배포·캐시 갱신·desktop 재시작 검증. 이번 진단 화면은 모델 최신화 전체 또는 최초 플랫폼 완료가 아니다.
