@@ -91,6 +91,47 @@ test('loopback HTTP runs disjoint source children and requires both originals fo
   assert.equal(JSON.stringify(await f.store.getState()).includes('PRIVATE_BETA_ORIGINAL'),false);
 });
 
+test('Claude MCP artifact registration reaches parent review and completion replay keeps one copy',async t=>{
+  const f=await fixture(t),batch=await allocated(f);
+  const [codex,claude]=batch.children;
+  const codexClaim=await f.store.claimExecution(codex.id,{provider:'codex',expectedVersion:codex.version});
+  await f.store.finishExecution(codex.id,{...owner(codexClaim),content:'Alpha result'});
+  const claudeClaim=await f.store.claimExecution(claude.id,{provider:'claude',expectedVersion:claude.version,sourceBound:true});
+  const file={taskId:claude.id,...owner(claudeClaim),artifact:{name:'beta-result.txt',mime:'text/plain',content:'Beta lifetime: 8.4 ms'}};
+  const registered=await f.mcp('artifact_task',file);
+  assert.equal(registered.result.isError,undefined);
+  const registrationReplay=await f.mcp('artifact_task',file);
+  assert.equal(registrationReplay.result.isError,undefined);
+  const completion={taskId:claude.id,...owner(claudeClaim),content:'Beta lifetime: 8.4 ms',status:'completed'};
+  const first=await f.mcp('checkpoint_task',completion);
+  assert.equal(first.result.isError,undefined);
+  const repeated=await f.mcp('checkpoint_task',completion);
+  assert.equal(repeated.result.isError,undefined);
+  const child=await f.store.requireTask(claude.id);
+  assert.deepEqual(child.artifacts.map(a=>a.name),['beta-result.txt','final.md']);
+  assert.deepEqual(child.checkpoint.resultArtifactIds,child.artifacts.map(a=>a.id));
+  const parent=await f.store.requireTask(batch.parent.id);
+  assert.equal(parent.status,'queued_for_review');
+  assert.deepEqual(parent.delegation.review.children.find(c=>c.taskId===claude.id).artifacts.map(a=>a.name),['beta-result.txt','final.md']);
+  const review=await f.post(`/api/desktop/${parent.id}/start`,{expectedVersion:parent.version,sourceDelegationVersion:1,sourceNames:['alpha.txt','beta.txt']});
+  assert.equal(review.status,200);
+  assert.deepEqual(review.claim.reviewInputs.find(c=>c.taskId===claude.id).artifacts.map(a=>a.name),['beta-result.txt','final.md']);
+});
+
+test('MCP completion excludes artifacts registered by an earlier execution owner',async t=>{
+  const f=await fixture(t),task=await f.store.createTask({prompt:'Generate a current result'});
+  const old=await f.store.claimExecution(task.id,{provider:'codex',expectedVersion:task.version});
+  assert.equal((await f.mcp('artifact_task',{taskId:task.id,...owner(old),artifact:{name:'stale.txt',mime:'text/plain',content:'old result'}})).result.isError,undefined);
+  const failed=await f.store.failExecution(task.id,{...owner(old),failure:{kind:'unknown'}});
+  const current=await f.store.claimExecution(task.id,{provider:'codex',expectedVersion:failed.version});
+  assert.equal((await f.mcp('artifact_task',{taskId:task.id,...owner(old),artifact:{name:'late.txt',mime:'text/plain',content:'stale callback'}})).status,409);
+  assert.equal((await f.mcp('artifact_task',{taskId:task.id,...owner(current),artifact:{name:'current.txt',mime:'text/plain',content:'new result'}})).result.isError,undefined);
+  assert.equal((await f.mcp('checkpoint_task',{taskId:task.id,...owner(current),content:'current complete',status:'completed'})).result.isError,undefined);
+  const done=await f.store.requireTask(task.id);
+  assert.deepEqual(done.artifacts.map(a=>a.name),['stale.txt','current.txt','final.md']);
+  assert.deepEqual(done.checkpoint.resultArtifactIds,done.artifacts.slice(1).map(a=>a.id));
+});
+
 test('concurrent same-version source claims fire Claude once and stale request replay cannot refire',async t=>{
   const f=await fixture(t),{children}=await allocated(f),claude=children[1];
   const batch=f.db.batch.bind(f.db);let arrivals=0;const versions=[];let release;

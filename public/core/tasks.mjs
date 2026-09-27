@@ -287,6 +287,20 @@ export function applyAction(task, input, overrides = {}) {
   return next;
 }
 
+export function applyOwnedExecutionAction(task, input, overrides = {}) {
+  const next = applyAction(task, input, overrides);
+  if (input.action !== 'artifact') return next;
+  const registered = next.artifacts.at(-1);
+  const repeated = task.artifacts.some(a =>
+    a.executionId === input.executionId && a.generation === input.generation
+    && a.name === registered.name && a.mime === registered.mime
+    && a.encoding === registered.encoding && a.content === registered.content
+    && JSON.stringify(a.checks) === JSON.stringify(registered.checks));
+  if (repeated) next.artifacts.pop();
+  else Object.assign(registered, {executionId: input.executionId, generation: input.generation});
+  return next;
+}
+
 export function sanitizeMaterials(materials) {
   if (materials === undefined) return [];
   if (!Array.isArray(materials)) throw new ValidationError('materials must be an array');

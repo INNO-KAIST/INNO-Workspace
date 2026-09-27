@@ -10,6 +10,7 @@ import {
   ConflictError,
   ValidationError,
   applyAction,
+  applyOwnedExecutionAction,
   createTask,
   sanitizeDecision,
   TERMINAL_STATUSES,
@@ -143,7 +144,7 @@ export class SqliteTaskStore {
     const snapshot = this.requireTask(id);
     return this.replaceTask(id, snapshot.version, current => {
       this.assertExecution(current, input);
-      return applyAction(current, {...input, expectedVersion: current.version}, {now: this.now, id: this.id});
+      return applyOwnedExecutionAction(current, {...input, expectedVersion: current.version}, {now: this.now, id: this.id});
     });
   }
 
@@ -275,6 +276,7 @@ export class SqliteTaskStore {
         artifacts: [...task.artifacts, ...artifacts],
         checkpoint: {
           ...task.checkpoint,
+          resultArtifactIds: [...task.artifacts.filter(a => a.executionId === input.executionId && a.generation === input.generation), ...artifacts].map(a => a.id),
           usage: executionUsage(task.checkpoint,input.usage,now), usageHistory: usageHistory(task.checkpoint,input.usage,now),
           status: 'completed',
           failure: undefined,

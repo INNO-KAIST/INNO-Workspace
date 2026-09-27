@@ -9,6 +9,7 @@ import {
   ConflictError,
   ValidationError,
   applyAction,
+  applyOwnedExecutionAction,
   createTask,
   sanitizeDecision,
   TERMINAL_STATUSES,
@@ -156,7 +157,7 @@ export class D1TaskStore {
     const snapshot = await this.requireTask(id);
     return this.replaceTask(id, snapshot.version, current => {
       this.assertExecution(current, input);
-      return applyAction(current, {...input, expectedVersion: current.version}, {now: this.now, id: this.id});
+      return applyOwnedExecutionAction(current, {...input, expectedVersion: current.version}, {now: this.now, id: this.id});
     });
   }
 
@@ -282,7 +283,7 @@ export class D1TaskStore {
         ...(reviewReport?{delegation:{...current.delegation,state:'completed',reviewReport}}:{}),
         messages: [...current.messages, {id: this.id(), role: 'assistant', content, createdAt: now}],
         artifacts: [...current.artifacts, ...artifacts],
-        checkpoint: {...current.checkpoint, resultArtifactIds:artifacts.map(a=>a.id), usage: executionUsage(current.checkpoint,input.usage,now), usageHistory: usageHistory(current.checkpoint,input.usage,now), failure: undefined, status: 'completed', content: input.checkpoint ?? 'Execution completed.', completedAt: now, updatedAt: now},
+        checkpoint: {...current.checkpoint, resultArtifactIds:[...current.artifacts.filter(a=>a.executionId===input.executionId&&a.generation===input.generation),...artifacts].map(a=>a.id), usage: executionUsage(current.checkpoint,input.usage,now), usageHistory: usageHistory(current.checkpoint,input.usage,now), failure: undefined, status: 'completed', content: input.checkpoint ?? 'Execution completed.', completedAt: now, updatedAt: now},
       };
     });
   }

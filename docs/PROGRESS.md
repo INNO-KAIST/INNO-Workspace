@@ -203,3 +203,9 @@ Wrangler vars에1 명시, dry-run통과 후 커밋e8f3312를 정상mainpush, Git
 Claude child에는 beta-result.txt와final.md가저장됐지만 checkpoint.resultArtifactIds와 parent.delegation.review.children의목록에는final.md만있었다. 마스터는 beta-result.txt를제공받지못했다고정확히보고했지만 generic수치+textartifact기준은final.md로통과했다. 좁은smokeassert통과가전체생성파일전달을보장하지못했다. 원인추적/등록→완료→reviewInputs 회귀시험 및수정을 Sol에위임. 기존실험DB기록은변경하지않음.
 
 안전복구: wrangler gate0으로되돌려 Worker3654b036-42b3-463f-b128-1f3932489cab 배포, 실제GETstate gate0확인. 데스크톱은support1이지만교집합으로새원본협업차단. 모든시험작업completed; AI 재실행없음. 사용량 actualCodexchild input17484/output77/cache11008, masterreview input38611/output1256/cache31360; Claude미보고는null, 배정모델haiku의실제served모델은미관측. 초기부모배정은harness이며AI계획평가아님. .inno/mixed-source-result.json에합성결과보존.
+
+### 2026-09-27 생성 파일 전달 누락 수정 검증
+
+원인: artifact_task로 등록한 파일의 실행소유자 표식이 없고 finishExecution의 resultArtifactIds가 완료 시 생성 파일만 포함. public/core/tasks.mjs에 검증된 소유자의 등록파일 executionId/generation 표식과 동일콜백중복방지, D1/SQLite finishExecution에는 같은소유자등록파일+완료파일선택을 구현했다. 과거실행파일은보관되나새결과선택에혼합되지않음. 실제MCP→등록→완료재전송→부모manifest→reviewInputs 및오래된소유자409 회귀 RED→GREEN.
+
+구현자 전체432/432 통과, 메인독립코드검토 및 관련8/8 직접실행통과, Worker dry-run gate0통과. 과거완료된시험기록은수정하지않음. 기존등록파일에는owner표식이없어소급선택하지않으며 배포전실행중작업없음. 강화된 .inno/mixed-source-smoke.mjs는마스터실행전과최종검증에서실제artifactId 전달을확인하고, 과거실험에서누락을잡아RED확인했다. 기존smoke통과만으로완료선언하지않음.
