@@ -1,3 +1,4 @@
+import {officeFixture} from './helpers/office.mjs';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
@@ -267,7 +268,7 @@ test('Codex runner uses stdin without a shell, strips API credentials, and parse
     queueMicrotask(() => {
       child.stdout.write('{"type":"thread.started","thread_id":"thread-1"}\n');
       child.stdout.write('{"type":"item.completed","item":{"type":"agent_message","text":"Verified answer"}}\n');
-      child.stdout.write('{"type":"turn.completed","usage":{"input_tokens":17,"output_tokens":5}}\n');
+      child.stdout.write('{"type":"turn.completed","usage":{"input_tokens":17,"cached_input_tokens":12,"output_tokens":5}}\n');
       child.stdout.end();
       child.emit('close', 0, null);
     });
@@ -296,6 +297,7 @@ test('Codex runner uses stdin without a shell, strips API credentials, and parse
     materials: [{name: 'paper.txt', text: 'evidence'}],
   });
 
+  assert.equal(result.usage.cachedInputTokens, 12);
   assert.equal(invocation.command, 'codex');
   assert.deepEqual(invocation.args, [
     'exec', '--json', '--color', 'never', '--approve-for-me',
@@ -310,13 +312,15 @@ test('Codex runner uses stdin without a shell, strips API credentials, and parse
   assert.equal(invocation.options.env.CODEX_HOME, 'auth-home');
   assert.equal(invocation.options.env.INNO_MCP_TOKEN, 'mcp-secret-token-0123456789abcdef');
   assert.equal(invocation.args.join(' ').includes('mcp-secret-token'), false);
+  assert.match(stdin, /DELIVERY AND VERIFICATION/);
+  assert.match(stdin, /Distinguish abstract-only/);
   assert.match(stdin, /Review the evidence/);
   assert.match(stdin, /Focus the revision on methods/);
   assert.match(stdin, /Sources already collected/);
   assert.match(stdin, /paper\.txt/);
   assert.match(stdin, /evidence/);
   assert.equal(result.content, 'Verified answer');
-  assert.deepEqual(result.usage, {inputTokens: 17, outputTokens: 5, source: 'codex_exec'});
+  assert.deepEqual(result.usage, {inputTokens: 17, cachedInputTokens: 12, outputTokens: 5, source: 'codex_exec'});
 });
 
 test('Codex capability requires subscription login rather than an API-key login', async () => {
@@ -346,7 +350,7 @@ test('Codex runner extracts validated structured generated artifacts when suppli
         item: {type: 'agent_message', text: JSON.stringify({
           summary: 'Report generated',
           checkpoint: 'Reviewed and rendered',
-          artifacts: [{name: 'report.md', mime: 'text/markdown', content: '# Verified report', encoding: 'utf-8'}],
+          artifacts: [{name: 'report.md', mime: 'text/markdown', content: '# Verified report', encoding: 'utf-8', checks:[{check:'render',status:'not_run',evidence:'Text draft only'}]}],
         })},
       })}\n`);
       child.stdout.end();
@@ -361,14 +365,15 @@ test('Codex runner extracts validated structured generated artifacts when suppli
 
   assert.equal(result.content, 'Report generated');
   assert.equal(result.checkpoint, 'Reviewed and rendered');
-  assert.deepEqual(result.artifacts.slice(0,1), [{name: 'report.md', mime: 'text/markdown', content: '# Verified report', encoding: 'utf-8'}]);
+  assert.deepEqual(result.artifacts.slice(0,1), [{name: 'report.md', mime: 'text/markdown', content: '# Verified report', encoding: 'utf-8', checks:[{check:'render',status:'not_run',evidence:'Text draft only'}]}]);
 });
 
 test('Codex runner reads a real generated file from its isolated run directory', async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'inno-codex-output-'));
   t.after(() => rm(directory, {recursive: true, force: true}));
   await mkdir(path.join(directory, 'output'));
-  await writeFile(path.join(directory, 'output', 'report.docx'), Buffer.from('PK\x03\x04tiny-docx-fixture'));
+  const officeBytes=await officeFixture();
+  await writeFile(path.join(directory, 'output', 'report.docx'), officeBytes);
   const spawnProcess = () => {
     const child = new EventEmitter();
     child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough(); child.kill = () => true;
@@ -384,7 +389,7 @@ test('Codex runner reads a real generated file from its isolated run directory',
   const result = await runner.run({task: {id: 't', title: 'Doc', prompt: 'Make docx', type: 'writing', plan: []}, materials: []});
 
   assert.equal(result.artifacts[0].encoding, 'base64');
-  assert.equal(Buffer.from(result.artifacts[0].content, 'base64').toString(), 'PK\x03\x04tiny-docx-fixture');
+  assert.deepEqual(Buffer.from(result.artifacts[0].content, 'base64'), Buffer.from(officeBytes));
   assert.equal('path' in result.artifacts[0], false);
 });
 
@@ -623,6 +628,7 @@ test('Worker serves the shared authenticated API and dispatches configured Claud
   const run = await runResponse.json();
   assert.equal(runResponse.status, 202);
   assert.equal(run.task.status, 'running');
+  await Promise.all(pending);
   assert.match(JSON.parse(routineRequest.options.body).text, /CLAUDE MASTER-FIRST/);
   assert.match(JSON.parse(routineRequest.options.body).text, /checkpoint_task BEFORE/);
   assert.match(JSON.parse(routineRequest.options.body).text, /inno-haiku/);
@@ -646,9 +652,9 @@ test('local startup config creates a strong session token and puts it only in th
 
 
 test('Codex nonzero JSON failure preserves quota classification without leaking diagnostic text', async () => {
- const spawnProcess=()=>{const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();queueMicrotask(()=>{child.stdout.write(JSON.stringify({type:'turn.failed',error:{message:'You have hit your usage limit. PRIVATE_DIAGNOSTIC'}})+'\n');child.stderr.write('PRIVATE_DIAGNOSTIC');child.emit('close',1);});return child;};
+ const spawnProcess=()=>{const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();queueMicrotask(()=>{child.stdout.write(JSON.stringify({type:'turn.failed',usage:{input_tokens:9,cached_input_tokens:7,output_tokens:2},error:{message:'You have hit your usage limit. PRIVATE_DIAGNOSTIC'}})+'\n');child.stderr.write('PRIVATE_DIAGNOSTIC');child.emit('close',1);});return child;};
  const runner=createCodexRunner({spawnProcess,ensureDirectory:()=>{}});
- await assert.rejects(()=>runner.run({task:{id:'t',prompt:'hello'}}), e=>e.code==='QUOTA_EXCEEDED'&&!e.message.includes('PRIVATE_DIAGNOSTIC'));
+ await assert.rejects(()=>runner.run({task:{id:'t',prompt:'hello'}}), e=>e.code==='QUOTA_EXCEEDED'&&e.usage.inputTokens===9&&e.usage.cachedInputTokens===7&&e.usage.outputTokens===2&&!e.message.includes('PRIVATE_DIAGNOSTIC'));
 });
 
 test('Claude authentication rejection has safe diagnostics and quota retry hint stays informational', async () => {
@@ -699,3 +705,38 @@ test('oversized output stops runner and waits for close before releasing executi
 test('abort during output-limit teardown cannot release runner before process close',async()=>{const controller=new AbortController();let closed=false;const spawnProcess=()=>{const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();child.kill=()=>{queueMicrotask(()=>controller.abort());setImmediate(()=>{closed=true;child.emit('close',1);});};queueMicrotask(()=>child.stdout.write('x'.repeat(16*1024*1024+1)));return child;};const runner=createCodexRunner({spawnProcess,ensureDirectory:()=>{}});await assert.rejects(()=>runner.run({task:{id:'t',prompt:'work'},signal:controller.signal}));assert.equal(closed,true);});
 
 test('SQLite unchanged state skips task reads and preserves changed full responses',async t=>{const app=await fixture();t.after(()=>app.close());const s=app.store.getState();const list=app.store.listTasks;app.store.listTasks=()=>{throw Error('must not read tasks');};const small=app.store.getState({localCodex:true},s.revision);assert.equal(small.unchanged,true);assert.equal(small.tasks,undefined);app.store.listTasks=list;app.store.createTask({prompt:'new'});assert.equal(app.store.getState({},s.revision).tasks.length,1);});
+
+test('ordinary abort retains runner ownership until the child actually closes',async()=>{
+ const controller=new AbortController();let closeChild,started;const ready=new Promise(resolve=>{started=resolve;});let killed=false,settled=false;
+ const spawnProcess=()=>{const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();child.kill=()=>{killed=true;return true;};closeChild=()=>child.emit('close',null,'SIGTERM');started();return child;};
+ const runner=createCodexRunner({spawnProcess,ensureDirectory:()=>{}});
+ const run=runner.run({task:{id:'abort-owner',prompt:'work'},signal:controller.signal});const observed=run.then(()=>{settled=true;},e=>{settled=true;return e;});
+ await ready;controller.abort();await new Promise(resolve=>setImmediate(resolve));const early=settled;closeChild();const error=await observed;
+ assert.equal(killed,true);assert.equal(early,false);assert.equal(error.name,'AbortError');
+});
+
+test('failed termination signal cannot release a still-existing Codex process',async()=>{
+ const controller=new AbortController();let closeChild,started;const ready=new Promise(r=>{started=r;});let settled=false;
+ const runner=createCodexRunner({ensureDirectory:()=>{},spawnProcess:()=>{const child=new EventEmitter();child.pid=123;child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();child.kill=()=>{child.emit('error',Error('kill failed'));return false;};closeChild=()=>child.emit('close',0);started();return child;}});
+ const result=runner.run({task:{id:'failed-kill',prompt:'work'},signal:controller.signal}).catch(e=>{settled=true;return e;});await ready;controller.abort();await new Promise(setImmediate);const early=settled;closeChild();const error=await result;assert.equal(early,false);assert.equal(error.name,'AbortError');
+});
+
+import {WorkspaceClient} from '../public/core/client.mjs';
+test('two HTTP clients converge after acknowledged offline write and reject a stale follow-up',async t=>{
+ const app=await fixture();t.after(()=>app.close());const options={baseUrl:app.baseUrl,remote:true,token:'test-token-0123456789abcdef'};const first=new WorkspaceClient(options),second=new WorkspaceClient(options);
+ await Promise.all([first.refresh(),second.refresh()]);const transport=first.request.bind(first);let failReads=true,creates=0;
+ first.request=(route,input)=>{if(route==='/api/tasks'&&input)creates++;if(failReads&&route.startsWith('/api/state'))return Promise.reject(Error('simulated network outage'));return transport(route,input);};
+ const task=await first.create({prompt:'independent cross-device request'});assert.equal(first.state.tasks[0].id,task.id);assert.ok(first.syncError);await second.refresh();assert.equal(second.state.tasks.length,1);
+ await second.action(task.id,{action:'message',expectedVersion:task.version,content:'second device direction'});
+ await assert.rejects(()=>first.action(task.id,{action:'message',expectedVersion:task.version,content:'stale first device direction'}),{status:409});
+ failReads=false;await first.refresh();assert.equal(first.syncError,null);assert.equal(first.state.tasks[0].messages.at(-1).content,'second device direction');
+ const current=first.state.tasks[0];await first.action(task.id,{action:'message',expectedVersion:current.version,content:'reviewed follow-up'});await second.refresh();assert.deepEqual(first.state.tasks,second.state.tasks);assert.equal(creates,1);assert.equal(second.state.tasks.length,1);
+});
+
+test('lost HTTP creation response retries after client reload without duplicating server task',async t=>{
+ const app=await fixture();t.after(()=>app.close());const saved=new Map(),retryStorage={getItem:k=>saved.get(k)??null,setItem:(k,v)=>saved.set(k,v),removeItem:k=>saved.delete(k)};const options={baseUrl:app.baseUrl,remote:true,token:'test-token-0123456789abcdef',retryStorage};const first=new WorkspaceClient(options),transport=first.request.bind(first);
+ first.request=async(route,input)=>{const result=await transport(route,input);if(route==='/api/tasks')throw Error('response lost after server commit');return result;};
+ await assert.rejects(()=>first.create({prompt:'retry after lost response'}),/response lost/);assert.equal(app.store.listTasks().length,1);const original=app.store.listTasks()[0];const second=new WorkspaceClient(options);const replay=await second.create({prompt:'retry after lost response'});assert.equal(replay.id,original.id);assert.equal(app.store.listTasks().length,1);assert.equal(second.state.tasks.length,1);assert.equal(saved.size,0);
+});
+
+test('missing ordinary source prevents Codex process spawn',async()=>{let spawned=false;const runner=createCodexRunner({spawnProcess:()=>{spawned=true;throw Error('must not spawn');},ensureDirectory:()=>{}});await assert.rejects(()=>runner.run({task:{id:'source-required',prompt:'analyze evidence',attachments:[{name:'measurements.csv',source:'file'}]},materials:[]}),/Reconnect/);assert.equal(spawned,false);});

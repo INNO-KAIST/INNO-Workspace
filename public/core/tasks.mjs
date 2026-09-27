@@ -1,9 +1,15 @@
+import {validateOfficeArtifact} from './office-container.mjs';
+import {sanitizeArtifactChecks} from './artifact-checks.mjs';
+import {sanitizeSourceView,sanitizeSourceCoverage} from './source-coverage.mjs';
 const MAX_PLAN_ITEMS = 6;
 const MAX_TEXT = 200_000;
 
 export const TERMINAL_STATUSES = Object.freeze(['completed', 'cancelled']);
 export const TASK_STATUSES = Object.freeze([
   'ready',
+  'queued',
+  'waiting_children',
+  'queued_for_review',
   'running',
   'paused',
   'waiting_user',
@@ -108,6 +114,7 @@ function descriptor(input, makeId) {
       throw new ValidationError('attachment url must be an http(s) URL');
     }
   }
+  if(input.view!=null){try{result.view=sanitizeSourceView(input.view,result);}catch(error){throw new ValidationError(error.message);}}
   return result;
 }
 
@@ -160,8 +167,10 @@ function artifact(input, makeId, createdAt) {
     mime: text(input.mime, 'artifact mime', {max: 255}),
     content: text(input.content, 'artifact content', {required: false, max: 500_000}),
     encoding,
+    checks: sanitizeArtifactChecks(input.checks),
     createdAt: typeof input.createdAt === 'string' ? input.createdAt : createdAt,
   };
+  validateOfficeArtifact(result);
   if (new TextEncoder().encode(JSON.stringify(result)).byteLength > 500_000) {
     throw new ValidationError('artifact serialized content cannot exceed 500000 UTF-8 bytes');
   }
@@ -212,6 +221,18 @@ export function applyAction(task, input, overrides = {}) {
   const deps = dependencies(overrides);
   const now = deps.now();
   const next = structuredClone(task);
+
+  if(task.checkpoint?.confirmationRequired&&input.action==='resume')throw new ConflictError('Confirm the previous remote execution before resuming',task.version);
+  if(task.delegation && task.delegation.state!=='superseded' && ['pause','cancel','message','decide'].includes(input.action)){
+    const state=['message','decide'].includes(input.action)?'superseded':input.action==='pause'?'paused':'cancelled';
+    next.delegation={...task.delegation,state,epoch:task.delegation.epoch+1};
+    if(state==='superseded'){
+      next.status='ready';
+      next.checkpoint={...(task.checkpoint??{}),status:'superseded',executionId:undefined,expiresAt:undefined,updatedAt:now};
+    }
+  }
+  if(task.delegation&&task.delegation.state!=='superseded'&&input.action==='resume')throw new ValidationError('Use delegation resume to preserve child results');
+  if(task.delegation&&['waiting_children','queued_for_review'].includes(task.status)&&input.action==='attachments')throw new ConflictError('Sources cannot change during delegation',task.version);
 
   switch (input.action) {
     case 'pause':
@@ -274,10 +295,12 @@ export function sanitizeMaterials(materials) {
   return materials.map(item => {
     if (!item || typeof item !== 'object') throw new ValidationError('material must be an object');
     const name = text(item.name, 'material name', {max: 500});
-    const content = text(item.text, 'material text', {required: false, max: 200_000});
-    total += content.length;
+    if(typeof item.text!=='string'||item.text.length>200000)throw new ValidationError('Invalid material text');
+    const content=item.text;
+    total += new TextEncoder().encode(content).byteLength;
     if (total > 600_000) throw new ValidationError('total material text is too large');
-    return {name, text: content};
+    let coverage;try{coverage=sanitizeSourceCoverage(item.coverage);}catch(error){throw new ValidationError(error.message);}
+    return {name,text:content,...(coverage?{coverage}:{})};
   });
 }
 

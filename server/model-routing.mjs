@@ -1,6 +1,9 @@
+import {validateDelegationSourceIds,SOURCE_DELEGATION_POLICY} from '../public/core/delegation-sources.mjs';
 import {spawn} from 'node:child_process';
 const EFFORTS=new Set(['none','minimal','low','medium','high','xhigh','max','ultra']);
-function catalogRows(rows){
+const DELEGATION_EFFORTS=new Set(['none','minimal','low','medium','high','xhigh','max']);
+const CLAUDE_ROLE_MODELS=new Set(['haiku','sonnet','opus']);
+export function modelCatalogRows(rows){
  return (Array.isArray(rows)?rows:[]).slice(0,100).filter(m=>typeof m?.model==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(m.model)&&!m.hidden).map(m=>({model:m.model,efforts:(m.efforts??m.supportedReasoningEfforts?.map(e=>e.reasoningEffort)??[]).filter(e=>EFFORTS.has(e)),isDefault:m.isDefault===true}));
 }
 // One small read-only app-server RPC per hour; no model execution, credentials, or transcript retained.
@@ -8,7 +11,7 @@ export function createModelCatalog({spawnProcess=spawn,env=process.env,cwd=proce
  let cached=[],expires=0,inflight;
  function query(){return new Promise(resolve=>{
   let child,pending='',done=false,timer;
-  const finish=rows=>{if(done)return;done=true;clearTimeout(timer);child?.kill();resolve(catalogRows(rows));};
+  const finish=rows=>{if(done)return;done=true;clearTimeout(timer);child?.kill();resolve(modelCatalogRows(rows));};
   try{child=spawnProcess('codex',['app-server','--stdio'],{env,cwd,shell:false,windowsHide:true,stdio:['pipe','pipe','pipe']});}catch{finish([]);return;}
   const send=value=>{if(!done)child.stdin.write(JSON.stringify(value)+'\n');};
   child.on('error',()=>finish([]));child.on('close',()=>finish([]));child.stdin.on('error',()=>finish([]));child.stderr.resume();
@@ -25,7 +28,7 @@ export function createModelCatalog({spawnProcess=spawn,env=process.env,cwd=proce
  return async()=>{if(now()<expires)return cached;if(!inflight)inflight=query().then(rows=>{cached=rows;expires=now()+(rows.length?ttlMs:Math.min(ttlMs,60000));return rows;}).finally(()=>{inflight=null;});return inflight;};
 }
 export function routingPolicy(rows){
- const models=catalogRows(rows);
+ const models=modelCatalogRows(rows);
  if(!models.length)return 'Model routing: the supported model catalog is unavailable. Do not spawn subagents or guess model names. Work directly with the current master model; report this fallback in routing.';
  return [
   'MASTER-FIRST MODEL ROUTING (subscription only):',
@@ -39,8 +42,58 @@ export function routingPolicy(rows){
   'Include routing in the final JSON: {"understanding":"brief goal, no source originals","assignments":[{"role":"...","model":"...","effort":"...","reason":"why sufficient","acceptance":"check","outcome":"verified/failed/escalated with evidence"}],"review":"master checks and remaining limits"}. Use an empty assignments list when working directly. This is a self-report; never describe it as independently verified runtime telemetry.'
  ].join('\n');
 }
+export function assignedCodexModel(assignment,rows){
+ const models=modelCatalogRows(rows);
+ const requested=typeof assignment?.requestedModel==='string'?assignment.requestedModel:'';
+ const model=models.find(item=>item.model===requested);
+ if(!model)throw new Error(`Assigned Codex model is not present in the account catalog: ${requested}`);
+ if(!model.efforts.includes(assignment?.effort))throw new Error(`Assigned Codex effort is not present in the account catalog for ${requested}: ${assignment?.effort??''}`);
+ return {model:model.model,effort:assignment.effort};
+}
+function boundedAssignmentText(value,label,max){
+ if(typeof value!=='string'||!value.trim()||value.length>max)throw new Error(`Invalid delegation ${label}`);
+ return value.trim();
+}
+export function validateDelegationResult(value,rows,options={}){
+ if(!value||typeof value!=='object'||Array.isArray(value)||value.independent!==true||!Array.isArray(value.children)||value.children.length!==2)throw new Error('Invalid delegation: exactly two independent children are required');
+ const children=value.children.map(child=>{
+  if(!child||typeof child!=='object'||!['codex','claude'].includes(child.provider))throw new Error('Invalid delegation provider');
+  if(!DELEGATION_EFFORTS.has(child.effort))throw new Error(`Invalid delegation effort: ${child.effort??''}`);
+  if(!Array.isArray(child.acceptanceCriteria)||child.acceptanceCriteria.length<1||child.acceptanceCriteria.length>8)throw new Error('Invalid delegation acceptance criteria');
+  const sourceIds=validateDelegationSourceIds(child.sourceIds,options);
+  const normalized={
+   ...(sourceIds.length?{sourceIds}:{}),
+   role:boundedAssignmentText(child.role,'role',100),provider:child.provider,
+   requestedModel:boundedAssignmentText(child.requestedModel,'requestedModel',100),effort:child.effort,
+   sufficientReason:boundedAssignmentText(child.sufficientReason,'sufficientReason',1000),
+   acceptanceCriteria:child.acceptanceCriteria.map(item=>boundedAssignmentText(item,'acceptance criterion',1000)),
+   instructions:boundedAssignmentText(child.instructions,'instructions',12000),
+  };
+  if(new Set(normalized.acceptanceCriteria).size!==normalized.acceptanceCriteria.length)throw new Error('Invalid delegation: duplicate acceptance criteria');
+  if(child.provider==='codex')assignedCodexModel(normalized,rows);
+  if(child.provider==='claude'&&!CLAUDE_ROLE_MODELS.has(normalized.requestedModel))throw new Error(`Assigned Claude role model is not supported: ${normalized.requestedModel}`);
+  return normalized;
+ });
+ if(new Set(children.map(child=>child.provider)).size!==2||new Set(children.map(child=>child.role)).size!==2)throw new Error('Invalid delegation: one Codex and one Claude child with distinct roles are required');
+ return {independent:true,children};
+}
+export function delegationRoutingPolicy(rows,{sourceDelegationVersion=0}={}){
+ const sourceAware=sourceDelegationVersion===1;
+ const models=modelCatalogRows(rows);
+ if(!models.length)return 'Managed parallel delegation is unavailable because the Codex account model catalog could not be verified. Work directly with the current master. Do not spawn native subagents, hand off, or guess model names. Return the ordinary result JSON without delegation.';
+ return [
+  'MANAGED PARALLEL ALLOCATION (existing subscriptions only):',
+  'First understand the latest request and decide whether two independent, '+(sourceAware?'source-scoped':'source-free')+' results materially help. Respect explicit no-subagent or direct-work requests. Simple, indivisible, '+(sourceAware?'':'attachment-backed, ')+'or URL-backed requests stay with the master. The task role plan contains static suggestions only; decide their relevance from the actual objective and do not allocate roles merely because they are listed.',
+  'Do not spawn native subagents or call another provider. If parallel work is useful, return delegation in the final JSON so INNO Workspace can persist and run it. Delegation must be {"independent":true,"children":[exactly two assignments]} with exactly one codex and one claude assignment. Each assignment must contain role, provider, requestedModel, effort, sufficientReason, acceptanceCriteria (1-8 exact strings), and bounded instructions. The two roles must be distinct and independently executable '+(sourceAware?'using only assigned transient materials and no task dependencies':'without source originals or dependencies')+'.',
+  sourceAware?SOURCE_DELEGATION_POLICY:'',
+  'Verified Codex account models and efforts: '+JSON.stringify(models),
+  'Claude subscription role-model candidates: '+JSON.stringify([...CLAUDE_ROLE_MODELS])+'. Claude child effort is planning intent; the Routine wrapper must report whether it can apply it and must not invent an unsupported per-Agent effort control.',
+  'Keep request interpretation and final integration with this master. Do not allocate when wrapper and review overhead outweighs the bounded work. Never use API keys, paid overage, provider switching for quota failures, or claims of measured savings.',
+  'Return one JSON object with summary, checkpoint, artifacts, routing, and optional delegation. Omit delegation when direct work is better. Do not return both delegation and handoff.',
+ ].join('\n');
+}
 export function routingReport(value,rows){
- const models=catalogRows(rows),text=v=>typeof v==='string'?v.slice(0,700):'';
+ const models=modelCatalogRows(rows),text=v=>typeof v==='string'?v.slice(0,700):'';
  const valid=value&&typeof value==='object'&&!Array.isArray(value);
  return {version:1,source:'executor_self_report',runtimeVerified:false,status:valid?'reported':'not_reported',understanding:text(value?.understanding),review:text(value?.review),assignments:(Array.isArray(value?.assignments)?value.assignments:[]).slice(0,6).map(a=>{const model=models.find(m=>m.model===a?.model);return Object.fromEntries([...['role','model','effort','reason','acceptance','outcome'].map(k=>[k,text(a?.[k])]),['catalogMatch',Boolean(model&&model.efforts.includes(a?.effort))]]);})};
 }

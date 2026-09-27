@@ -1,0 +1,11 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {sanitizeArtifactChecks,artifactCheckSummary} from '../public/core/artifact-checks.mjs';
+test('check evidence is bounded and cannot promote agent reports to independent verification',()=>{const result=sanitizeArtifactChecks([{check:'Render all pages',status:'pass',evidence:'Inspected pages 1-3',authority:'independent',secret:'drop'}]);assert.deepEqual(result,[{check:'Render all pages',status:'pass',evidence:'Inspected pages 1-3'}]);assert.match(artifactCheckSummary({checks:result}),/AI 보고/);assert.doesNotMatch(artifactCheckSummary({}),/완료|통과/);});
+test('missing evidence and invalid or unbounded reports are rejected',()=>{for(const checks of [[{check:'render',status:'pass',evidence:''}],[{check:'render',status:'verified',evidence:'x'}],Array(21).fill({check:'x',status:'pass',evidence:'x'})])assert.throws(()=>sanitizeArtifactChecks(checks));assert.equal(sanitizeArtifactChecks(undefined),undefined);});
+test('failed and unperformed checks remain distinct',()=>{assert.match(artifactCheckSummary({checks:[{check:'x',status:'fail',evidence:'overlap'}]}),/실패 1/);assert.match(artifactCheckSummary({checks:[{check:'x',status:'not_run',evidence:'renderer unavailable'}]}),/미실시 1/);});
+import {SqliteTaskStore} from '../server/store.mjs';
+import {D1TaskStore} from '../worker/store.mjs';
+import {TestD1} from './helpers/d1.mjs';
+import {exportBundle,parseBundle} from '../public/core/client.mjs';
+for(const backend of ['sqlite','d1'])test(`${backend} preserves artifact checks through completion and export`,async t=>{const db=backend==='d1'?new TestD1():null;const store=db?new D1TaskStore(db):new SqliteTaskStore();t.after(()=>db?db.close():store.close());const task=await store.createTask({prompt:'Create report'});const owner=await store.claimExecution(task.id,{provider:'codex',expectedVersion:task.version});const checks=[{check:'render',status:'not_run',evidence:'renderer unavailable'}];const done=await store.finishExecution(task.id,{...owner,content:'Draft',artifacts:[{name:'draft.md',mime:'text/markdown',content:'Draft',checks}]});assert.deepEqual(done.artifacts[0].checks,checks);assert.deepEqual(parseBundle(JSON.stringify(exportBundle({tasks:[done]}))).tasks[0].artifacts[0].checks,checks);});

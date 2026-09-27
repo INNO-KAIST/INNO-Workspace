@@ -29,7 +29,7 @@
 
 확인 위치: `E:/Python/INNO Scheduler/Optics_scheduler.html`, `Optics_설치가이드.md`; `E:/Python/INNO Analytics/INNO Analytics 사용 가이드.md`; `E:/Python/INNO NanoLab/NanoLab 사용 가이드.md`; `E:/Python/INNO Ledger/README.md`, `INNO Ledger.html`; `E:/Python/INNO Prism/src/app.js`; `E:/Python/INNO RefAtlas/README.md`, `docs/설계가이드.md`.
 
-GitHub 연결에서 `innokaist/INNO-Scheduler`, `INNO-Analytics`, `INNO-Ledger`, `INNO-NanoLab`, `INNO-Prism`, `INNO-RefAtlas`를 확인했다. RefAtlas는 비공개다. 공개 저장소의 소스와 비공개 연구자료를 섞지 않는다.
+GitHub 연결에서 `INNO-KAIST/INNO-Scheduler`, `INNO-Analytics`, `INNO-Ledger`, `INNO-NanoLab`, `INNO-Prism`, `INNO-RefAtlas`를 확인했다. RefAtlas는 비공개다. 공개 저장소의 소스와 비공개 연구자료를 섞지 않는다.
 
 ## 3. 운영 방식 비교와 추천
 

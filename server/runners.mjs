@@ -1,7 +1,14 @@
-import {prepareHandoffInputs} from './handoff-inputs.mjs';
+import {sourceDelegationContext,delegationAttachments} from '../public/core/delegation-sources.mjs';
+import {fileURLToPath} from 'node:url';
+import {usageCounts} from '../public/core/execution-usage.mjs';
+import {validateOfficeContainer} from '../public/core/office-container.mjs';
+import {sanitizeArtifactChecks} from '../public/core/artifact-checks.mjs';
+import {deliveryPolicy} from '../public/core/delivery.mjs';
+import {sourceCoverageContext,verifyMaterialViews} from '../public/core/source-coverage.mjs';
+import {prepareHandoffInputs,prepareReviewInputs} from './handoff-inputs.mjs';
 import {handoffContext,CODEX_HANDOFF_POLICY,handoffTask} from '../public/core/provider-handoff.mjs';
-import {CLAUDE_ROUTING_POLICY} from '../public/core/claude-routing.mjs';
-import {routingPolicy,routingReport,withRoutingArtifact} from './model-routing.mjs';
+import {claudeTaskRoutingPolicy} from '../public/core/claude-routing.mjs';
+import {assignedCodexModel,delegationRoutingPolicy,modelCatalogRows,routingPolicy,routingReport,validateDelegationResult,withRoutingArtifact} from './model-routing.mjs';
 import {createEventCollector,createTailCollector} from './process-output.mjs';
 import {runnerError} from '../public/core/failures.mjs';
 import { spawn } from 'node:child_process';
@@ -38,10 +45,11 @@ function collectProcess(child, {input, signal, stdoutCollector=createTailCollect
     };
     const abort = () => {
       if(outputError)return; // Already terminating; ownership stays busy until close.
-      child.kill?.('SIGTERM');
       const error = new Error('execution aborted');
       error.name = 'AbortError';
-      fail(error);
+      outputError = error;
+      // A signal request is not proof of exit. Retain ownership until close.
+      child.kill?.('SIGTERM');
     };
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
@@ -50,7 +58,11 @@ function collectProcess(child, {input, signal, stdoutCollector=createTailCollect
       try{stdoutCollector.write(chunk);}catch(error){outputError=error;child.kill?.('SIGTERM');}
     });
     child.stderr?.on('data', chunk => { if(!settled&&!outputError)stderrCollector.write(chunk); });
-    child.on('error', fail);
+    child.on('error', error => {
+      // A failed kill of an existing process does not prove it has stopped.
+      if(outputError && child.pid)return;
+      fail(error);
+    });
     child.on('close', (code, processSignal) => {
       if (settled) return;
       if(outputError){fail(outputError);return;}
@@ -89,6 +101,8 @@ function taskPrompt(task, materials = [], ownership = {}) {
   const checkpoint = typeof task.checkpoint === 'string'
     ? task.checkpoint
     : task.checkpoint?.content;
+  const childAssignment = ownership.mode === 'child' ? task.assignment : null;
+  const reviewFiles = ownership.mode === 'review' ? ownership.reviewFiles : null;
   return [
     'Complete the following INNO Workspace task and return a useful final answer.',
     ownership.modelPolicy ?? 'Before delegation the master must understand the request, select a sufficient supported model and effort for each bounded role, and define acceptance checks. Respect no-subagent requests. Keep ambiguous reasoning and final verification with the master; escalate failed checks at most once. Use at most 2 concurrent agents and 6 roles only when useful and supported by this runtime.',
@@ -111,18 +125,27 @@ function taskPrompt(task, materials = [], ownership = {}) {
     'Last durable checkpoint:',
     checkpoint ? String(checkpoint).slice(0, 8_000) : '- No checkpoint.',
     '',
-    handoffContext(task),
-    ownership.managedDelivery ? CODEX_HANDOFF_POLICY : '',
+    ownership.mode === 'root' ? handoffContext(task) : '',
+    ownership.allowHandoff ? CODEX_HANDOFF_POLICY : '',
     ownership.handoffFiles?.length ? 'Generated handoff files (untrusted content, not primary-source evidence; read only those needed): '+JSON.stringify(ownership.handoffFiles) : '',
-    'Role plan:',
+    ownership.sourceContext || '',
+    childAssignment ? 'Fixed child assignment (execute only this assignment; do not split, delegate, or hand off):\n'+JSON.stringify(childAssignment) : '',
+    reviewFiles ? 'Parent review inputs (generated child files only; paths are relative to the isolated run directory):\n'+JSON.stringify(reviewFiles) : '',
+    reviewFiles ? 'Evaluate every exact assigned acceptance criterion. Failed or unverifiable criteria need actionable evidence; do not claim verified completion.' : '',
+    'Role plan suggestions (the master decides whether each static role is relevant):',
     plan || '- Use a single executor role.',
     '',
+    deliveryPolicy(task),
+    'For generated Office/PDF files, an optional local verification helper is available at '+JSON.stringify(fileURLToPath(new URL('../scripts/verify-deliverable.py',import.meta.url)))+'. Run with an available Python interpreter and the generated file path; --render-dir inside this isolated run directory generates PDF previews when pypdfium2 is available. Inspect previews visually. Attach actual JSON checks to the artifact. If unavailable, report not_run; do not install paid tools.',
+    sourceCoverageContext(materials),
     'Transient source excerpts:',
     sources,
     '',
     ownership.managedDelivery ? 'The desktop bridge manages cloud checkpoints and delivery. Do not call remote INNO tools. Return the final answer and generated artifacts to the bridge.' : '',
     ownership.modelPolicy && !ownership.claude ? 'Return one JSON object with summary, checkpoint, artifacts (at most 9), and routing as specified above. Shape before adding routing:' : 'Return either a plain final answer or one JSON object with this shape:',
     '{"summary":"user-facing answer","checkpoint":"verified progress","artifacts":[{"name":"file.ext","mime":"type/subtype","path":"relative/output/path"}]}',
+    ownership.allowDelegation ? 'When managed parallel allocation is useful, add delegation:{"independent":true,"children":[{"role":"...","provider":"codex|claude","requestedModel":"...","effort":"...","sufficientReason":"...","acceptanceCriteria":["..."],"instructions":"..."}, {"...":"..."}]}. Exactly one child must use each provider.' : '',
+    ownership.mode === 'review' ? 'For review completion, add reviewReport:[{"childTaskId":"...","criteria":[{"criterion":"exact assigned string","status":"pass|fail|unverifiable","evidence":"concrete evidence"}]}]. Include every child and every assigned criterion exactly once.' : '',
     'For generated files, return a relative path inside this isolated run directory. Small text may instead use content plus encoding utf-8.',
     'Never label text as DOCX, PPTX, PDF, or an image. If the required generator or renderer is unavailable, report that limitation and return text only.',
   ].join('\n');
@@ -153,7 +176,8 @@ function structuredResult(content) {
     if (!name || !mime || hasContent === hasPath || !['utf-8', 'base64'].includes(encoding)) {
       throw new Error('Codex returned an incomplete artifact');
     }
-    if (hasPath) return {name: name.slice(0, 500), mime: mime.slice(0, 255), path: item.path.trim()};
+    const checks = sanitizeArtifactChecks(item.checks);
+    if (hasPath) return {...(checks===undefined?{}:{checks}), name: name.slice(0, 500), mime: mime.slice(0, 255), path: item.path.trim()};
     total += artifactContent.length;
     if (total > 10_000_000) throw new Error('Codex returned oversized artifacts');
     const isText = mime.startsWith('text/') || mime === 'application/json' || mime === 'application/xml' || mime === 'image/svg+xml';
@@ -166,7 +190,7 @@ function structuredResult(content) {
       }
       validateBinarySignature(name, mime, bytes);
     }
-    return {name: name.slice(0, 500), mime: mime.slice(0, 255), content: artifactContent, encoding};
+    return {...(checks===undefined?{}:{checks}), name: name.slice(0, 500), mime: mime.slice(0, 255), content: artifactContent, encoding};
   });
   return {
     content: parsed.summary.trim(),
@@ -174,6 +198,8 @@ function structuredResult(content) {
     artifacts,
     routing: parsed.routing,
     handoff: parsed.handoff,
+    delegation: parsed.delegation,
+    reviewReport: parsed.reviewReport,
   };
 }
 
@@ -182,6 +208,7 @@ function pathInside(root, candidate) {
 }
 
 function validateBinarySignature(name, mime, bytes) {
+  validateOfficeContainer(mime,bytes);
   if (mime.includes('officedocument') && !(bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04)) {
     throw new Error(`artifact ${name} is not a valid Office ZIP container`);
   }
@@ -214,7 +241,7 @@ async function materializeArtifacts(artifacts, executionDirectory) {
     if (info.size > 10_000_000 || total > 10_000_000) throw new Error('Codex returned oversized artifacts');
     const bytes = await readFile(resolved);
     validateBinarySignature(item.name, item.mime, bytes);
-    output.push({name: item.name, mime: item.mime, content: bytes.toString('base64'), encoding: 'base64'});
+    output.push({...(item.checks===undefined?{}:{checks:item.checks}), name: item.name, mime: item.mime, content: bytes.toString('base64'), encoding: 'base64'});
   }
   return output;
 }
@@ -223,6 +250,7 @@ function parseCodexEvents(stdout) {
   const messages = [];
   let inputTokens = null;
   let outputTokens = null;
+  let cachedInputTokens;
   let threadId = null;
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) continue;
@@ -238,11 +266,12 @@ function parseCodexEvents(stdout) {
     }
     const usage = event.usage ?? event.turn?.usage;
     if (usage) {
+      cachedInputTokens = Number.isSafeInteger(usage.cached_input_tokens) ? usage.cached_input_tokens : cachedInputTokens;
       inputTokens = Number.isFinite(usage.input_tokens) ? usage.input_tokens : inputTokens;
       outputTokens = Number.isFinite(usage.output_tokens) ? usage.output_tokens : outputTokens;
     }
     if (event.type === 'turn.failed') {
-      throw runnerError(event.error || new Error('Codex turn failed'));
+      throw Object.assign(runnerError(event.error || new Error('Codex turn failed')), {usage:usageCounts({inputTokens,outputTokens,cachedInputTokens})});
     }
   }
   return {
@@ -251,6 +280,7 @@ function parseCodexEvents(stdout) {
     usage: {
       inputTokens,
       outputTokens,
+      ...(usageCounts({inputTokens,outputTokens,cachedInputTokens}) || {}),
       source: 'codex_exec',
     },
   };
@@ -271,6 +301,58 @@ async function defaultCodexAvailability(spawnProcess, env) {
   }
 }
 
+function executionMode(task){
+  if(task?.delegation?.state==='reviewing')return 'review';
+  if(task?.parentTaskId||task?.assignment)return 'child';
+  return 'root';
+}
+
+function codexChildPolicy(task,route){
+  return [
+    'FIXED CODEX CHILD ASSIGNMENT:',
+    `The CLI has verified and applied model ${JSON.stringify(route.model)} with reasoning effort ${JSON.stringify(route.effort)} from the current account catalog.`,
+    'Execute only the supplied child assignment. Do not spawn native subagents, split or delegate the task, or request a provider handoff.',
+    'Return the bounded result, generated artifacts, evidence for every acceptance criterion, and any uncertainty. The parent master owns integration.',
+  ].join('\n');
+}
+
+function codexReviewPolicy(task){
+  const criteria=(Array.isArray(task?.delegation?.children)?task.delegation.children:[]).map(child=>({childTaskId:child.taskId,role:child.role,acceptanceCriteria:child.acceptanceCriteria}));
+  return [
+    'PARENT REVIEW PHASE:',
+    'Work directly with the current master. Do not spawn native subagents, split or delegate the task, or request a provider handoff.',
+    'Inspect the generated child files and summaries, compare both results, and evaluate every exact assigned acceptance criterion.',
+    'A failed or unverifiable criterion must include actionable evidence for a targeted retry; do not describe the parent as verified or complete.',
+    'Assigned criteria: '+JSON.stringify(criteria),
+  ].join('\n');
+}
+
+function validateReviewInputs(manifest,task){
+  const expected=Array.isArray(task?.delegation?.children)?task.delegation.children:[];
+  if(expected.length<1||manifest.length!==expected.length)throw new Error('Review inputs do not match delegated children');
+  const byId=new Map(manifest.map(item=>[item.taskId,item]));
+  if(byId.size!==expected.length||expected.some(child=>byId.get(child.taskId)?.role!==child.role))throw new Error('Review input child role does not match delegated assignment');
+}
+
+function validateReviewReport(value,task){
+  const expected=Array.isArray(task?.delegation?.children)?task.delegation.children:[];
+  if(!Array.isArray(value)||value.length!==expected.length)throw new Error('Review report must cover every delegated child');
+  const byId=new Map();
+  for(const item of value){
+    if(!item||typeof item!=='object'||typeof item.childTaskId!=='string'||byId.has(item.childTaskId)||!Array.isArray(item.criteria))throw new Error('Review report is invalid');
+    byId.set(item.childTaskId,item);
+  }
+  return expected.map(child=>{
+    const item=byId.get(child.taskId),criteria=Array.isArray(child.acceptanceCriteria)?child.acceptanceCriteria:[];
+    if(!item||item.criteria.length!==criteria.length)throw new Error(`Review report must cover every criterion for child ${child.taskId}`);
+    const normalized=item.criteria.map((entry,index)=>{
+      if(!entry||entry.criterion!==criteria[index]||!['pass','fail','unverifiable'].includes(entry.status)||typeof entry.evidence!=='string'||!entry.evidence.trim()||entry.evidence.length>4000)throw new Error(`Review report criterion does not match assignment for child ${child.taskId}`);
+      return {criterion:entry.criterion,status:entry.status,evidence:entry.evidence.trim()};
+    });
+    return {childTaskId:child.taskId,criteria:normalized};
+  });
+}
+
 export function createCodexRunner({
   spawnProcess = spawn,
   cwd = process.cwd(),
@@ -283,23 +365,39 @@ export function createCodexRunner({
   },
   ensureDirectory = directory => mkdirSync(directory, {recursive: true}),
   managedDelivery = false,
+  sourceDelegationVersion = 0,
   mcpUrl,
   mcpToken,
 } = {}) {
   const env = withoutApiEnvironment(processEnv);
+  const loadModels = async () => modelCatalogRows(await modelCatalog().catch(() => []));
   return {
     available: () => availability ? availability() : defaultCodexAvailability(spawnProcess, env),
-    async run({task, materials = [], executionId, generation, signal}) {
-      const models = await modelCatalog().catch(() => []);
+    models: loadModels,
+    sourceDelegationVersion:sourceDelegationVersion===1?1:0,
+    async run({task, materials = [], reviewInputs = [], executionId, generation, signal, sourceDelegationVersion:negotiatedSourceVersion=sourceDelegationVersion}) {
+      const sourceVersion=sourceDelegationVersion===1&&negotiatedSourceVersion===1?1:0;
+      await verifyMaterialViews(task,materials);
+      const models = await loadModels();
+      const mode=executionMode(task);
+      const sourceContext=mode==='root'?sourceDelegationContext(task,{sourceDelegationVersion:sourceVersion}):'';
+      if(mode!=='root'&&materials.length&&!(sourceVersion===1&&task.attachments?.length))throw new Error(`${mode} execution cannot receive source materials`);
+      let assignedRoute;
+      if(mode==='child'){
+        if(!task?.parentTaskId||task?.assignment?.provider!=='codex')throw new Error('Codex child task requires a Codex assignment and parentTaskId');
+        assignedRoute=assignedCodexModel(task.assignment,models);
+      }
       if(signal?.aborted)throw Object.assign(new Error('execution aborted'),{name:'AbortError'});
       const executionDirectory = runDirectory({task, executionId, generation});
       ensureDirectory(executionDirectory);
-      const handoffFiles=await prepareHandoffInputs(task,executionDirectory);
+      const handoffFiles=mode==='root'?await prepareHandoffInputs(task,executionDirectory):[];
+      const reviewFiles=mode==='review'?await prepareReviewInputs(reviewInputs,executionDirectory):[];
+      if(mode==='review')validateReviewInputs(reviewFiles,task);
       const configuredMcpUrl = typeof mcpUrl === 'function' ? mcpUrl() : mcpUrl;
       const configuredMcpToken = typeof mcpToken === 'function' ? mcpToken() : mcpToken;
       const mcpArguments = [];
       const runEnv = {...env};
-      if (configuredMcpUrl && configuredMcpToken) {
+      if (mode==='root'&&configuredMcpUrl && configuredMcpToken) {
         const parsedMcpUrl = new URL(configuredMcpUrl);
         const loopback = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsedMcpUrl.hostname);
         if (parsedMcpUrl.protocol !== 'https:' && !(parsedMcpUrl.protocol === 'http:' && loopback)) {
@@ -319,7 +417,11 @@ export function createCodexRunner({
         '--skip-git-repo-check',
         '--ephemeral',
         '--ignore-user-config',
-        ...(models.length ? ['--enable','multi_agent','-c','agents.max_concurrent_threads_per_session=2'] : ['--disable','multi_agent']),
+        ...(mode==='child'
+          ? ['--disable','multi_agent','-m',assignedRoute.model,'-c',`model_reasoning_effort=${JSON.stringify(assignedRoute.effort)}`]
+          : mode==='review'||managedDelivery
+            ? ['--disable','multi_agent']
+            : models.length ? ['--enable','multi_agent','-c','agents.max_concurrent_threads_per_session=2'] : ['--disable','multi_agent']),
         ...mcpArguments,
         '-',
       ], {
@@ -329,9 +431,12 @@ export function createCodexRunner({
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-      const result = await collectProcess(child, {input: taskPrompt(task, materials, {executionId, generation, managedDelivery, handoffFiles, modelPolicy:routingPolicy(models)}), signal, stdoutCollector:createEventCollector()});
+      const modelPolicy=mode==='child'?codexChildPolicy(task,assignedRoute):mode==='review'?codexReviewPolicy(task):managedDelivery?delegationRoutingPolicy(models,{sourceDelegationVersion:sourceContext?1:0}):routingPolicy(models);
+      const result = await collectProcess(child, {input: taskPrompt(task, materials, {executionId, generation, managedDelivery, handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, allowDelegation:managedDelivery&&mode==='root', allowHandoff:managedDelivery&&mode==='root'}), signal, stdoutCollector:createEventCollector()});
+      let observedUsage;
       try {
       const parsed = parseCodexEvents(result.stdout);
+      observedUsage=usageCounts(parsed.usage);
       if (result.code !== 0) {
         // Only diagnostics are classified, never assistant messages or source excerpts.
         const errors=result.stdout.split(/\r?\n/).flatMap(line=>{try{const e=JSON.parse(line);return e.type==='error'?[e.message??e.error?.message??'']:[];}catch{return [];}});
@@ -340,17 +445,26 @@ export function createCodexRunner({
       if (!parsed.content) throw new Error('Codex completed without an assistant result');
       const structured = structuredResult(parsed.content);
       if (structured) structured.artifacts = await materializeArtifacts(structured.artifacts, executionDirectory);
+      if(mode!=='root'&&structured?.delegation)throw new Error(`${mode} execution cannot return recursive delegation`);
+      if(mode!=='root'&&structured?.handoff)throw new Error(`${mode} execution cannot return provider handoff`);
+      if(structured?.delegation&&structured?.handoff)throw new Error('A result cannot return both delegation and handoff');
+      if(structured?.delegation&&((task?.attachments?.length??0)>0||materials.length>0)&&!sourceContext)throw new Error('Delegation cannot copy source attachments or materials');
+      const delegation=managedDelivery&&mode==='root'&&structured?.delegation?validateDelegationResult(structured.delegation,models,{sourceDelegationVersion:sourceContext?1:0}):undefined;
+      if(delegation&&sourceContext)for(const child of delegation.children)delegationAttachments(task,child.sourceIds,{sourceDelegationVersion:1});
+      const reviewReport=mode==='review'?validateReviewReport(structured?.reviewReport,task):undefined;
       const report=routingReport(structured?.routing,models);
-      if(managedDelivery&&structured?.handoff)handoffTask({...task,status:'running',checkpoint:{...task.checkpoint,provider:'codex',executionId,generation}},{executionId,generation,content:structured.content,handoff:structured.handoff,artifacts:structured.artifacts});
+      if(managedDelivery&&mode==='root'&&structured?.handoff)handoffTask({...task,status:'running',checkpoint:{...task.checkpoint,provider:'codex',executionId,generation}},{executionId,generation,content:structured.content,handoff:structured.handoff,artifacts:structured.artifacts});
       const artifacts=withRoutingArtifact(structured?.artifacts??[],structured?.content??parsed.content,report,managedDelivery);
       return {
         content: structured?.content ?? parsed.content,
         checkpoint: structured?.checkpoint ?? (parsed.threadId ? `Codex thread ${parsed.threadId} completed.` : 'Codex execution completed.'),
         artifacts,
         usage: parsed.usage,
-        ...(managedDelivery && structured?.handoff ? {handoff:structured.handoff} : {}),
+        ...(managedDelivery && mode==='root' && structured?.handoff ? {handoff:structured.handoff} : {}),
+        ...(delegation ? {delegation} : {}),
+        ...(reviewReport ? {reviewReport} : {}),
       };
-      } finally {
+      } catch(error) {if(observedUsage)error.usage=observedUsage;throw error;} finally {
         // Non-recursive: preserve every directory containing files or child folders.
         // Cleanup is best effort and cannot turn a verified answer into a failure.
         await rmdir(executionDirectory).catch(()=>{});
@@ -372,13 +486,16 @@ function routineUrl(value) {
   return url.toString();
 }
 
-export function createClaudeRoutineRunner({url, token, fetchFn = fetch} = {}) {
+export function createClaudeRoutineRunner({url, token, fetchFn = fetch,sourceDelegationVersion=0} = {}) {
   const configured = Boolean(url && token);
   const endpoint = configured ? routineUrl(url) : null;
   return {
     available: async () => configured,
     async run({task, materials = [], executionId, generation, signal}) {
+      await verifyMaterialViews(task,materials);
       if (!configured) throw new Error('Claude Routine is not configured');
+      const mode=executionMode(task);
+      if(mode!=='root'&&materials.length&&!(sourceDelegationVersion===1&&task.attachments?.length))throw new Error(`${mode} execution cannot receive source materials`);
       const response = await fetchFn(endpoint, {
         method: 'POST',
         signal,
@@ -388,7 +505,7 @@ export function createClaudeRoutineRunner({url, token, fetchFn = fetch} = {}) {
           'anthropic-version': '2023-06-01',
           'content-type': 'application/json',
         },
-        body: JSON.stringify({text: taskPrompt(task, materials, {executionId, generation, modelPolicy:CLAUDE_ROUTING_POLICY, claude:true})}),
+        body: JSON.stringify({text: taskPrompt(task, materials, {executionId, generation, modelPolicy:claudeTaskRoutingPolicy(task), claude:true, mode})}),
       });
       let body;
       try {

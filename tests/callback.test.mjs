@@ -25,3 +25,14 @@ test('callback stdin preserves Korean split across arbitrary pipe chunks',async(
  assert.equal(value.content,'검증 완료');
  await assert.rejects(()=>readArguments(Readable.from([Buffer.alloc(750001,65)])),/750000/);
 });test('cloud callback exposes the authenticated sequential handoff tool',()=>{assert.equal(JSON.parse(prepareRequest('handoff_task',{taskId:'t'}).input).params.name,'handoff_task');});
+
+test('callback moves the scoped execution capability to the JSON-RPC envelope only',()=>{
+ const request=prepareRequest('checkpoint_task',{taskId:'t',executionId:'e',generation:1,content:'done',executionCapability:'signed.scope.value'});
+ const payload=JSON.parse(request.input);
+ assert.equal(payload.executionCapability,'signed.scope.value');assert.equal(payload.params.arguments.executionCapability,undefined);
+ assert.equal(request.args.some(value=>value.includes('signed.scope.value')),false);
+});
+
+test('callback surfaces bounded JSON errors from HTTP conflict responses',async()=>{
+ await assert.rejects(()=>callTool('checkpoint_task',{}, {transport:async()=>({code:22,stdout:JSON.stringify({error:'stale execution owner cannot write this task',currentVersion:7}),stderr:'curl: (22)'})}),/stale execution owner/);
+});

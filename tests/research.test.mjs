@@ -184,7 +184,7 @@ test('integration catalog distinguishes a verified app from repository fallbacks
   ]);
   for (const entry of INTEGRATIONS) {
     assert.match(entry.url, /^https:\/\//);
-    assert.match(entry.repositoryUrl, /^https:\/\/github\.com\/innokaist\//);
+    assert.match(entry.repositoryUrl, /^https:\/\/github\.com\/INNO-KAIST\//);
     assert.ok(entry.linkKind === 'app' || entry.linkKind === 'repository');
     assert.ok(Array.isArray(entry.imports));
     assert.equal(Object.isFrozen(entry), true);
@@ -192,12 +192,12 @@ test('integration catalog distinguishes a verified app from repository fallbacks
   assert.deepEqual(
     INTEGRATIONS.map(({ id, url, linkKind }) => ({ id, url, linkKind })),
     [
-      { id: 'scheduler', url: 'https://innokaist.github.io/INNO-Scheduler/', linkKind: 'app' },
-      { id: 'nanolab', url: 'https://github.com/innokaist/INNO-NanoLab', linkKind: 'repository' },
-      { id: 'ledger', url: 'https://github.com/innokaist/INNO-Ledger', linkKind: 'repository' },
-      { id: 'prism', url: 'https://github.com/innokaist/INNO-Prism', linkKind: 'repository' },
-      { id: 'analytics', url: 'https://github.com/innokaist/INNO-Analytics', linkKind: 'repository' },
-      { id: 'refatlas', url: 'https://github.com/innokaist/INNO-RefAtlas', linkKind: 'repository' },
+      { id: 'scheduler', url: 'https://inno-kaist.github.io/INNO-Scheduler/', linkKind: 'app' },
+      { id: 'nanolab', url: 'https://github.com/INNO-KAIST/INNO-NanoLab', linkKind: 'repository' },
+      { id: 'ledger', url: 'https://github.com/INNO-KAIST/INNO-Ledger', linkKind: 'repository' },
+      { id: 'prism', url: 'https://github.com/INNO-KAIST/INNO-Prism', linkKind: 'repository' },
+      { id: 'analytics', url: 'https://github.com/INNO-KAIST/INNO-Analytics', linkKind: 'repository' },
+      { id: 'refatlas', url: 'https://github.com/INNO-KAIST/INNO-RefAtlas', linkKind: 'repository' },
     ],
   );
   assert.deepEqual(INTEGRATIONS.find((entry) => entry.id === 'prism').imports, ['analysis-json']);

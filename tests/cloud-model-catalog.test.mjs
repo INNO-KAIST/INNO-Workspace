@@ -1,0 +1,6 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {TestD1} from './helpers/d1.mjs';
+import {D1TaskStore} from '../worker/store.mjs';
+import {ModelCatalog} from '../worker/model-catalog.mjs';
+test('catalog accepts only supported assignments, throttles identical writes, expires old account capabilities',async t=>{const db=new TestD1();t.after(()=>db.close());const store=new D1TaskStore(db);let clock=Date.now();store.now=()=>new Date(clock).toISOString();const catalog=new ModelCatalog(store);const models=[{model:'gpt-5.6-luna',efforts:['low'],isDefault:false}];await catalog.report(models);const first=await catalog.stored();clock+=60000;await catalog.report(models);assert.equal((await catalog.stored()).reportedAt,first.reportedAt);await catalog.validate([{provider:'codex',requestedModel:'gpt-5.6-luna',effort:'low'}]);await assert.rejects(()=>catalog.validate([{provider:'codex',requestedModel:'gpt-5.6-luna',effort:'high'}]));await assert.rejects(()=>catalog.report([...models,...models]));clock+=7200000;assert.deepEqual((await catalog.read()).codex,[]);await assert.rejects(()=>catalog.validate([{provider:'codex',requestedModel:'gpt-5.6-luna',effort:'low'}]));await catalog.report(models);assert.equal((await catalog.read()).codex.length,1);});

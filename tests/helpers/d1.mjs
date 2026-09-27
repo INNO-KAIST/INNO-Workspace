@@ -1,0 +1,4 @@
+import {DatabaseSync} from 'node:sqlite';
+import {D1_SCHEMA} from '../../worker/store.mjs';
+class Statement{constructor(db,sql,values=[]){Object.assign(this,{db,sql,values})}bind(...values){return new Statement(this.db,this.sql,values)}async first(){return this.db.prepare(this.sql).get(...this.values)??null}async all(){return {results:this.db.prepare(this.sql).all(...this.values)}}async run(){const r=this.db.prepare(this.sql).run(...this.values);return {meta:{changes:Number(r.changes)}}}}
+export class TestD1{constructor(){this.db=new DatabaseSync(':memory:');this.db.exec(D1_SCHEMA)}prepare(sql){return new Statement(this.db,sql)}async batch(statements){this.db.exec('BEGIN');try{const result=[];for(const s of statements)result.push(await s.run());this.db.exec('COMMIT');return result}catch(e){this.db.exec('ROLLBACK');throw e}}close(){this.db.close()}}

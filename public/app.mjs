@@ -1,4 +1,6 @@
-import {usageRows} from './core/execution-usage.mjs';
+import {prepareTaskMaterials} from './core/source-materials.mjs';
+import {artifactCheckSummary,sanitizeArtifactChecks} from './core/artifact-checks.mjs';
+import {usageRows,usageSummary} from './core/execution-usage.mjs';
 import {experimentPacket} from './core/experiment-links.mjs?v=direct-1';
 import {createExperimentLinks} from './experiment-links.mjs?v=direct-1';
 import {buildLiteratureReview} from './core/literature-review.mjs';
@@ -9,42 +11,52 @@ import {createStorageUI} from './run-storage.mjs';
 import {failureGuidance} from './core/failures.mjs';
 import {createRecordImportUI} from './record-import.mjs';
 import {WorkspaceClient,exportBundle,parseBundle,validateEndpoint} from './core/client.mjs';
+import {childRecoveryState,delegationPanel,delegationStateLabel,executionRecoveryState,taskControlState,taskDisplayStatus,taskListGroups} from './delegation-ui.mjs?v=parallel-ui-2';
 import {AttachmentSession} from './core/attachments.mjs';
+import {SourceExecutionCoordinator} from './source-execution.mjs';
+import {collectDirectoryFiles,createSourcePickFence,matchesStoredSource,reconcileSourceSelection,sourceExecutionMessage,sourceExecutionRows,sourceReconnectLocked} from './source-execution-ui.mjs';
 import {extractConnectedText} from './core/extract.mjs';
+import {applyAttachmentView,canChangeSourceView,coverageDescription,createSourceViewDraftGuard,prepareSourceViewPreview,selectionFromValues,sourceViewKind} from './source-views-ui.mjs?v=source-view-2';
 import {INTEGRATIONS,parseRefAtlas,parsePrismReport,searchPapers} from './core/research.mjs';
 
 const $=id=>document.getElementById(id);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const statusNames={ready:'실행 대기',queued:'실행 대기',claimed:'실행 준비',running:'진행 중',paused:'일시정지',waiting_user:'결정 대기',waiting_quota:'한도 대기',waiting_connection:'연결 대기',failed:'실행 실패',cancelled:'취소됨',completed:'완료',pending:'대기',proposed:'제안',done:'완료'};
+const statusNames={ready:'실행 대기',queued:'실행 대기',claimed:'실행 준비',running:'진행 중',waiting_children:'하위 작업 대기',queued_for_review:'검토 대기',reviewing:'결과 검토 중',paused:'일시정지',waiting_user:'결정 대기',waiting_quota:'한도 대기',waiting_connection:'연결 대기',failed:'실행 실패',cancelled:'취소됨',completed:'완료',pending:'대기',proposed:'제안',done:'완료'};
 const typeNames={general:'일반 작업',literature:'문헌 · 아이디어',analysis:'분석 · Figure',writing:'논문 · 문서',presentation:'발표자료',career:'CV · 지원서'};
 const names={workspace:'작업실',research:'연구 자료',integrations:'연결 앱',usage:'사용량'};
 const session=new AttachmentSession();
 const selectedPapers=new Set();
-let client,activeId=null,view='workspace',draftAttachments=[],papers=[],prismReports=[],busy=false,refreshing=false,previewUrls=[],lastRendered='';
+let client,activeId=null,view='workspace',draftAttachments=[],papers=[],prismReports=[],busy=false,refreshing=false,previewUrls=[],lastRendered='',pendingRecovery=null;
+let sourceStatus='',sourceTickRunning=false,selectionEpoch=0,pendingFilePick=null;
+const sourcePickFence=createSourcePickFence(()=>({taskId:activeId,client,epoch:selectionEpoch}));
+const sourceCoordinator=new SourceExecutionCoordinator({getClient:()=>client,connected:a=>connected(a),getFile:id=>session.getFile(id),extractText:extractConnectedText,verifyView:async(file,view)=>(await sourceViews()).verifySourceView(file,view)});
 const storageUI=createStorageUI(()=>client);
 const recordImports=createRecordImportUI({getClient:()=>client,onDone:()=>refresh()});
 const state=()=>client?.state||{tasks:[],capabilities:{},usage:[]};
 const current=()=>state().tasks.find(t=>t.id===activeId);
 const attachments=()=>current()?.attachments||draftAttachments;
+const sourceViews=()=>import('./core/source-views.mjs?v=source-view-1');
 const bytes=n=>n<1024?`${n} B`:n<1048576?`${(n/1024).toFixed(1)} KB`:`${(n/1048576).toFixed(1)} MB`;
 const date=v=>{const d=new Date(v);return Number.isNaN(+d)?'':d.toLocaleString('ko-KR',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});};
+const providerName=value=>String(value||'').toLowerCase()==='claude'?'Claude':String(value||'').toLowerCase()==='codex'?'Codex':value||'제공자 미기재';
+const recoveryReasonName=value=>({uncertain_fire:'외부 실행 시작 여부를 확인할 수 없습니다.',lease_expiry:'이전 실행 연결 시간이 만료됐습니다.',parent_pause:'부모 작업 일시정지로 이전 실행 종료 확인이 필요합니다.',connection:'실행 연결이 중단됐습니다.',unknown:'실행 종료 상태를 확인할 수 없습니다.',interrupted:'실행이 중단됐습니다.'})[value]||value||'외부 실행 상태를 확인해야 합니다.';
 function toast(message){$('toast').textContent=message;$('toast').classList.add('visible');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').classList.remove('visible'),6500);}
 async function guarded(fn){if(busy)return;busy=true;try{await fn();}catch(e){toast(e.message||'작업을 처리하지 못했습니다.');if(e.status===409){await refresh();toast('다른 기기에서 변경된 최신 기록을 불러왔습니다. 내용을 확인하고 다시 시도하세요.');}}finally{busy=false;renderControls();}}
 function linkSafe(value){try{const u=new URL(value);return ['https:','http:'].includes(u.protocol)&&!u.username&&!u.password?u.href:null;}catch{return null;}}
 function openDialog(id){$(id).showModal();}
 function closeSidebar(){$('sidebar').classList.remove('open');$('sidebar-scrim').classList.remove('open');}
 function setView(next){view=next;for(const key of Object.keys(names))$(`${key}-view`).classList.toggle('hidden',key!==next);$('view-title').textContent=names[next];document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===next));closeSidebar();if(next==='research')renderResearch();if(next==='usage')renderUsage();}
-function selectTask(id){activeId=id;lastRendered='';localStorage.setItem('inno-active-task',id||'');setView('workspace');render();$('conversation-scroll').scrollTop=$('conversation-scroll').scrollHeight;}
-function newTask(){activeId=null;localStorage.removeItem('inno-active-task');draftAttachments=[];lastRendered='';$('prompt').value='';setView('workspace');render();$('prompt').focus();}
+function selectTask(id){selectionEpoch++;activeId=id;lastRendered='';localStorage.setItem('inno-active-task',id||'');setView('workspace');render();$('conversation-scroll').scrollTop=$('conversation-scroll').scrollHeight;}
+function newTask(){selectionEpoch++;activeId=null;localStorage.removeItem('inno-active-task');draftAttachments=[];lastRendered='';$('prompt').value='';setView('workspace');render();$('prompt').focus();}
 function renderList(){
- const query=$('task-search').value.toLowerCase();const tasks=state().tasks.filter(t=>`${t.title} ${t.prompt}`.toLowerCase().includes(query)).sort((a,b)=>new Date(b.updatedAt)-new Date(a.updatedAt));
- $('task-count').textContent=state().tasks.length;
- $('task-list').innerHTML=tasks.length?tasks.map(t=>`<button class="task-item ${t.id===activeId?'active':''}" data-task="${esc(t.id)}"><span class="task-item-title">${esc(t.title)}</span><small>${esc(statusNames[t.status]||t.status)} · ${esc(date(t.updatedAt))}</small></button>`).join(''):'<p class="task-list-empty">기록된 작업이 없습니다.<br>첫 번째 질문을 남겨보세요.</p>';
+ const query=$('task-search').value.toLowerCase();const ordered=[...state().tasks].sort((a,b)=>new Date(b.updatedAt)-new Date(a.updatedAt));const groups=taskListGroups(ordered,query);
+ $('task-count').textContent=taskListGroups(state().tasks).length;
+ $('task-list').innerHTML=groups.length?groups.map(({task,children})=>{const displayStatus=taskDisplayStatus(task);return `<div class="task-group"><button class="task-item ${task.id===activeId?'active':''}" data-task="${esc(task.id)}"><span class="task-item-title">${esc(task.title)}</span><small>${esc(statusNames[displayStatus]||displayStatus)} · ${esc(date(task.updatedAt))}</small></button>${children.length?`<div class="child-task-list" aria-label="${esc(task.title)} 하위 작업">${children.map(child=>`<button class="task-item child-task-item ${child.id===activeId?'active':''}" data-task="${esc(child.id)}"><span class="task-item-title">${esc(child.assignment?.role||child.title||'하위 작업')}</span><small><span class="task-child-provider">${esc(providerName(child.assignment?.provider))}</span> · ${esc(statusNames[child.status]||child.status)}</small></button>`).join('')}</div>`:''}</div>`;}).join(''):'<p class="task-list-empty">기록된 작업이 없습니다.<br>첫 번째 질문을 남겨보세요.</p>';
 }
 function renderMessages(){
  const t=current();$('welcome').classList.toggle('hidden',!!t);$('task-toolbar').classList.toggle('hidden',!t);
  if(!t){$('messages').innerHTML='';return;}
- $('task-title').textContent=t.title;$('task-type-label').textContent=typeNames[t.type]||'WORKSPACE';$('task-status').textContent=statusNames[t.status]||t.status;$('task-status').className=`status ${t.status}`;
+ const displayStatus=taskDisplayStatus(t);$('task-title').textContent=t.title;$('task-type-label').textContent=typeNames[t.type]||'WORKSPACE';$('task-status').textContent=statusNames[displayStatus]||displayStatus;$('task-status').className=`status ${displayStatus}`;
  const key=t.id+':'+t.version;if(lastRendered===key)return;lastRendered=key;
  const wasBottom=$('conversation-scroll').scrollHeight-$('conversation-scroll').scrollTop-$('conversation-scroll').clientHeight<130;
  $('messages').innerHTML=(t.messages||[]).map(m=>`<article class="message ${['user','assistant','system'].includes(m.role)?m.role:'system'}"><div class="message-head"><strong>${m.role==='user'?'YOU':m.role==='assistant'?'INNO · ASSISTANT':'WORKSPACE · 상태 기록'}</strong><span>${esc(date(m.createdAt))}</span></div><div class="message-body">${esc(m.content)}</div></article>`).join('');
@@ -58,11 +70,27 @@ function renderMessages(){
  if(sessionUrl&&linkSafe(sessionUrl)){const a=document.createElement('a');a.className='text-button';a.href=linkSafe(sessionUrl);a.target='_blank';a.rel='noopener noreferrer';a.textContent='클라우드 실행 세션 열기 ↗';$('messages').append(a);}
  if(wasBottom)requestAnimationFrame(()=>$('conversation-scroll').scrollTop=$('conversation-scroll').scrollHeight);
 }
-function connected(a){return a.source==='url'||session.list().some(x=>x.id===a.id);}
+function connected(a){return a.source==='url'||session.list().some(x=>matchesStoredSource(a,x));}
 function renderAttachments(){
  const items=attachments();$('attachment-count').textContent=items.length;
- $('attachment-chips').innerHTML=items.map(a=>`<span class="attachment-chip"><span class="chip-name" data-preview="${esc(a.id)}" tabindex="0" role="button">${connected(a)?'◇':'↻'} ${esc(a.name)}</span><button type="button" data-remove="${esc(a.id)}" aria-label="${esc(a.name)} 연결 해제">×</button></span>`).join('');
- $('attachment-detail').innerHTML=items.length?items.map(a=>`<div class="file-row"><span class="file-icon">${a.source==='url'?'↗':'▤'}</span><div><button data-preview="${esc(a.id)}">${esc(a.path||a.name)}</button><small class="${connected(a)?'':'unavailable'}">${a.source==='url'?'링크 참조':`${bytes(a.size)} · ${connected(a)?'연결됨':'다시 연결 필요'}`}</small></div></div>`).join(''):'<p class="small-copy">파일이나 폴더를 연결해 시작하세요.</p>';
+ $('attachment-chips').innerHTML=items.map(a=>`<span class="attachment-chip"><span class="chip-name" data-preview="${esc(a.id)}" tabindex="0" role="button">${connected(a)?'◇':'↻'} ${esc(a.name)}${a.view?' · 부분 조회':''}</span><button type="button" data-remove="${esc(a.id)}" aria-label="${esc(a.name)} 연결 해제">×</button></span>`).join('');
+ $('attachment-detail').innerHTML=items.length?items.map(a=>`<div class="file-row"><span class="file-icon">${a.source==='url'?'↗':'▤'}</span><div><button data-preview="${esc(a.id)}">${esc(a.path||a.name)}</button><small class="${connected(a)?'':'unavailable'}">${a.source==='url'?'링크 참조':`${bytes(a.size)} · ${connected(a)?'연결됨':'다시 연결 필요'}${a.view?' · 부분 조회 저장됨':''}`}</small></div></div>`).join(''):'<p class="small-copy">파일이나 폴더를 연결해 시작하세요.</p>';
+}
+function renderSourceExecution(){
+ const rows=sourceExecutionRows(current(),state(),connected,sourceCoordinator.entries()),section=$('source-execution-section');
+ section.classList.toggle('hidden',!rows.length&&!sourceStatus);
+ $('source-execution-list').innerHTML=rows.map(row=>`<article class="source-execution-card"><div class="source-execution-head"><strong>${esc(row.role)}</strong><span class="status">${esc(statusNames[row.status]||row.status)}</span></div><p class="small-copy">${esc(providerName(row.provider))} · 요청 모델 ${esc(row.model)}</p><p class="small-copy">필요 원본: ${row.attachments.filter(a=>a.source!=='url').map(a=>esc(a.path||a.name)).join(' · ')}</p><p class="source-execution-warning">${esc(sourceExecutionMessage(row))}</p>${row.missing.length?`<p class="small-copy">누락: ${row.missing.map(a=>esc(a.path||a.name)).join(' · ')}</p><button type="button" class="secondary-button" data-source-pick-file>같은 파일 다시 연결</button><button type="button" class="text-button" data-source-pick-folder>폴더에서 다시 연결</button>`:''}${row.recoverable?`<button type="button" class="secondary-button" data-source-recover="${esc(row.taskId)}">복구된 작업 다시 확인</button>`:''}</article>`).join('');
+ $('source-execution-global').textContent=sourceStatus;
+}
+function renderDelegation(){
+ const panel=delegationPanel(current(),state().tasks),section=$('delegation-section');
+ section.classList.toggle('hidden',!panel);if(!panel){$('delegation-list').replaceChildren();$('delegation-resume').hidden=true;return;}
+ $('delegation-state').textContent=delegationStateLabel(panel.state);
+ $('delegation-list').innerHTML=panel.children.map(child=>{const sessionUrl=linkSafe(child.recovery.sessionUrl);return `<article class="delegation-child"><div class="delegation-child-head"><strong>${esc(child.role)}</strong><span class="status ${esc(child.status)}">${esc(statusNames[child.status]||child.status)}</span></div><div class="delegation-assignment"><span>${esc(providerName(child.provider))}</span><span>요청 모델 · ${esc(child.requestedModel||'미기재')}</span>${child.effort?`<span>추론 강도 · ${esc(child.effort)}</span>`:''}</div>${child.sufficientReason?`<p class="delegation-reason">배정 이유 · ${esc(child.sufficientReason)}</p>`:''}${child.acceptanceCriteria.length?`<ul class="delegation-criteria" aria-label="검증 기준">${child.acceptanceCriteria.map(criterion=>`<li>${esc(criterion)}</li>`).join('')}</ul>`:''}${child.recovery.requiresConfirmation?`<p class="delegation-warning">확인 필요 · ${esc(recoveryReasonName(child.recovery.reason))} 기존 실행이 종료되기 전에 복구하면 중복 실행될 수 있습니다.</p>`:child.confirmationReason?`<p class="delegation-warning">확인 필요 · ${esc(recoveryReasonName(child.confirmationReason))} 자동으로 다시 실행하지 않습니다.</p>`:''}${child.summary?`<p class="delegation-summary">검토 기록 · ${esc(child.summary)}</p>`:''}${child.artifacts.length?`<div class="delegation-artifacts">결과물 · ${child.artifacts.map(artifact=>esc(artifact.name||artifact.id||'이름 미기재')).join(' · ')}</div>`:''}<div class="delegation-card-actions">${sessionUrl?`<a class="text-button" href="${esc(sessionUrl)}" target="_blank" rel="noopener noreferrer">이전 실행 세션 확인 ↗</a>`:''}<button class="delegation-open text-button" type="button" data-task="${esc(child.taskId)}">작업 기록 보기 ↗</button>${child.recovery.eligible&&client?.remote?`<button class="secondary-button delegation-recover" type="button" data-recover-child="${esc(child.taskId)}">${child.recovery.requiresConfirmation?'종료 확인 후 복구':'이 작업 다시 실행'}</button>`:''}</div></article>`;}).join('');
+ const waitingUnavailable=panel.children.filter(child=>child.status==='waiting_quota'||child.status==='waiting_connection');
+ const failed=panel.children.filter(child=>child.status==='failed');
+ $('delegation-note').textContent=waitingUnavailable.length?'구독 한도 또는 연결이 준비될 때까지 대기합니다. 자동으로 다시 실행하지 않습니다.':failed.length&&panel.retryCount>=1?'이 배정 묶음의 추가 재시도 1회를 사용했습니다. 결과와 오류를 확인해 주세요.':'';
+ const controls=taskControlState(current(),state().tasks,busy),resume=$('delegation-resume');resume.hidden=!controls.resumeVisible;resume.disabled=controls.resumeDisabled;resume.textContent=controls.resumeLabel;
 }
 function renderPlan(){
  const t=current(),plan=t?.plan||[];
@@ -73,54 +101,117 @@ function renderPlan(){
  const recovery=failureGuidance(t);if(recovery){$('checkpoint-card').lastElementChild.insertAdjacentHTML('beforeend',`<div role="status"><strong>${esc(recovery.title)}</strong><p>${esc(recovery.detail)}${recovery.retryNotBefore?' 서버 재시도 안내: '+esc(date(recovery.retryNotBefore))+' (구독 한도 초기화 시각은 아닙니다).':''} 자동 재실행은 하지 않습니다. 원본이 필요하면 다시 연결하세요.</p></div>`);}
  const quality=t?(literatureAudits.has(t)?literatureAudits.get(t):auditLiterature(t)):null;if(t)literatureAudits.set(t,quality);let qualityPanel=$('literature-quality');if(!qualityPanel){qualityPanel=document.createElement('div');qualityPanel.id='literature-quality';$('artifacts').before(qualityPanel);}qualityPanel.replaceChildren();if(quality){const heading=document.createElement('strong');heading.textContent=quality.status==='passed'?'문헌 결과 형식 점검 통과':'문헌 결과 확인 필요';qualityPanel.append(heading);const detail=document.createElement('p');detail.className='small-copy';detail.textContent='실행 완료와 별도인 형식 점검입니다. 주장·수치의 정확성과 독립 검토 여부는 검증하지 않습니다.';qualityPanel.append(detail);const reviewButton=document.createElement('button');reviewButton.className='text-button';reviewButton.textContent='별도 검토 작업 준비';reviewButton.onclick=()=>guarded(prepareSeparateReview);qualityPanel.append(reviewButton);for(const issue of quality.issues){const item=document.createElement('p');item.className='small-copy';item.textContent=issue;qualityPanel.append(item);}if(quality.issues.length){const button=document.createElement('button');button.className='text-button';button.textContent='수정 요청 준비';button.onclick=()=>{if($('prompt').value.trim()){toast('작성 중인 요청을 먼저 기록하거나 비워 주세요.');return;}$('prompt').value=repairLiteraturePrompt(quality);$('prompt').focus();toast('수정 요청을 준비했습니다. 자료 연결을 확인하고 작업 기록 후 실행하세요.');};qualityPanel.append(button);}}
  const artifacts=t?.artifacts||[];$('artifact-count').textContent=artifacts.length;
- $('artifacts').innerHTML=artifacts.length?artifacts.map(a=>`<div class="artifact-row" role="button" tabindex="0" data-artifact="${esc(a.id)}"><span>▤</span><div><strong>${esc(a.name)}</strong><small>${esc(a.mime||'text/plain')}</small></div><span>↓</span></div>`).join(''):'<p class="small-copy">생성된 결과물이 여기에 모입니다.</p>';
+ $('artifacts').innerHTML=artifacts.length?artifacts.map(a=>`<div class="artifact-row" role="button" tabindex="0" data-artifact="${esc(a.id)}"><span>▤</span><div><strong>${esc(a.name)}</strong><small>${esc(a.mime||'text/plain')}</small><small>${esc(artifactCheckSummary(a))}</small></div><span>↓</span></div>${artifactCheckDetails(a)}`).join(''):'<p class="small-copy">생성된 결과물이 여기에 모입니다.</p>';
+ renderDelegation();
 }
 function renderControls(){
  $('storage-button').hidden=!state().capabilities?.runStorage;
  $('local-records-button').hidden=!state().capabilities?.localRecordImport;
- const t=current(),c=state().capabilities||{},provider=$('provider').value;const available=provider==='codex'?(c.localCodex||c.cloudCodex):c.claudeRoutine;
- const running=t?.status==='running'||t?.status==='claimed'||t?.status==='queued';const terminal=t?.status==='cancelled'||t?.status==='completed';
- $('run-button').disabled=!t||busy||running||terminal;
- $('run-button').innerHTML=`${t?.status==='queued'?'데스크톱 실행 대기':running?'실행 중':t?.status==='paused'?'이어서 실행':'작업 실행'} <span>↗</span>`;
- $('executor-status').textContent=client?.remote?(available?provider==='codex'?(c.desktopSources?'같은 클라우드 작업 · 선택한 원본은 이 PC에서만 Codex에 전달합니다.':c.cloudCodex?(state().desktop?.online?'데스크톱 연결됨 · 같은 클라우드 작업에 결과를 저장합니다.':'데스크톱 오프라인 · 실행 요청을 대기열에 보관합니다.'):'이 서버의 Codex 구독으로 실행합니다.'):'연결된 클라우드 Routine으로 실행합니다.':provider==='codex'?'이 서버에 Codex 실행기가 연결되지 않았습니다.':'서버에 Claude Routine 설정이 필요합니다.'):'실행기를 연결하세요. 현재는 작업을 기록할 수 있습니다.';
- $('pause-button').disabled=!t||busy||terminal||t.status==='paused';$('cancel-button').disabled=!t||busy||terminal;
- $('edit-plan').disabled=!t||busy||running||terminal;
- $('prompt').placeholder=t?t.status==='waiting_user'?'선택 또는 수정 요청을 남겨주세요.':'추가 요청이나 방향을 남겨주세요.':'어떤 작업을 함께할까요?';
- $('composer').querySelector('[type=submit]').disabled=busy||running||t?.status==='cancelled';
+ const t=current(),c=state().capabilities||{},provider=$('provider').value,controls=taskControlState(t,state().tasks,busy);const available=provider==='codex'?(c.localCodex||c.cloudCodex):c.claudeRoutine;
+ const running=t?.status==='running'||t?.status==='claimed'||t?.status==='queued';const terminal=t?.status==='cancelled'||t?.status==='completed',child=Boolean(t?.parentTaskId),delegated=Boolean(t?.delegation)&&!['superseded','cancelled'].includes(t.delegation.state),confirmationRequired=Boolean(t?.checkpoint?.confirmationRequired),executionRecovery=executionRecoveryState(t);
+ $('run-button').disabled=controls.runDisabled;
+ const delegatedRunLabel=t?.status==='waiting_children'?'하위 작업 진행 중':t?.status==='queued_for_review'?'결과 검토 대기':t?.status==='running'?'결과 검토 중':t?.status==='paused'?'아래에서 재개':'병렬 작업 관리';
+ $('run-button').innerHTML=`${child?'부모 작업에서 실행':delegated?delegatedRunLabel:confirmationRequired?'확인 후 조치 필요':t?.status==='queued'?'데스크톱 실행 대기':running?'실행 중':t?.status==='paused'?'이어서 실행':'작업 실행'} <span>↗</span>`;
+ $('provider').disabled=busy||child||delegated;
+ $('executor-status').textContent=child?'하위 작업의 실행 조건과 재개는 부모 작업에서 관리합니다.':delegated?'요청 모델과 배정 상태는 아래 병렬 위임 기록에서 확인하세요.':confirmationRequired?'외부 호출 여부를 확인할 수 없어 자동으로 다시 실행하지 않습니다. 작업 기록을 확인해 주세요.':client?.remote?(available?provider==='codex'?(c.desktopSources?'같은 클라우드 작업 · 선택한 원본은 이 PC에서만 Codex에 전달합니다.':c.cloudCodex?(state().desktop?.online?'데스크톱 연결됨 · 같은 클라우드 작업에 결과를 저장합니다.':'데스크톱 오프라인 · 실행 요청을 대기열에 보관합니다.'):'이 서버의 Codex 구독으로 실행합니다.'):'연결된 클라우드 Routine으로 실행합니다.':provider==='codex'?'이 서버에 Codex 실행기가 연결되지 않았습니다.':'서버에 Claude Routine 설정이 필요합니다.'):'실행기를 연결하세요. 현재는 작업을 기록할 수 있습니다.';
+ $('pause-button').disabled=!t||busy||terminal||child||t.status==='paused';$('cancel-button').disabled=!t||busy||terminal||child;
+ $('edit-plan').disabled=controls.editPlanDisabled;
+ $('prompt').placeholder=t?t.status==='waiting_user'?'선택 또는 수정 요청을 남겨주세요.':child?'하위 작업은 부모 작업에서 지시를 관리합니다.':delegated?'새 지시를 남기면 현재 배정 세대를 다시 계획합니다.':'추가 요청이나 방향을 남겨주세요.':'어떤 작업을 함께할까요?';
+ $('composer').querySelector('[type=submit]').disabled=controls.composerDisabled;
+ const resume=$('delegation-resume');if(resume){resume.hidden=!controls.resumeVisible;resume.disabled=controls.resumeDisabled;resume.textContent=controls.resumeLabel;}
+ const recover=$('execution-recover');recover.hidden=!executionRecovery.eligible;recover.disabled=busy;
 }
-function syncStatus(error){const s=$('sync-status');s.className='sync-badge';if(error){s.textContent='연결 오류 · 변경 미동기화';s.classList.add('error');return;}if(client?.remote){s.textContent=`동기화 ${client.lastSync?new Date(client.lastSync).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):''}`;s.classList.add('connected');$('connection-label').textContent=state().capabilities?.desktopSources?'클라우드 + 이 PC 자료':'서버 연결됨';}else{s.textContent='이 기기 보관';$('connection-label').textContent='이 기기 보관';}}
-function render(){renderList();renderMessages();renderAttachments();renderPlan();renderControls();if(view==='usage')renderUsage();}
-async function refresh(){if(refreshing||!client)return;refreshing=true;const viewKey=()=>JSON.stringify([state().revision,state().capabilities,state().desktop?.online,state().localDesktop]);const before=viewKey();try{await client.refresh();syncStatus();if(before!==viewKey())render();else renderControls();}catch(e){syncStatus(e);}finally{refreshing=false;}}
-async function act(action,extra={}){const t=current();if(!t)return;await client.action(t.id,{action,expectedVersion:t.version,...extra});render();}
-async function updateAttachments(next){if(current())await act('attachments',{attachments:next});else{draftAttachments=next;renderAttachments();}}
-async function addFiles(files){const added=session.addFiles(files);const merged=new Map(attachments().map(a=>[a.id,a]));for(const a of added)merged.set(a.id,a);await updateAttachments([...merged.values()]);toast(`${added.length}개 파일을 연결했습니다. 원본은 업로드하지 않았습니다.`);}
-async function addFolder(){try{if('showDirectoryPicker'in window){const h=await window.showDirectoryPicker({mode:'read'});const added=await session.addDirectory(h);const merged=new Map(attachments().map(a=>[a.id,a]));for(const a of added)merged.set(a.id,a);await updateAttachments([...merged.values()]);toast(`${added.length}개 파일을 연결했습니다.`);}else $('folder-input').click();}catch(e){if(e.name!=='AbortError')throw e;}}
+function syncStatus(error=client?.syncError){const s=$('sync-status');s.className='sync-badge';if(error){s.textContent='연결 오류 · 최신 상태 확인 필요';s.classList.add('error');return;}if(client?.remote){s.textContent=`동기화 ${client.lastSync?new Date(client.lastSync).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):''}`;s.classList.add('connected');$('connection-label').textContent=state().capabilities?.desktopSources?'클라우드 + 이 PC 자료':'서버 연결됨';}else{s.textContent='이 기기 보관';$('connection-label').textContent='이 기기 보관';}}
+function sourceResultText(result){return ({storage_error:'원본 실행 기록 저장소를 사용할 수 없습니다. 브라우저 저장 공간과 탭 잠금을 확인하세요.',capacity:'원본 실행 보류 기록이 가득 찼습니다. 완료된 작업의 서버 상태를 확인하세요.',uncertain:'실행 시작 응답을 확인하지 못했습니다. 서버 실행 종료 확인 후 복구하세요.',source_error:'원본 읽기 또는 선택 범위 확인에 실패했습니다. 같은 원본을 다시 연결하세요.',sync_error:'최신 서버 상태를 확인하지 못해 원본 전달을 보류합니다.'})[result?.status]||'';}
+async function tickSource(){if(sourceTickRunning||!client?.remote||state().capabilities?.sourceDelegationVersion!==1||busy)return;sourceTickRunning=true;try{const result=await sourceCoordinator.tick();sourceStatus=sourceResultText(result);renderSourceExecution();}catch{sourceStatus='원본 실행 상태를 확인하지 못했습니다. 다음 동기화에서 다시 확인합니다.';renderSourceExecution();}finally{sourceTickRunning=false;}}
+function render(){renderList();renderMessages();renderAttachments();renderSourceExecution();renderPlan();renderControls();if(view==='usage')renderUsage();}
+async function refresh(){if(refreshing||!client)return;refreshing=true;const viewKey=()=>JSON.stringify([state().revision,state().capabilities,state().desktop?.online,state().localDesktop]);const before=viewKey();try{await client.refresh();syncStatus();if(before!==viewKey())render();else {renderControls();renderSourceExecution();}if(!busy)void tickSource();}catch(e){syncStatus(e);}finally{refreshing=false;}}
+async function act(action,extra={}){const t=current();if(!t)return;await client.action(t.id,{action,expectedVersion:t.version,...extra});syncStatus();render();}
+async function resumeDelegation(){const t=current();if(!t?.delegation)return;await client.resumeDelegation(t.id,t.version);await refresh();toast(t.delegation.state==='reviewing'?'결과 검토를 다시 실행하도록 요청했습니다.':t.status==='paused'?'완료된 하위 결과를 유지하고 작업을 재개했습니다.':'실패한 하위 작업만 다시 실행하도록 요청했습니다.');}
+function showRecoveryDialog(recovery){
+ pendingRecovery=recovery;$('recovery-summary').textContent=recovery.summary;
+ const sessionUrl=linkSafe(recovery.sessionUrl),sessionLink=$('recovery-session');sessionLink.hidden=!sessionUrl;if(sessionUrl)sessionLink.href=sessionUrl;else sessionLink.removeAttribute('href');
+ $('recovery-warning').hidden=false;$('recovery-warning').textContent=`${recoveryReasonName(recovery.reason)} 이전 실행이 끝나기 전에 복구하면 같은 작업이 중복 실행될 수 있습니다.`;
+ const provider=String(recovery.provider||'').toLowerCase();$('recovery-confirm-text').textContent=provider==='claude'?'이전 Claude 실행이 종료되었음을 확인했습니다.':'이전 실행이 종료되었음을 확인했습니다.';
+ $('recovery-confirm-label').hidden=false;$('recovery-confirm').checked=false;$('recovery-confirm').required=true;$('recovery-submit').disabled=true;openDialog('recovery-dialog');
+}
+async function performRecovery(recovery,confirmedStopped){
+ if(recovery.mode==='child')await client.recoverDelegationChild(recovery.parentId,{expectedVersion:recovery.expectedVersion,childTaskId:recovery.childTaskId,expectedChildVersion:recovery.expectedChildVersion,confirmedStopped});
+ else await client.recoverExecution(recovery.taskId,{expectedVersion:recovery.expectedVersion,executionId:recovery.executionId,generation:recovery.generation,confirmedStopped:true});
+ if($('recovery-dialog').open)$('recovery-dialog').close();pendingRecovery=null;await refresh();toast(recovery.mode==='child'?'선택한 하위 작업만 복구 대기열에 넣었습니다.':'이전 실행 확인을 기록하고 작업을 복구했습니다.');
+}
+async function beginChildRecovery(childId){
+ const parent=current(),child=state().tasks.find(task=>task.id===childId);if(!parent?.delegation||!child)return;
+ const recovery=childRecoveryState(parent,child);if(!recovery.eligible)throw new Error('이 하위 작업은 현재 복구할 수 없습니다. 최신 상태를 확인하세요.');
+ const request={mode:'child',parentId:parent.id,expectedVersion:parent.version,childTaskId:child.id,expectedChildVersion:child.version,provider:child.assignment?.provider,summary:`${child.assignment?.role||child.title||'하위 작업'}만 다시 실행합니다. 완료된 다른 결과는 유지됩니다.`,...recovery};
+ if(recovery.requiresConfirmation)showRecoveryDialog(request);else await performRecovery(request,false);
+}
+function beginExecutionRecovery(){
+ const task=current(),recovery=executionRecoveryState(task);if(!recovery.eligible)throw new Error('이 실행은 현재 복구할 수 없습니다. 최신 상태를 확인하세요.');
+ showRecoveryDialog({mode:'execution',taskId:task.id,expectedVersion:task.version,provider:task.checkpoint?.provider,summary:'이전 원격 실행이 끝났는지 확인한 뒤 현재 작업을 복구합니다.',...recovery});
+}
+async function updateAttachments(next){if(current()){if(sourceReconnectLocked(current()))throw new Error('하위 작업과 진행 중인 위임의 자료 배정은 바꿀 수 없습니다. 같은 원본을 다시 연결하세요.');await act('attachments',{attachments:next});}else{draftAttachments=next;renderAttachments();}}
+async function acceptSources(added,token){
+ if(!sourcePickFence.isCurrent(token)){toast('작업 또는 서버가 바뀌어 선택한 자료를 적용하지 않았습니다.');return;}
+ const task=current(),result=reconcileSourceSelection(task||{attachments:draftAttachments},added);
+ if(!result.locked)await updateAttachments(result.attachments);
+ else if(result.matched.length){const reconnected=await sourceCoordinator.reconnect();sourceStatus=sourceResultText(reconnected);renderAttachments();renderSourceExecution();}
+ if(result.unmatched.length)toast(`${result.unmatched.length}개 파일은 저장된 원본과 일치하지 않아 배정하지 않았습니다. 이름, 경로, 크기와 수정 시각을 확인하세요.`);
+ else toast(`${result.matched.length}개 파일을 ${result.locked?'기존 원본에 다시 연결':'연결'}했습니다. 원본은 업로드하지 않았습니다.`);
+}
+async function addFiles(files,token=sourcePickFence.capture()){if(!sourcePickFence.isCurrent(token))throw new Error('작업 또는 서버가 바뀌어 자료 선택을 취소했습니다.');const added=session.addFiles(files);await acceptSources(added,token);}
+async function addFolder(){const token=sourcePickFence.capture();try{if('showDirectoryPicker'in window){const h=await window.showDirectoryPicker({mode:'read'});if(!sourcePickFence.isCurrent(token))return;const files=await collectDirectoryFiles(h,()=>sourcePickFence.isCurrent(token));if(files.length)await addFiles(files,token);}else{pendingFilePick=token;$('folder-input').click();}}catch(e){if(e.name!=='AbortError')throw e;}}
+async function appendSourceViewEditor(attachment,file){
+ const kind=sourceViewKind(file),openedTaskId=activeId;if(!kind)return;
+ const section=document.createElement('section');section.className='source-view-editor';section.innerHTML=`<div class="source-view-heading"><strong>조회 범위 선택</strong><span class="count-label">${kind==='text'?'최대 200,000바이트':'최대 100쪽'}</span></div><p class="small-copy">선택한 부분만 실행에 전달합니다. 해시는 선택한 텍스트의 변경만 확인하며 전체 파일 무결성을 보장하지 않습니다.</p><div class="source-view-fields">${kind==='text'?'<label>시작 바이트<input data-view-start type="number" min="0" step="1"></label><label>조회 바이트<input data-view-amount type="number" min="1" max="200000" step="1"></label>':'<label>시작 페이지<input data-view-start type="number" min="1" step="1"></label><label>끝 페이지<input data-view-end type="number" min="1" step="1"></label>'}</div><div class="source-view-actions"><button type="button" class="secondary-button" data-view-preview>선택 범위 미리보기</button><button type="button" class="primary-button" data-view-save disabled>이 범위 저장</button><button type="button" class="text-button" data-view-reset ${attachment.view?'':'hidden'}>선택 초기화</button></div><p class="source-view-status" role="status"></p><pre class="source-view-excerpt" hidden></pre>`;
+ $('preview-content').append(section);
+ const start=section.querySelector('[data-view-start]'),amount=section.querySelector('[data-view-amount]'),end=section.querySelector('[data-view-end]'),previewButton=section.querySelector('[data-view-preview]'),saveButton=section.querySelector('[data-view-save]'),resetButton=section.querySelector('[data-view-reset]'),status=section.querySelector('.source-view-status'),excerpt=section.querySelector('.source-view-excerpt');
+ if(kind==='text'){start.value=attachment.view?.kind==='text-byte-range'?attachment.view.start:0;amount.value=attachment.view?.kind==='text-byte-range'?attachment.view.end-attachment.view.start:Math.max(1,Math.min(file.size,200_000));}
+ else{start.value=attachment.view?.kind==='pdf-pages'?attachment.view.startPage:1;end.value=attachment.view?.kind==='pdf-pages'?attachment.view.endPage:1;}
+ const editable=canChangeSourceView(current(),false)&&activeId===openedTaskId;for(const input of [start,amount,end])if(input)input.disabled=!editable;previewButton.disabled=!editable;resetButton.disabled=!editable;
+ let pending=null;const draftGuard=createSourceViewDraftGuard();
+ const show=(result,token)=>{if(!draftGuard.isCurrent(token)||!section.isConnected)return false;pending=result.savedView;status.classList.remove('form-error');status.textContent=coverageDescription(result.coverage);excerpt.textContent=result.text;excerpt.hidden=false;saveButton.disabled=!(canChangeSourceView(current(),false)&&activeId===openedTaskId);return true;};
+ const invalidate=()=>{draftGuard.invalidate();pending=null;saveButton.disabled=true;excerpt.hidden=true;status.classList.remove('form-error');status.textContent='입력값이 바뀌었습니다. 저장하기 전에 이 범위를 다시 미리보기 하세요.';};
+ for(const input of [start,amount,end])if(input)input.addEventListener('input',invalidate);
+ previewButton.onclick=()=>guarded(async()=>{if(activeId!==openedTaskId||!canChangeSourceView(current(),false))throw new Error('실행 중이거나 위임된 작업의 조회 범위는 바꿀 수 없습니다.');pending=null;saveButton.disabled=true;excerpt.hidden=true;status.textContent='선택 범위를 확인하는 중입니다.';const selection=selectionFromValues(kind,{start:start.value,amount:amount?.value,end:end?.value}),token=draftGuard.begin();try{const {extractSourceView}=await sourceViews();show(await prepareSourceViewPreview(file,selection,extractSourceView),token);}catch(error){if(draftGuard.isCurrent(token))throw error;}});
+ saveButton.onclick=()=>guarded(async()=>{if(!pending)throw new Error('저장하기 전에 선택 범위를 미리보기 하세요.');if(activeId!==openedTaskId||!canChangeSourceView(current(),false))throw new Error('실행 중이거나 위임된 작업의 조회 범위는 바꿀 수 없습니다.');await updateAttachments(applyAttachmentView(attachments(),attachment.id,pending));draftGuard.invalidate();pending=null;resetButton.hidden=false;saveButton.disabled=true;toast('부분 조회 범위를 저장했습니다. 원본 내용은 기록에 저장하지 않았습니다.');});
+ resetButton.onclick=()=>guarded(async()=>{if(activeId!==openedTaskId||!canChangeSourceView(current(),false))throw new Error('실행 중이거나 위임된 작업의 조회 범위는 바꿀 수 없습니다.');await updateAttachments(applyAttachmentView(attachments(),attachment.id,null));draftGuard.invalidate();pending=null;resetButton.hidden=true;saveButton.disabled=true;status.textContent='저장된 조회 범위를 초기화했습니다. 실행 시 기존 전체 추출 제한을 적용합니다.';toast('부분 조회 범위를 초기화했습니다.');});
+ if(attachment.view){
+  const token=draftGuard.begin();try{status.textContent='저장된 조회 범위를 다시 확인하는 중입니다.';const {verifySourceView}=await sourceViews();if(show(await prepareSourceViewPreview(file,attachment.view,verifySourceView),token))saveButton.disabled=true;}
+  catch(error){if(draftGuard.isCurrent(token)){pending=null;saveButton.disabled=true;excerpt.hidden=true;status.textContent=`저장된 범위를 확인하지 못했습니다. ${error.message||''} 새 범위를 미리보기한 뒤 저장하세요.`;status.classList.add('form-error');}}
+ }
+}
 async function preview(id){
  const a=attachments().find(x=>x.id===id)||session.list().find(x=>x.id===id);if(!a)return;
  $('preview-title').textContent=a.name;$('preview-content').replaceChildren();
  if(a.source==='url'){const p=document.createElement('p');p.textContent='연결된 링크입니다. 내용을 가져오거나 저장하지 않았습니다.';const link=document.createElement('a');link.textContent=a.url;link.href=linkSafe(a.url)||'#';link.target='_blank';link.rel='noopener noreferrer';$('preview-content').append(p,link);}
  else if(!connected(a)){$('preview-content').textContent='원본을 다시 연결해 주세요. 이름, 경로, 크기와 수정 시각이 같은 파일을 선택하면 기존 작업에 다시 연결됩니다.';}
  else{
-  const file=await session.getFile(id);const info=document.createElement('p');info.className='small-copy';info.textContent=`${a.path} · ${bytes(a.size)} · 원본 영구 저장 없음`;$('preview-content').append(info);
+ const file=await session.getFile(id);const info=document.createElement('p');info.className='small-copy';info.textContent=`${a.path} · ${bytes(a.size)} · 원본 영구 저장 없음`;$('preview-content').append(info);
+  const editor=appendSourceViewEditor(a,file);
   if(file.type.startsWith('image/')||file.type==='application/pdf'){const url=URL.createObjectURL(file);previewUrls.push(url);const element=document.createElement(file.type==='application/pdf'?'iframe':'img');element.src=url;if(element.tagName==='IFRAME')element.setAttribute('sandbox','');else element.alt=a.name;$('preview-content').append(element);}
-  else{const r=await extractConnectedText(await session.getFile(id));const pre=document.createElement('pre');pre.textContent=r.status==='unavailable'?`이 형식은 원본 참조로 연결됩니다. 해당 분석 앱에서 열어 결과 JSON이나 텍스트를 연결하세요.\n${r.reason||''}`:r.text;$('preview-content').append(pre);if(r.status==='truncated'){const p=document.createElement('p');p.textContent=`미리보기는 앞부분 ${bytes(r.bytesRead)}만 표시합니다.`;$('preview-content').append(p);}}
+  else{const r=await extractConnectedText(file);const pre=document.createElement('pre');pre.textContent=r.status==='unavailable'?`이 형식은 원본 참조로 연결됩니다. 조회할 내용을 지원되는 일반 텍스트 또는 PDF 파일로 준비하세요.\n${r.reason||''}`:r.text;$('preview-content').append(pre);if(r.status==='truncated'){const p=document.createElement('p');p.textContent=`미리보기는 앞부분 ${bytes(r.bytesRead)}만 표시합니다.`;$('preview-content').append(p);}}
+  openDialog('preview-dialog');await editor;return;
  }
  openDialog('preview-dialog');
 }
 function download(name,content,mime='text/plain',encoding){let value=content;if(encoding==='base64'){const binary=atob(content);value=Uint8Array.from(binary,c=>c.charCodeAt(0));}const blob=value instanceof Blob?value:new Blob([value],{type:mime});const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name.replace(/[\\/]/g,'_');a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 function exportRecords(all=false){const tasks=!all&&current()?[current()]:state().tasks;download(`INNO-${current()&&!all?'task':'workspace'}-${new Date().toISOString().slice(0,10)}.json`,JSON.stringify(exportBundle({tasks}),null,2),'application/json');toast('작업 기록을 내보냈습니다. 연결 원본 내용은 포함하지 않습니다.');}
 async function run(){
- const t=current();if(!t)return;
+ let t=current();if(!t)return;
+ const runTaskId=t.id;
  const c=state().capabilities||{},provider=$('provider').value;
  if(!client.remote||(provider==='codex'?!(c.localCodex||c.cloudCodex):!c.claudeRoutine)){showSettings();toast('선택한 AI 실행기가 연결된 서버를 설정하세요.');return;}
  if(provider==='codex'&&c.cloudCodex&&!c.desktopSources&&t.attachments?.length)throw new Error('이 PC의 데스크톱 연결 화면에서 같은 작업을 열고 원본을 다시 연결하세요. 휴대폰에서 PC 원본을 직접 읽을 수는 없습니다.');
  if(provider==='codex'&&c.desktopSources&&t.attachments?.some(a=>a.source==='url'))throw new Error('링크만으로 원문을 읽을 수는 없습니다. 해당 문서 파일을 연결한 뒤 링크 참조를 해제하세요.');
- const missing=(t.attachments||[]).filter(a=>a.source!=='url'&&!connected(a));if(missing.length)throw new Error(`${missing.length}개 원본의 연결이 끊겼습니다. 파일 또는 폴더를 다시 연결하세요.`);
- const materials=[];let total=0;const unsupported=[];
- for(const a of t.attachments||[]){if(a.source==='url')continue;const r=await extractConnectedText(await session.getFile(a.id),{maxChars:Math.min(200000,600000-total)});if(r.status==='unavailable'){unsupported.push(a.name);continue;}if(r.status==='truncated')throw new Error(`${a.name}은 텍스트 전송 범위를 초과합니다. 필요한 부분을 별도 텍스트로 연결하세요. 자동으로 잘라 분석하지 않습니다.`);total+=new TextEncoder().encode(r.text).byteLength;materials.push({name:a.path||a.name,text:r.text});if(total>600000)throw new Error('한 번에 조회할 텍스트 범위를 초과했습니다. 자료를 나눠 연결하세요.');}
- if(unsupported.length)throw new Error(`${unsupported.slice(0,3).join(', ')}: 이 실행 경로의 텍스트 조회를 지원하지 않습니다. Prism/Analytics에서 분석한 JSON 또는 추출한 텍스트를 연결하세요.`);
- if(t.status==='paused'||t.status==='failed'||t.status==='waiting_connection'||t.status==='waiting_quota')await act('resume');
- await client.run(t.id,{provider,materials,expectedVersion:current().version});await refresh();toast('실행 요청을 보냈습니다. 진행 상태와 결과를 기다리는 중입니다.');
+ if(t.status==='paused'||t.status==='failed'||t.status==='waiting_connection'||t.status==='waiting_quota'){await act('resume');if(activeId!==runTaskId)throw new Error('실행할 작업이 바뀌었습니다. 다시 확인하세요.');t=current();}
+ const executionClient=client;
+ const materials=await prepareTaskMaterials(t,{
+  connected,getFile:id=>session.getFile(id),extractText:extractConnectedText,
+  verifyView:async(file,view)=>(await sourceViews()).verifySourceView(file,view),
+  isCurrent:()=>client===executionClient&&activeId===runTaskId&&current()?.version===t.version,
+ });
+ await executionClient.run(t.id,{provider,materials,expectedVersion:t.version});await refresh();toast('실행 요청을 보냈습니다. 진행 상태와 결과를 기다리는 중입니다.');
 }
 function renderResearch(){
  $('literature-workflow').textContent=`선택 논문으로 비교 작업 준비 (${selectedPapers.size})`;
@@ -134,29 +225,31 @@ function renderIntegrations(){
  $('integration-grid').innerHTML=list.map((x,i)=>{const name=x.name||x.label||x.id;const key=Object.keys(integrationDescriptions).find(k=>String(name).toLowerCase().includes(k.toLowerCase()));const url=linkSafe(x.url||x.href||x.appUrl||x.repositoryUrl||'');return `<article class="integration-card"><div class="integration-mark">${['◷','⚗','▦','⌁','⊞','⌕'][i%6]}</div><h2>${esc(name)}</h2><p>${esc(x.description||integrationDescriptions[key]||'기존 연구 플랫폼 연결')}</p>${url?`<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${x.linkKind==='app'?'앱 열기':'저장소 열기'} ↗</a>`:'<span class="small-copy">연결 주소 설정 필요</span>'}</article>`;}).join('');
 }
 function renderUsage(){
- let executionPanel=$('execution-usage');if(!executionPanel){executionPanel=document.createElement('section');executionPanel.id='execution-usage';$('usage-cards').after(executionPanel);}const rows=usageRows(state().tasks);executionPanel.innerHTML='<h2>작업별 최근 완료 실행</h2><p class="small-copy">실행기가 반환한 관측값입니다. 최근 50개 작업의 마지막 보고값을 표시하며 전체 누적량·구독 잔여량이 아닙니다. 실행 도중·중단된 실행·이전 기록의 사용량은 없을 수 있습니다.</p>'+ (rows.length?rows.map(r=>'<article class="usage-card"><strong>'+esc(r.title)+'</strong><p>'+esc(r.provider)+' · '+esc(date(r.completedAt))+'</p><p>입력 '+(r.inputTokens===null?'확인 불가':r.inputTokens.toLocaleString())+' · 출력 '+(r.outputTokens===null?'확인 불가':r.outputTokens.toLocaleString())+' 토큰</p></article>').join(''):'<p>관측된 작업별 토큰 기록이 아직 없습니다.</p>');
+ let executionPanel=$('execution-usage');if(!executionPanel){executionPanel=document.createElement('section');executionPanel.id='execution-usage';$('usage-cards').after(executionPanel);}const rows=usageRows(state().tasks);const totals=usageSummary(state().tasks);executionPanel.innerHTML='<h2>작업별 최근 실행 보고</h2><p class="small-copy">실행기가 반환한 관측값입니다. 작업별 최근 100회 완료·전환·실패·결정 대기 기록을 보관하고 최근 50회를 표시합니다. 하위 작업도 포함합니다. 캐시 보고는 입력에 포함된 값으로 입력 합계에 더하지 않습니다. 캐시 누락은 0으로 추정하지 않습니다. 합계는 보관된 관측값이며 전체 사용량·구독 잔여량이 아닙니다. 실행 중·중단되었거나 실행기가 보고하지 않은 사용량은 포함되지 않을 수 있습니다.</p>'+Object.entries(totals).map(([provider,u])=>'<article class="usage-card"><strong>'+esc(provider)+' · 보관된 실행 보고 '+u.executions+'회</strong><p>관측 입력 '+(u.inputTokens===null?'확인 불가':u.inputTokens.toLocaleString())+' (캐시 보고 '+(u.cachedInputTokens==null?'확인 불가':u.cachedInputTokens.toLocaleString())+') · 관측 출력 '+(u.outputTokens===null?'확인 불가':u.outputTokens.toLocaleString())+'</p><p>보고 없는 기록: 입력 '+u.missingInput+'회 · 출력 '+u.missingOutput+'회 · 캐시 '+u.missingCachedInput+'회</p></article>').join('')+ (rows.length?rows.map(r=>'<article class="usage-card"><strong>'+esc(r.title)+'</strong><p>'+esc(r.provider)+' · '+esc(date(r.completedAt))+'</p><p>입력 '+(r.inputTokens===null?'확인 불가':r.inputTokens.toLocaleString())+' (캐시 보고 '+(r.cachedInputTokens==null?'확인 불가':r.cachedInputTokens.toLocaleString())+') · 출력 '+(r.outputTokens===null?'확인 불가':r.outputTokens.toLocaleString())+' 토큰</p></article>').join(''):'<p>관측된 작업별 토큰 기록이 아직 없습니다.</p>');
 
  let records=state().usage||[];if(!Array.isArray(records))records=Object.entries(records).map(([provider,u])=>({provider,...(u||{})}));
  $('usage-cards').innerHTML=['codex','claude'].map(provider=>{const u=records.find(x=>String(x.provider).toLowerCase()===provider)||{};const percent=typeof u.usedPercent==='number'?Math.min(100,Math.max(0,u.usedPercent)):null;return `<article class="usage-card"><span class="eyebrow">${provider==='codex'?'OPENAI':'ANTHROPIC'}</span><h2>${provider==='codex'?'Codex':'Claude'}</h2><div class="usage-value">${percent===null?'한도 확인 불가':`${percent.toFixed(0)}% 사용`}</div>${percent===null?'':`<progress value="${percent}" max="100" aria-label="구독 사용률"></progress>`}<p>${esc(u.source||'이 연결에서 구독 잔여량을 아직 받지 못했습니다.')}<br>${u.updatedAt?`갱신 ${esc(date(u.updatedAt))}`:'갱신 기록 없음'}</p><dl><dt>최근 제공자 보고 입력 토큰</dt><dd>${u.inputTokens==null?'확인 불가':Number(u.inputTokens).toLocaleString()}</dd><dt>최근 제공자 보고 출력 토큰</dt><dd>${u.outputTokens==null?'확인 불가':Number(u.outputTokens).toLocaleString()}</dd><dt>한도 초기화</dt><dd>${u.resetAt?esc(date(u.resetAt)):'확인 불가'}</dd></dl><a class="text-button" href="${provider==='codex'?'https://chatgpt.com/codex/settings/usage':'https://claude.ai/settings/usage'}" target="_blank" rel="noopener noreferrer">공식 사용량 확인 ↗</a></article>`;}).join('');
 }
 function showSettings(){$('server-url').value=client?.baseUrl||location.origin;$('server-token').value=client?.token||'';$('settings-error').textContent='';openDialog('settings-dialog');}
-async function configure(e){e.preventDefault();const button=e.submitter;button.disabled=true;try{const baseUrl=validateEndpoint($('server-url').value),token=$('server-token').value.trim();const candidate=new WorkspaceClient({baseUrl,token,remote:true});await candidate.refresh();client=candidate;sessionStorage.setItem('inno-token',token);localStorage.setItem('inno-server',baseUrl);sessionStorage.setItem('inno-remote','1');activeId=null;lastRendered='';syncStatus();render();$('settings-dialog').close();toast('서버에 연결했습니다. 이 탭이 열려 있는 동안 5초마다 상태를 확인합니다.');}catch(error){$('settings-error').textContent=error.message;}finally{button.disabled=false;}}
+async function configure(e){e.preventDefault();const button=e.submitter;button.disabled=true;try{const baseUrl=validateEndpoint($('server-url').value),token=$('server-token').value.trim();const candidate=new WorkspaceClient({baseUrl,token,remote:true});await candidate.refresh();selectionEpoch++;sourceCoordinator.resetSession();session.clear();draftAttachments=[];client=candidate;const reconnect=await sourceCoordinator.reconnect();sourceStatus=sourceResultText(reconnect);sessionStorage.setItem('inno-token',token);localStorage.setItem('inno-server',baseUrl);sessionStorage.setItem('inno-remote','1');activeId=null;lastRendered='';syncStatus();render();void tickSource();$('settings-dialog').close();toast('서버에 연결했습니다. 이 탭이 열려 있는 동안 5초마다 상태를 확인합니다.');}catch(error){$('settings-error').textContent=error.message;}finally{button.disabled=false;}}
 
-$('composer').addEventListener('submit',e=>{e.preventDefault();guarded(async()=>{const prompt=$('prompt').value.trim();if(!prompt)return;if(current()){await act(current().status==='waiting_user'?'decide':'message',{content:prompt});}else{const t=await client.create({prompt,type:$('task-type').value,attachments:draftAttachments});activeId=t.id;localStorage.setItem('inno-active-task',t.id);draftAttachments=[];lastRendered='';} $('prompt').value='';render();requestAnimationFrame(()=>$('conversation-scroll').scrollTop=$('conversation-scroll').scrollHeight);toast(client.remote?'작업을 서버에 기록했습니다. 실행 버튼으로 시작하세요.':'작업을 이 기기에 기록했습니다. AI 실행은 서버 연결이 필요합니다.');});});
+$('composer').addEventListener('submit',e=>{e.preventDefault();guarded(async()=>{const prompt=$('prompt').value.trim();if(!prompt)return;if(current()){await act(current().status==='waiting_user'?'decide':'message',{content:prompt});}else{const t=await client.create({prompt,type:$('task-type').value,attachments:draftAttachments});activeId=t.id;localStorage.setItem('inno-active-task',t.id);draftAttachments=[];lastRendered='';} $('prompt').value='';syncStatus();render();requestAnimationFrame(()=>$('conversation-scroll').scrollTop=$('conversation-scroll').scrollHeight);toast(client.remote?'작업을 서버에 기록했습니다. 실행 버튼으로 시작하세요.':'작업을 이 기기에 기록했습니다. AI 실행은 서버 연결이 필요합니다.');});});
 $('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('composer').requestSubmit();}});
 $('new-task').onclick=newTask;$('task-search').oninput=renderList;
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>setView(b.dataset.view));
 document.querySelectorAll('[data-prompt]').forEach(b=>b.onclick=()=>{$('prompt').value=b.dataset.prompt;$('task-type').value=b.dataset.type;$('prompt').focus();});
 document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>$(b.dataset.close).close());
-document.addEventListener('click',e=>{const t=e.target.closest('[data-task]');if(t)selectTask(t.dataset.task);const p=e.target.closest('[data-preview]');if(p)guarded(()=>preview(p.dataset.preview));const r=e.target.closest('[data-remove]');if(r)guarded(async()=>{await updateAttachments(attachments().filter(a=>a.id!==r.dataset.remove));session.remove(r.dataset.remove);renderAttachments();});const a=e.target.closest('[data-artifact]');if(a){const artifact=current()?.artifacts.find(x=>x.id===a.dataset.artifact);if(artifact)try{download(artifact.name,artifact.content,artifact.mime,artifact.encoding);}catch(err){toast(err.message);}}});
+document.addEventListener('click',e=>{if(e.target.closest('[data-source-pick-file]')){pendingFilePick=sourcePickFence.capture();$('file-input').click();}if(e.target.closest('[data-source-pick-folder]'))guarded(addFolder);const sourceRecover=e.target.closest('[data-source-recover]');if(sourceRecover)guarded(async()=>{const result=await sourceCoordinator.recover(sourceRecover.dataset.sourceRecover);sourceStatus=result.status==='recovered'?'복구된 작업을 확인했습니다. 원본 전달을 다시 확인합니다.':result.status==='recovery_required'?'먼저 이전 실행이 끝났는지 확인하고 작업을 복구하세요. 복구된 작업은 아래 버튼으로 다시 확인할 수 있습니다.':sourceResultText(result)||'최신 서버 상태를 확인한 뒤 다시 시도하세요.';renderSourceExecution();if(result.status==='recovered')void tickSource();});const recovery=e.target.closest('[data-recover-child]');if(recovery)guarded(()=>beginChildRecovery(recovery.dataset.recoverChild));const t=e.target.closest('[data-task]');if(t)selectTask(t.dataset.task);const p=e.target.closest('[data-preview]');if(p)guarded(()=>preview(p.dataset.preview));const r=e.target.closest('[data-remove]');if(r)guarded(async()=>{if(current()&&sourceReconnectLocked(current())){session.remove(r.dataset.remove);renderAttachments();renderSourceExecution();toast('이 기기의 원본 연결을 해제했습니다. 저장된 배정은 유지됩니다.');return;}await updateAttachments(attachments().filter(a=>a.id!==r.dataset.remove));session.remove(r.dataset.remove);renderAttachments();});const a=e.target.closest('[data-artifact]');if(a){const artifact=current()?.artifacts.find(x=>x.id===a.dataset.artifact);if(artifact)try{download(artifact.name,artifact.content,artifact.mime,artifact.encoding);}catch(err){toast(err.message);}}});
 document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){e.preventDefault();newTask();}if(e.key==='Enter'&&e.target.matches('[data-preview],[data-artifact]'))e.target.click();});
-$('attach-button').onclick=()=>$('file-input').click();$('folder-button').onclick=()=>guarded(addFolder);
-for(const id of ['file-input','folder-input'])$(id).onchange=e=>guarded(async()=>{await addFiles(e.target.files);e.target.value='';});
-$('add-link').onclick=()=>openDialog('link-dialog');$('link-form').onsubmit=e=>{e.preventDefault();guarded(async()=>{const a=session.addUrl($('link-url').value);await updateAttachments([...attachments().filter(x=>x.id!==a.id),a]);$('link-dialog').close();$('link-url').value='';});};
-$('provider').onchange=renderControls;$('run-button').onclick=()=>guarded(run);$('pause-button').onclick=()=>guarded(()=>act('pause'));$('cancel-button').onclick=()=>guarded(()=>act('cancel'));
+$('attach-button').onclick=()=>{pendingFilePick=sourcePickFence.capture();$('file-input').click();};$('folder-button').onclick=()=>guarded(addFolder);
+for(const id of ['file-input','folder-input'])$(id).onchange=e=>{const token=pendingFilePick;pendingFilePick=null;guarded(async()=>{try{if(token)await addFiles(e.target.files,token);}finally{e.target.value='';}});};
+$('add-link').onclick=()=>{if(sourceReconnectLocked(current())){toast('이 작업은 저장된 원본만 다시 연결할 수 있습니다.');return;}openDialog('link-dialog');};$('link-form').onsubmit=e=>{e.preventDefault();guarded(async()=>{const a=session.addUrl($('link-url').value);await updateAttachments([...attachments().filter(x=>x.id!==a.id),a]);$('link-dialog').close();$('link-url').value='';});};
+$('recovery-confirm').onchange=()=>{$('recovery-submit').disabled=!$('recovery-confirm').checked;};
+$('recovery-form').onsubmit=e=>{e.preventDefault();if(!pendingRecovery||!$('recovery-confirm').checked)return;guarded(()=>performRecovery(pendingRecovery,true));};
+ $('provider').onchange=renderControls;$('run-button').onclick=()=>guarded(run);$('pause-button').onclick=()=>guarded(()=>act('pause'));$('cancel-button').onclick=()=>guarded(()=>act('cancel'));$('delegation-resume').onclick=()=>guarded(resumeDelegation);$('execution-recover').onclick=()=>guarded(beginExecutionRecovery);
 $('export-button').onclick=()=>exportRecords();$('settings-export').onclick=()=>exportRecords(true);
 $('settings-button').onclick=showSettings;$('connect-executor').onclick=showSettings;$('settings-form').onsubmit=configure;
-$('offline-button').onclick=()=>guarded(async()=>{client=new WorkspaceClient();sessionStorage.removeItem('inno-token');sessionStorage.removeItem('inno-remote');await client.refresh();activeId=null;lastRendered='';syncStatus();render();$('settings-dialog').close();toast('이 기기의 작업 보관함으로 전환했습니다. 서버 기록은 서버에 남아 있습니다.');});
+$('offline-button').onclick=()=>guarded(async()=>{const candidate=new WorkspaceClient();await candidate.refresh();selectionEpoch++;sourceCoordinator.resetSession();session.clear();draftAttachments=[];client=candidate;sourceStatus='';sessionStorage.removeItem('inno-token');sessionStorage.removeItem('inno-remote');activeId=null;lastRendered='';syncStatus();render();$('settings-dialog').close();toast('이 기기의 작업 보관함으로 전환했습니다. 서버 기록은 서버에 남아 있습니다.');});
 $('storage-button').onclick=()=>guarded(()=>storageUI.open());
 $('local-records-button').onclick=()=>guarded(()=>recordImports.fromLocal());
 $('restore-button').onclick=()=>$('restore-input').click();$('restore-input').onchange=e=>guarded(async()=>{const file=e.target.files[0];if(!file)return;if(file.size>20*1024*1024)throw new Error('작업 기록 파일은 20 MB 이하여야 합니다.');const text=await file.text();if(client.remote){await recordImports.fromBundle(parseBundle(text));e.target.value='';return;}const count=await client.restore(text);render();toast(`${count}개 작업을 가져왔습니다. 원본은 다시 연결하세요.`);e.target.value='';});
@@ -164,6 +257,7 @@ $('edit-plan').onclick=()=>{$('plan-text').value=(current()?.plan||[]).map(x=>x.
 $('plan-form').onsubmit=e=>{e.preventDefault();guarded(async()=>{const labels=$('plan-text').value.split('\n').map(s=>s.trim()).filter(Boolean);if(!labels.length||labels.length>6)throw new Error('역할은 1개에서 6개 사이로 구성하세요.');await act('plan',{plan:labels.map((label,i)=>({id:`role-${i+1}`,role:label,label,status:'pending',instructions:label}))});$('plan-dialog').close();});};
 $('task-menu').onclick=()=>{if(!current())return;const t=current();$('preview-title').textContent='작업 기록';$('preview-content').innerHTML=`<pre>${esc(JSON.stringify(exportBundle({tasks:[t]}),null,2))}</pre>`;openDialog('preview-dialog');};
 $('preview-dialog').addEventListener('close',()=>{previewUrls.forEach(u=>URL.revokeObjectURL(u));previewUrls=[];$('preview-content').replaceChildren();});
+$('recovery-dialog').addEventListener('close',()=>{pendingRecovery=null;$('recovery-confirm').checked=false;});
 $('mobile-menu').onclick=()=>{$('sidebar').classList.add('open');$('sidebar-scrim').classList.add('open');};$('sidebar-scrim').onclick=closeSidebar;
 $('detail-toggle').onclick=()=>$('detail-panel').classList.toggle('open');$('detail-close').onclick=()=>$('detail-panel').classList.remove('open');
 if(localStorage.getItem('inno-theme')==='dark')document.body.classList.add('dark');$('theme-button').onclick=()=>{document.body.classList.toggle('dark');localStorage.setItem('inno-theme',document.body.classList.contains('dark')?'dark':'light');};
@@ -178,8 +272,8 @@ for(const [id,close] of [['sidebar',closeSidebar],['detail-panel',()=>$('detail-
  panel.addEventListener('touchend',e=>{if(!touch||innerWidth>1020)return;const end=e.changedTouches[0],dx=end.clientX-touch.x,dy=end.clientY-touch.y;touch=null;if(Math.abs(dx)>75&&Math.abs(dx)>Math.abs(dy)*2&&((id==='sidebar'&&dx<0)||(id==='detail-panel'&&dx>0)))close();},{passive:true});
 }
 
-let dragCounter=0;document.addEventListener('dragenter',e=>{if([...e.dataTransfer.types].includes('Files')){dragCounter++;$('drop-overlay').classList.remove('hidden');}});document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('dragleave',()=>{if(--dragCounter<=0){dragCounter=0;$('drop-overlay').classList.add('hidden');}});document.addEventListener('drop',e=>{e.preventDefault();dragCounter=0;$('drop-overlay').classList.add('hidden');guarded(async()=>{const items=[...e.dataTransfer.items];const handles=[];if(items.some(i=>typeof i.getAsFileSystemHandle==='function')){const pending=items.filter(i=>i.kind==='file').map(i=>i.getAsFileSystemHandle());for(const h of await Promise.all(pending)){if(h?.kind==='directory')handles.push(h);}}for(const h of handles){const added=await session.addDirectory(h);await updateAttachments([...attachments(),...added]);}const files=[...e.dataTransfer.files].filter(f=>f.size||f.type);if(files.length)await addFiles(files);else if(!handles.length)toast('이 브라우저에서는 폴더 연결 버튼을 사용하세요.');});});
-document.addEventListener('paste',e=>{const files=[...(e.clipboardData?.files||[])];if(files.length){e.preventDefault();guarded(()=>addFiles(files));}});
+let dragCounter=0;document.addEventListener('dragenter',e=>{if([...e.dataTransfer.types].includes('Files')){dragCounter++;$('drop-overlay').classList.remove('hidden');}});document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('dragleave',()=>{if(--dragCounter<=0){dragCounter=0;$('drop-overlay').classList.add('hidden');}});document.addEventListener('drop',e=>{e.preventDefault();dragCounter=0;$('drop-overlay').classList.add('hidden');const token=sourcePickFence.capture();guarded(async()=>{const items=[...e.dataTransfer.items];const handles=[];if(items.some(i=>typeof i.getAsFileSystemHandle==='function')){const pending=items.filter(i=>i.kind==='file').map(i=>i.getAsFileSystemHandle());for(const h of await Promise.all(pending)){if(h?.kind==='directory')handles.push(h);}}const files=[...e.dataTransfer.files].filter(f=>f.size||f.type);for(const h of handles){if(!sourcePickFence.isCurrent(token))return;files.push(...await collectDirectoryFiles(h,()=>sourcePickFence.isCurrent(token)));}if(files.length)await addFiles(files,token);else if(!handles.length)toast('이 브라우저에서는 폴더 연결 버튼을 사용하세요.');});});
+document.addEventListener('paste',e=>{const files=[...(e.clipboardData?.files||[])];if(files.length){e.preventDefault();const token=sourcePickFence.capture();guarded(()=>addFiles(files,token));}});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
 window.addEventListener('online',refresh);window.addEventListener('offline',()=>syncStatus(new Error('offline')));
 
@@ -187,9 +281,9 @@ async function init(){
  let token=sessionStorage.getItem('inno-token')||'',baseUrl=localStorage.getItem('inno-server')||'',remote=sessionStorage.getItem('inno-remote')==='1';
  const hash=new URLSearchParams(location.hash.slice(1));if(hash.has('token')){token=hash.get('token');baseUrl=location.origin;remote=true;sessionStorage.setItem('inno-token',token);sessionStorage.setItem('inno-remote','1');history.replaceState(null,'',location.pathname+location.search);}
  client=new WorkspaceClient({token,baseUrl:remote?baseUrl:'',remote});
- try{await client.refresh();syncStatus();}catch(e){syncStatus(e);if(remote)toast('서버 연결에 실패했습니다. 설정에서 주소와 토큰을 확인하세요.');else toast('브라우저 저장 공간을 사용할 수 없습니다. 서버 연결이 필요합니다.');}
+ try{await client.refresh();syncStatus();if(remote){const result=await sourceCoordinator.reconnect();sourceStatus=sourceResultText(result);}}catch(e){syncStatus(e);if(remote)toast('서버 연결에 실패했습니다. 설정에서 주소와 토큰을 확인하세요.');else toast('브라우저 저장 공간을 사용할 수 없습니다. 서버 연결이 필요합니다.');}
  activeId=state().tasks.some(t=>t.id===localStorage.getItem('inno-active-task'))?localStorage.getItem('inno-active-task'):null;
- renderIntegrations();render();renderUsage();
+ renderIntegrations();render();renderUsage();if(remote)void tickSource();
  setInterval(()=>{if(!document.hidden&&!busy)refresh();},5000);
  if('serviceWorker'in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>{});
 }
@@ -213,3 +307,5 @@ async function prepareSeparateReview(){
 }
 
 createExperimentLinks({root:$('experiment-links'),prepareTask:async result=>{if($('prompt').value.trim())throw Error('작성 중인 요청을 먼저 기록하거나 비워 주세요.');const packet=await experimentPacket(result);const file=new File([packet.text],packet.name,{type:'application/json',lastModified:0});newTask();$('task-type').value='analysis';$('prompt').value='연결된 실험 요약의 출처·불일치·추가 확인 사항을 정리해 주세요. 원시 측정 데이터나 합성 조건 전체를 읽은 것으로 표현하지 마세요. PA 하한 여부와 단위를 유지하고 인과관계는 단정하지 마세요.\n시료 ID: '+result.sampleId+'\n실험 ID: '+result.experimentId;await addFiles([file]);toast('연결 메타데이터로 작업을 준비했습니다. 원시 데이터 분석에는 해당 원본도 연결하세요.');}});
+
+function artifactCheckDetails(artifact){let checks;try{checks=sanitizeArtifactChecks(artifact.checks);}catch{return ''; }if(!checks?.length)return '';return '<details><summary>AI 검사 보고 근거</summary><p class="small-copy">실행 AI가 보고한 내용이며 독립 인증이 아닙니다.</p>'+checks.map(c=>'<p class="small-copy"><strong>'+esc(c.check)+' · '+esc(({pass:'통과',fail:'실패',not_run:'미실시'})[c.status])+'</strong><br>'+esc(c.evidence)+'</p>').join('')+'</details>'; }

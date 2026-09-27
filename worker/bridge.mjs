@@ -2,15 +2,19 @@ import {failureRecord} from '../public/core/failures.mjs';
 import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
 
 export class CloudBridge {
-  constructor(store){this.store=store;}
+  constructor(store,{sourceDelegationVersion=0}={}){this.store=store;this.sourceDelegationVersion=sourceDelegationVersion;}
   async start(id,input){
     const t=await this.store.requireTask(id);
-    if(!['ready','failed','waiting_connection','waiting_quota'].includes(t.status))throw new ConflictError('Task must be ready before direct execution.',t.version);
+    const sourceVersion=this.sourceDelegationVersion===1&&input.sourceDelegationVersion===1?1:0;
+    if(t.attachments.length&&(t.parentTaskId||t.delegation?.state==='queued_for_review')&&sourceVersion!==1)throw new ValidationError('A compatible updated desktop is required for source delegation');
+    const rootSource=t.attachments.length>0&&t.status==='queued'&&!t.parentTaskId&&(!t.delegation||t.delegation.state==='superseded');
+    const sourcePhase=rootSource||(this.sourceDelegationVersion===1&&t.attachments.length>0&&((t.parentTaskId&&t.status==='queued')||(t.status==='queued_for_review'&&t.delegation?.state==='queued_for_review')));
+    if(!sourcePhase&&!['ready','failed','waiting_connection','waiting_quota'].includes(t.status))throw new ConflictError('Task must be ready before direct execution.',t.version);
     if(t.attachments.some(a=>a.source==='url'))throw new ValidationError('URL references are not source content. Connect the required document before direct execution.');
     const names=t.attachments.filter(a=>a.source!=='url').map(a=>a.path||a.name).sort();
     if(!Array.isArray(input.sourceNames)||input.sourceNames.length>20||input.sourceNames.some(n=>typeof n!=='string')||JSON.stringify([...input.sourceNames].sort())!==JSON.stringify(names))throw new ValidationError('Reconnect every required source on this desktop.');
-    const claim=await this.store.claimExecution(id,{provider:'codex',expectedVersion:input.expectedVersion,leaseMs:120000});
-    await this.seen();return claim;
+    const claim=await this.store.claimExecution(id,{provider:'codex',expectedVersion:input.expectedVersion,leaseMs:120000,sourceBound:input.sourceNames.length>0});
+    await this.seen();return {...claim,sourceDelegationVersion:sourceVersion};
   }
   async enqueue(id,input){
     if(input.materials?.length)throw new ValidationError('Desktop source transfer is not connected. Reconnect sources on the desktop; source content is never queued.');
@@ -24,11 +28,11 @@ export class CloudBridge {
     await this.seen();
     const expired=await this.store.db.prepare("SELECT body FROM tasks WHERE json_extract(body,'$.status')='running' AND json_extract(body,'$.checkpoint.provider')='codex' AND json_extract(body,'$.checkpoint.expiresAt') < ?1 ORDER BY updated_at ASC LIMIT 1").bind(this.store.now()).first();
     if(expired){const t=JSON.parse(expired.body);try{await this.store.replaceTask(t.id,t.version,current=>({...current,status:'paused',version:current.version+1,updatedAt:this.store.now(),checkpoint:{...current.checkpoint,status:'paused',interruptedBy:'lease_expiry',interruptedVersion:current.version+1,failure:failureRecord({failure:{kind:'interrupted'}},this.store.now())}}));}catch(e){if(!(e instanceof ConflictError))throw e;}}
-    const row=await this.store.db.prepare("SELECT body FROM tasks WHERE json_extract(body,'$.status')='queued' AND json_extract(body,'$.checkpoint.provider')='codex' ORDER BY updated_at ASC LIMIT 1").first();
+    const row=await this.store.db.prepare("SELECT q.body FROM tasks q WHERE json_extract(q.body,'$.status') IN ('queued','queued_for_review') AND json_extract(q.body,'$.checkpoint.provider')='codex' AND COALESCE(json_array_length(q.body,'$.attachments'),0)=0 AND (json_extract(q.body,'$.parentTaskId') IS NULL OR EXISTS (SELECT 1 FROM tasks p WHERE p.id=json_extract(q.body,'$.parentTaskId') AND json_extract(p.body,'$.status')='waiting_children' AND json_extract(p.body,'$.delegation.state')='waiting_children' AND json_extract(p.body,'$.delegation.batchId')=json_extract(q.body,'$.batchId') AND json_extract(p.body,'$.delegation.epoch')=json_extract(q.body,'$.parentEpoch'))) ORDER BY q.updated_at ASC LIMIT 1").first();
     if(!row)return null;
     const t=JSON.parse(row.body);
     if(t.checkpoint?.provider!=='codex')return null;
-    if(t.attachments.length){await this.store.markWaiting(t.id,{expectedVersion:t.version,provider:'codex',reason:'Source reconnection required.'});return null;}
+    if(t.attachments.length)return null;
     try{return await this.store.claimExecution(t.id,{provider:'codex',expectedVersion:t.version,leaseMs:120000});}catch(e){if(e instanceof ConflictError)return null;throw e;}
   }
   async seen(){

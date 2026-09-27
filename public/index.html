@@ -4,7 +4,7 @@
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#173a39"><meta name="description" content="연구의 맥락과 작업을 이어가는 개인 연구 작업실">
   <title>INNO Workspace · 연구 작업실</title>
-  <link rel="icon" href="./icon.svg" type="image/svg+xml"><link rel="manifest" href="./manifest.webmanifest"><link rel="stylesheet" href="./styles.css?v=direct-1">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml"><link rel="manifest" href="./manifest.webmanifest"><link rel="stylesheet" href="./styles.css?v=parallel-ui-2">
 </head>
 <body>
 <div class="app-shell">
@@ -38,7 +38,7 @@
               <button data-prompt="연결한 측정 결과의 보정과 단위를 확인하고, 해석 가능한 범위와 Figure 구성을 제안해줘." data-type="analysis"><span class="suggestion-icon">⌁</span><strong>데이터를 결과로 잇기</strong><small>측정 분석 · 검증 · Figure</small><span class="suggestion-arrow">↗</span></button>
               <button data-prompt="첨부한 자료를 바탕으로 문서의 목적과 독자를 먼저 정리하고, 편집 가능한 초안을 작성해줘." data-type="writing"><span class="suggestion-icon">▤</span><strong>생각을 문서로 만들기</strong><small>논문 · 제안서 · CV · 발표자료</small><span class="suggestion-arrow">↗</span></button>
             </div>
-            <div class="welcome-note"><span>◇</span> NanoLab에서 RefAtlas까지, 익숙한 도구와 함께.</div>
+            <div class="welcome-note"><span>◇</span> INNO Workspace에서 시작하고, 필요한 도구만 선택해 연결하세요.</div>
           </section>
           <div id="messages" class="messages" aria-live="polite"></div>
         </div>
@@ -51,8 +51,10 @@
       </section>
       <aside class="detail-panel" id="detail-panel" aria-label="작업 상세">
         <div class="panel-heading"><span>작업의 흐름</span><button id="detail-close" class="icon-button mobile-only" aria-label="상세 닫기">×</button><span class="small-badge">LIVE STATE</span></div>
-        <div class="panel-section execution-section"><div class="section-title">실행 환경<button class="text-button" id="connect-executor">연결 설정</button></div><select id="provider" aria-label="AI 실행기"><option value="codex">Codex · 현재 구독</option><option value="claude">Claude · 클라우드 Routine</option></select><p class="small-copy" id="executor-status">연결 후 AI 작업을 실행할 수 있습니다.</p><button id="run-button" class="primary-button" disabled>작업 실행 <span>↗</span></button><div class="run-actions"><button id="pause-button" class="text-button" disabled>일시정지</button><button id="cancel-button" class="text-button" disabled>작업 취소</button><button id="export-button" class="text-button">기록 내보내기</button></div></div>
+        <div class="panel-section execution-section"><div class="section-title">실행 환경<button class="text-button" id="connect-executor">연결 설정</button></div><select id="provider" aria-label="AI 실행기"><option value="codex">Codex · 현재 구독</option><option value="claude">Claude · 클라우드 Routine</option></select><p class="small-copy" id="executor-status">연결 후 AI 작업을 실행할 수 있습니다.</p><button id="run-button" class="primary-button" disabled>작업 실행 <span>↗</span></button><button id="execution-recover" class="secondary-button execution-recover" type="button" hidden>이전 실행 확인 후 복구</button><div class="run-actions"><button id="pause-button" class="text-button" disabled>일시정지</button><button id="cancel-button" class="text-button" disabled>작업 취소</button><button id="export-button" class="text-button">기록 내보내기</button></div></div>
         <div class="panel-section"><div class="section-title">에이전트 구성<button id="edit-plan" class="text-button" disabled>편집</button></div><div id="agent-plan" class="agent-plan"><div class="panel-empty"><div class="empty-orbit">◇</div><p>요청에 맞는 역할을<br>필요한 만큼 구성합니다.</p></div></div></div>
+        <section class="panel-section delegation-section hidden" id="delegation-section" aria-labelledby="delegation-title"><div class="section-title"><span id="delegation-title">병렬 위임</span><span class="count-label" id="delegation-state"></span></div><div id="delegation-list" class="delegation-list"></div><p id="delegation-note" class="small-copy"></p><button id="delegation-resume" class="secondary-button delegation-resume" type="button" hidden></button></section>
+        <section class="panel-section source-execution-section hidden" id="source-execution-section" aria-labelledby="source-execution-title"><div class="section-title"><span id="source-execution-title">원본 전달 대기</span></div><div id="source-execution-list" role="status"></div><p id="source-execution-global" class="small-copy"></p></section>
         <div class="panel-section"><div class="section-title">연결 자료<span class="count-label" id="attachment-count">0</span></div><div id="attachment-detail" class="attachment-detail"><p class="small-copy">파일이나 폴더를 연결해 시작하세요.</p></div><button id="add-link" class="text-button">＋ 링크 연결</button></div>
         <div class="panel-section"><div class="section-title">결과물<span class="count-label" id="artifact-count">0</span></div><div id="artifacts"><p class="small-copy">생성된 결과물이 여기에 모입니다.</p></div></div>
         <div class="checkpoint-card" id="checkpoint-card"><span>↻</span><div><strong>맥락은 계속 이어집니다</strong><p>작업 기록과 결정 사항을 저장합니다.<br>원본은 필요할 때 다시 연결하세요.</p></div></div>
@@ -67,7 +69,8 @@
 <dialog id="preview-dialog" class="preview-dialog"><div class="dialog-heading"><h2 id="preview-title">연결 자료</h2><button class="icon-button" data-close="preview-dialog" aria-label="닫기">×</button></div><div id="preview-content"></div></dialog>
 <dialog id="plan-dialog"><form id="plan-form"><div class="dialog-heading"><h2>에이전트 구성</h2><button type="button" class="icon-button" data-close="plan-dialog" aria-label="닫기">×</button></div><p>한 줄에 하나의 역할을 적으세요. 실행 전 구성만 수정할 수 있습니다.</p><textarea id="plan-text" rows="8" aria-label="에이전트 역할 목록"></textarea><div class="dialog-footer"><button class="primary-button" type="submit">구성 저장</button></div></form></dialog>
 <dialog id="link-dialog"><form id="link-form"><div class="dialog-heading"><h2>링크 연결</h2><button type="button" class="icon-button" data-close="link-dialog" aria-label="닫기">×</button></div><label>자료 주소<input id="link-url" type="url" required placeholder="https://…"></label><p class="small-copy">링크를 참조로 등록합니다. 원격 파일을 자동 다운로드하지 않습니다.</p><div class="dialog-footer"><button class="primary-button">연결</button></div></form></dialog>
+<dialog id="recovery-dialog"><form id="recovery-form"><div class="dialog-heading"><h2>하위 작업 복구</h2><button type="button" class="icon-button" data-close="recovery-dialog" aria-label="닫기">×</button></div><p id="recovery-summary"></p><a id="recovery-session" class="text-button recovery-session" target="_blank" rel="noopener noreferrer" hidden>이전 실행 세션 확인 ↗</a><p id="recovery-warning" class="delegation-warning" hidden></p><label id="recovery-confirm-label" class="recovery-confirm" hidden><input id="recovery-confirm" type="checkbox"> <span id="recovery-confirm-text">이전 실행이 종료되었음을 확인했습니다.</span></label><div class="dialog-footer"><button type="button" class="secondary-button" data-close="recovery-dialog">취소</button><button id="recovery-submit" class="primary-button" type="submit">선택한 작업 복구</button></div></form></dialog>
 <input type="file" id="restore-input" accept=".json" hidden>
 <div id="toast" class="toast" role="status"></div><div id="drop-overlay" class="drop-overlay hidden"><div>＋<h2>파일을 놓아 연결하세요</h2><p>원본은 기기에 그대로 유지됩니다.</p></div></div>
-<script type="module" src="./app.mjs?v=handoff-1"></script>
+<script type="module" src="./app.mjs?v=usage-history-1"></script>
 </body></html>

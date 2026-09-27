@@ -14,7 +14,7 @@ export function createEventCollector({maxLineChars=16*1024*1024}={}) {
   if(e.type==='item.completed'&&e.item?.type==='agent_message'&&typeof e.item.text==='string')message={type:e.type,item:{type:'agent_message',text:e.item.text}};
   if(e.type==='turn.failed'&&!failure)failure={type:e.type,error:e.error};
   if(e.type==='error'&&(!error||priority(e)>priority(error)))error={type:e.type,message:e.message,error:e.error};
-  const u=e.usage??e.turn?.usage;if(u)for(const key of ['input_tokens','output_tokens'])if(Number.isFinite(u[key]))usage[key]=u[key];
+  const u=e.usage??e.turn?.usage;if(u)for(const key of ['input_tokens','cached_input_tokens','output_tokens'])if(Number.isFinite(u[key]))usage[key]=u[key];
  }
  function append(fragment){if(pending.length+fragment.length>maxLineChars){pending='';throw Object.assign(Error('Executor output record exceeds the processing limit. Generated files are retained.'),{code:'OUTPUT_LIMIT'});}pending+=fragment;}
  return {

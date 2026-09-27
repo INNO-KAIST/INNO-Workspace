@@ -182,7 +182,7 @@ export function searchPapers(papers, query, limit = 20) {
 }
 
 function integration(id, name, repository, { imports = [], appUrl = null } = {}) {
-  const repositoryUrl = `https://github.com/innokaist/${repository}`;
+  const repositoryUrl = `https://github.com/INNO-KAIST/${repository}`;
   return Object.freeze({
     id,
     name,
@@ -195,7 +195,7 @@ function integration(id, name, repository, { imports = [], appUrl = null } = {})
 
 export const INTEGRATIONS = Object.freeze([
   integration('scheduler', 'INNO Scheduler', 'INNO-Scheduler', {
-    appUrl: 'https://innokaist.github.io/INNO-Scheduler/',
+    appUrl: 'https://inno-kaist.github.io/INNO-Scheduler/',
   }),
   integration('nanolab', 'INNO NanoLab', 'INNO-NanoLab'),
   integration('ledger', 'INNO Ledger', 'INNO-Ledger'),

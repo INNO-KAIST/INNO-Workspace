@@ -1,4 +1,8 @@
-import {executionUsage} from '../public/core/execution-usage.mjs';
+import {createHash} from 'node:crypto';
+import {creationId,creationPayload} from '../public/core/create-requests.mjs';
+import {validateOfficeArtifact} from '../public/core/office-container.mjs';
+import {sanitizeArtifactChecks} from '../public/core/artifact-checks.mjs';
+import {executionUsage,usageHistory} from '../public/core/execution-usage.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
 import { DatabaseSync } from 'node:sqlite';
 
@@ -77,7 +81,10 @@ export class SqliteTaskStore {
 
   createTask(input) {
     const task = createTask(input, {now: this.now, id: this.id});
+    const requestTaskId=creationId(input);
+    if(requestTaskId){task.id=requestTaskId;task.creationRequestHash=createHash('sha256').update(creationPayload(input)).digest('hex');}
     return this.transaction(() => {
+      if(requestTaskId){const existing=this.getTask(requestTaskId);if(existing){if(existing.creationRequestHash!==task.creationRequestHash)throw new ConflictError('Creation request was already used with different content',existing.version);return existing;}}
       this.insertTask.run(task.id, task.version, task.updatedAt, JSON.stringify(task));
       this.incrementRevision.run();
       return task;
@@ -152,7 +159,7 @@ export class SqliteTaskStore {
         version: current.version + 1,
         updatedAt: now,
         decision: {...decision, createdAt: now},
-        checkpoint: {...current.checkpoint, status: 'waiting_user', content: decision.prompt, updatedAt: now},
+        checkpoint: {...current.checkpoint, status: 'waiting_user', usageHistory:usageHistory(current.checkpoint,input.usage,now), content: decision.prompt, updatedAt: now},
       };
     });
   }
@@ -247,12 +254,14 @@ export class SqliteTaskStore {
         artifactBytes += artifactContent.length;
         if (artifactBytes > 10_000_000) throw new ValidationError('execution artifacts are too large');
         const encoding = item.encoding ?? 'utf-8';
+        validateOfficeArtifact({...item,encoding});
         if (!['utf-8', 'base64'].includes(encoding)) throw new ValidationError('execution artifact encoding is invalid');
         return {
           id: this.id(),
           name: typeof item.name === 'string' && item.name.trim() ? item.name.trim().slice(0, 500) : 'artifact.txt',
           mime: typeof item.mime === 'string' && item.mime.trim() ? item.mime.trim().slice(0, 255) : 'text/plain',
           content: artifactContent,
+          checks: sanitizeArtifactChecks(item.checks),
           encoding,
           createdAt: now,
         };
@@ -266,7 +275,7 @@ export class SqliteTaskStore {
         artifacts: [...task.artifacts, ...artifacts],
         checkpoint: {
           ...task.checkpoint,
-          usage: executionUsage(task.checkpoint,input.usage,now),
+          usage: executionUsage(task.checkpoint,input.usage,now), usageHistory: usageHistory(task.checkpoint,input.usage,now),
           status: 'completed',
           failure: undefined,
           content: input.checkpoint ?? 'Execution completed.',
@@ -314,6 +323,7 @@ export class SqliteTaskStore {
           ...task.checkpoint,
           status,
           failure,
+          usageHistory:usageHistory(task.checkpoint,input.usage,now),
           updatedAt: now,
         },
       };

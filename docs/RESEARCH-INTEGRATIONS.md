@@ -65,12 +65,12 @@ The evidence scope is preserved when supplied and must be `metadata`, `abstract`
 
 | App | Primary destination | Kind | Repository | Supported import into Workspace |
 |---|---|---|---|---|
-| INNO Scheduler | <https://innokaist.github.io/INNO-Scheduler/> | App | <https://github.com/innokaist/INNO-Scheduler> | Link only |
-| INNO NanoLab | <https://github.com/innokaist/INNO-NanoLab> | Repository | Same as primary | Link only |
-| INNO Ledger | <https://github.com/innokaist/INNO-Ledger> | Repository | Same as primary | Link only |
-| INNO Prism | <https://github.com/innokaist/INNO-Prism> | Repository | Same as primary | `analysis-json` |
-| INNO Analytics | <https://github.com/innokaist/INNO-Analytics> | Repository | Same as primary | Link only |
-| INNO RefAtlas | <https://github.com/innokaist/INNO-RefAtlas> | Repository | Same as primary | `catalog-json`, `papers-json` |
+| INNO Scheduler | <https://inno-kaist.github.io/INNO-Scheduler/> | App | <https://github.com/INNO-KAIST/INNO-Scheduler> | Link only |
+| INNO NanoLab | <https://github.com/INNO-KAIST/INNO-NanoLab> | Repository | Same as primary | Link only |
+| INNO Ledger | <https://github.com/INNO-KAIST/INNO-Ledger> | Repository | Same as primary | Link only |
+| INNO Prism | <https://github.com/INNO-KAIST/INNO-Prism> | Repository | Same as primary | `analysis-json` |
+| INNO Analytics | <https://github.com/INNO-KAIST/INNO-Analytics> | Repository | Same as primary | Link only |
+| INNO RefAtlas | <https://github.com/INNO-KAIST/INNO-RefAtlas> | Repository | Same as primary | `catalog-json`, `papers-json` |
 
 The Scheduler deployment returned HTTP 200 with the title `INNO Scheduler` during the 2026-09-13 verification. The NanoLab setup guide's former `wonjeong-dev.github.io` deployment returned 404, and the public GitHub metadata did not declare deployed homepages for NanoLab, Ledger, Prism, or Analytics. RefAtlas is private and has no public deployment URL in this catalog, so those entries remain repository links until an application endpoint is configured and verified.
 

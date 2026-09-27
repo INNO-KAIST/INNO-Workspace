@@ -175,7 +175,7 @@ export function readZipEntryText(entry, maxBytes = MAX_COMPRESSED_BYTES) {
   });
 }
 
-async function extractPdf(file, maxChars, injectedPdfjs) {
+async function extractPdf(file, maxChars, injectedPdfjs, selectedPages) {
   if (file.size > MAX_COMPRESSED_BYTES) {
     return unavailable(file.size, 'PDF documents larger than 30 MiB are not read.');
   }
@@ -189,12 +189,19 @@ async function extractPdf(file, maxChars, injectedPdfjs) {
     const data = new Uint8Array(await file.arrayBuffer());
     const loadingTask = pdfjs.getDocument({ data });
     const document = await loadingTask.promise;
-    let output = '';
-    let hasText = false;
-    let truncated = document.numPages > MAX_PDF_PAGES;
     try {
-      const pageCount = Math.min(document.numPages, MAX_PDF_PAGES);
-      for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+      const startPage = selectedPages?.startPage ?? 1;
+      const endPage = selectedPages?.endPage ?? Math.min(document.numPages, MAX_PDF_PAGES);
+      if (!Number.isInteger(startPage) || !Number.isInteger(endPage) || startPage < 1 || endPage < startPage || endPage - startPage + 1 > MAX_PDF_PAGES) {
+        return unavailable(file.size, 'PDF page selection must contain 1 to 100 pages.', file.size);
+      }
+      if (endPage > document.numPages) {
+        return unavailable(file.size, 'Selected PDF pages are outside this document.', file.size);
+      }
+      let output = '';
+      let hasText = false;
+      let truncated = selectedPages ? false : document.numPages > MAX_PDF_PAGES;
+      for (let pageNumber = startPage; pageNumber <= endPage; pageNumber += 1) {
         const page = await document.getPage(pageNumber);
         const content = await page.getTextContent();
         const pageText = (content.items || [])
@@ -212,13 +219,15 @@ async function extractPdf(file, maxChars, injectedPdfjs) {
         }
         output += separator + section;
       }
+      if (!hasText) {
+        return unavailable(file.size, 'No embedded PDF text was found; OCR is not supported.', file.size);
+      }
+      const result = boundedText(output, maxChars, file.size, file.size, truncated);
+      if (selectedPages) result.pdfPages = { startPage, endPage, totalPages: document.numPages };
+      return result;
     } finally {
       if (typeof document.destroy === 'function') await document.destroy();
     }
-    if (!hasText) {
-      return unavailable(file.size, 'No embedded PDF text was found; OCR is not supported.', file.size);
-    }
-    return boundedText(output, maxChars, file.size, file.size, truncated);
   } catch (error) {
     return unavailable(file.size, `PDF text is unavailable: ${error.message}`, file.size);
   }
@@ -307,6 +316,7 @@ async function extractPlainText(file, maxChars) {
 export async function extractConnectedText(file, {
   maxChars = MAX_EXTRACTED_CHARS,
   pdfjs,
+  pdfPages,
   JSZip,
 } = {}) {
   validateFile(file);
@@ -321,7 +331,7 @@ export async function extractConnectedText(file, {
   const format = mimeFormat || extensionFormat;
 
   if (format === 'text') return extractPlainText(file, limit);
-  if (format === 'pdf') return extractPdf(file, limit, pdfjs);
+  if (format === 'pdf') return extractPdf(file, limit, pdfjs, pdfPages);
   if (format === 'docx') return extractDocx(file, limit, JSZip);
   if (format === 'pptx') return extractPptx(file, limit, JSZip);
   return unavailable(file.size, `Unsupported connected file type: ${type || extension || 'unknown'}.`);

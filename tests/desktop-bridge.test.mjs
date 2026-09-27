@@ -21,7 +21,7 @@ test('direct start refuses while another local task or pending result exists',as
 
 
 test('desktop failure outbox preserves safe quota reason across delivery retry without rerunning AI',async()=>{
- let runs=0,deliveries=0;const outbox=box();const bridge=createDesktopBridge({outbox,request:async p=>{if(p.endsWith('poll'))return {claim:{task:{id:'t'},executionId:'e',generation:1}};if(++deliveries===1)throw Error('network');},runner:{run:async()=>{runs++;throw Object.assign(Error('PRIVATE_DIAGNOSTIC'),{code:'QUOTA_EXCEEDED'});}}});await assert.rejects(()=>bridge.tick());assert.equal(outbox.read().input.failure.kind,'quota');assert.equal(JSON.stringify(outbox.read()).includes('PRIVATE_DIAGNOSTIC'),false);await bridge.tick();assert.equal(runs,1);assert.equal(outbox.read(),null);
+ let runs=0,deliveries=0;const outbox=box();const bridge=createDesktopBridge({outbox,request:async p=>{if(p.endsWith('poll'))return {claim:{task:{id:'t'},executionId:'e',generation:1}};if(++deliveries===1)throw Error('network');},runner:{run:async()=>{runs++;throw Object.assign(Error('PRIVATE_DIAGNOSTIC'),{code:'QUOTA_EXCEEDED',usage:{inputTokens:9,secret:'PRIVATE_USAGE'}});}}});await assert.rejects(()=>bridge.tick());assert.equal(outbox.read().input.usage.inputTokens,9);assert.equal(JSON.stringify(outbox.read()).includes('PRIVATE_USAGE'),false);assert.equal(outbox.read().input.failure.kind,'quota');assert.equal(JSON.stringify(outbox.read()).includes('PRIVATE_DIAGNOSTIC'),false);await bridge.tick();assert.equal(runs,1);assert.equal(outbox.read(),null);
 });
 
 test('occupied startup port becomes an actionable error without hiding other failures',async()=>{const {startupPortMessage}=await import('../server/bridge-runtime.mjs');assert.match(startupPortMessage({code:'EADDRINUSE',port:4174}),/4174/);assert.match(startupPortMessage({code:'EADDRINUSE',port:4175}),/4175/);assert.match(startupPortMessage({code:'EADDRINUSE',port:4174}),/DESKTOP-ACCESS/);assert.equal(startupPortMessage({code:'EACCES',port:4174}),null);});
@@ -29,3 +29,25 @@ test('occupied startup port becomes an actionable error without hiding other fai
 test('maintenance blocks execution and refuses pending results',async()=>{const outbox=box();let polls=0,release;const bridge=createDesktopBridge({outbox,request:async()=>{polls++;return {claim:null};},runner:{}});const work=bridge.maintenance(()=>new Promise(r=>release=r));await bridge.tick();assert.equal(polls,0);await assert.rejects(()=>bridge.startTask('t',{materials:[]}),{status:409});release();await work;assert.equal(bridge.status().busy,false);outbox.write({taskId:'pending'});await assert.rejects(()=>bridge.maintenance(()=>{}),{status:409});});
 
 test('usage survives outbox retry without copying arbitrary runner fields',async()=>{const outbox=box();let calls=0;const bridge=createDesktopBridge({outbox,request:async p=>{if(p.endsWith('poll'))return {claim:{task:{id:'t'},executionId:'e',generation:1}};if(++calls===1)throw Error('lost response');},runner:{run:async()=>({content:'ok',usage:{inputTokens:12,outputTokens:3,secret:'PRIVATE'}})}});await assert.rejects(()=>bridge.tick());assert.equal(outbox.read().input.usage.inputTokens,12);assert.equal(JSON.stringify(outbox.read()).includes('PRIVATE'),false);await bridge.tick();assert.equal(outbox.read(),null);});
+
+test('direct master sends one verified model snapshot on start and delegation completion',async()=>{
+ const models=[{model:'gpt-5.6-terra',efforts:['high'],isDefault:true}],requests=[];let modelReads=0;
+ const task={id:'master',attachments:[]};
+ const bridge=createDesktopBridge({outbox:box(),request:async(path,input)=>{requests.push({path,input});return path.endsWith('start')?{claim:{task,executionId:'e',generation:1}}:{task:{status:'waiting_children'}};},runner:{models:async()=>{modelReads++;return models;},run:async()=>({content:'plan',delegation:{independent:true,children:[]}})}});
+ await bridge.startTask(task.id,{expectedVersion:1,materials:[]});await bridge.settled();
+ assert.equal(modelReads,1);assert.deepEqual(requests.find(r=>r.path.endsWith('start')).input.models,models);assert.deepEqual(requests.find(r=>r.path.endsWith('complete')).input.models,models);
+});
+
+import {createCodexRunner} from '../server/runners.mjs';
+import {EventEmitter} from 'node:events';
+import {PassThrough} from 'node:stream';
+test('lost lease keeps desktop busy until Codex process closes',async()=>{
+ let closeChild,abortSeen,polls=0,uploads=0;const aborted=new Promise(r=>{abortSeen=r;});
+ const runner=createCodexRunner({ensureDirectory:()=>{},spawnProcess:()=>{const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();child.kill=()=>{abortSeen();return true;};closeChild=()=>child.emit('close',null,'SIGTERM');return child;}});
+ const bridge=createDesktopBridge({outbox:box(),runner,heartbeatMs:5,request:async route=>{if(route.endsWith('/poll')){polls++;return {claim:{task:{id:'lease',prompt:'work'},executionId:'e',generation:1}};}if(route.endsWith('/renew'))throw Object.assign(Error('lease lost'),{status:409});uploads++;}});
+ const running=bridge.tick();const result=running.catch(e=>e);await aborted;await new Promise(setImmediate);
+ const busyBeforeClose=bridge.status().busy;const second=await bridge.tick();closeChild();const error=await result;
+ assert.equal(busyBeforeClose,true);assert.equal(second,false);assert.equal(polls,1);assert.equal(uploads,0);assert.equal(error.status,409);assert.equal(bridge.status().busy,false);
+});
+
+for(const localVersion of [0,1])for(const serverVersion of [0,1])test(`desktop negotiates source capability local=${localVersion} server=${serverVersion}`,async()=>{let sent,applied;const bridge=createDesktopBridge({outbox:box(),runner:{sourceDelegationVersion:localVersion,run:async input=>{applied=input.sourceDelegationVersion;return {content:'done'};}},request:async(route,input)=>{if(route.endsWith('/start')){sent=input;return {claim:{task:{id:'t'},executionId:'e',generation:1,sourceDelegationVersion:serverVersion}};}return {};}});await bridge.startTask('t',{expectedVersion:1,sourceDelegationVersion:1,materials:[]});await bridge.settled();assert.equal(sent.sourceDelegationVersion,localVersion);assert.equal(applied,localVersion===1&&serverVersion===1?1:0);assert.equal(bridge.status().sourceDelegationVersion,localVersion);});

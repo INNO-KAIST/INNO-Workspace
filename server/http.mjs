@@ -1,3 +1,4 @@
+import {usageCounts} from '../public/core/execution-usage.mjs';
 import {parseRevision} from '../public/core/sync.mjs';
 import {failureInput,runnerError} from '../public/core/failures.mjs';
 import { createReadStream } from 'node:fs';
@@ -158,6 +159,7 @@ export function createInnoServer({
           store.failExecution(taskId, {
             executionId: claim.executionId,
             generation: claim.generation,
+            usage:usageCounts(error?.usage),
             ...failureInput(error?.code ? error : runnerError(error)),
           });
         }

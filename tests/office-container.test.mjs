@@ -1,0 +1,14 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import vm from 'node:vm';
+import {readFileSync} from 'node:fs';
+import {validateOfficeContainer} from '../public/core/office-container.mjs';
+const docx='application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+import {officeFixture} from './helpers/office.mjs';
+test('Office validation rejects signature-only and wrong document type',async()=>{assert.throws(()=>validateOfficeContainer(docx,new TextEncoder().encode('PK\x03\x04fake')),/Office/);assert.throws(()=>validateOfficeContainer(docx, new Uint8Array()),/Office/);assert.throws(()=>validateOfficeContainer(docx, awaitInvalid),/Office/);});
+const awaitInvalid=new Uint8Array([80,75,3,4]);
+test('Office container requires declared package parts and intact directory',async()=>{const bytes=await officeFixture();assert.doesNotThrow(()=>validateOfficeContainer(docx,bytes));assert.throws(()=>validateOfficeContainer(docx,bytes.slice(0,-5)),/Office/);assert.throws(()=>validateOfficeContainer('application/vnd.openxmlformats-officedocument.presentationml.presentation',bytes),/Office/);});
+import {SqliteTaskStore} from '../server/store.mjs';
+import {D1TaskStore} from '../worker/store.mjs';
+import {TestD1} from './helpers/d1.mjs';
+for(const backend of ['sqlite','d1'])test(`${backend} rejects fake Office output before task completion`,async t=>{const db=backend==='d1'?new TestD1():null,store=db?new D1TaskStore(db):new SqliteTaskStore();t.after(()=>db?db.close():store.close());const task=await store.createTask({prompt:'Create document'}),owner=await store.claimExecution(task.id,{provider:'codex',expectedVersion:task.version});await assert.rejects(async()=>store.finishExecution(task.id,{...owner,content:'Done',artifacts:[{name:'fake.docx',mime:docx,encoding:'base64',content:Buffer.from('PK\x03\x04fake').toString('base64')}]}),/Office/);assert.equal((await store.requireTask(task.id)).status,'running');});

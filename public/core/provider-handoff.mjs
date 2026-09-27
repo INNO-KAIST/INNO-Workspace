@@ -1,12 +1,12 @@
 import {ConflictError,ValidationError,applyAction} from './tasks.mjs';
-import {executionUsage} from './execution-usage.mjs';
+import {executionUsage,usageHistory} from './execution-usage.mjs';
 const bounded=(value,label,max)=>{if(typeof value!=='string'||!value.trim()||value.length>max)throw new ValidationError('Invalid handoff '+label);return value.trim();};
 export function isHandoffReplay(task,input){return (task.checkpoint?.handoffHistory??[]).some(h=>h.executionId===input.executionId&&h.generation===input.generation);}
 export function handoffTask(task,input,{now=()=>new Date().toISOString(),id=()=>crypto.randomUUID(),recoverInterrupted=false}={}){
  const c=task.checkpoint??{};
  const recover=recoverInterrupted&&c.provider==='codex'&&task.status==='paused'&&c.interruptedBy==='lease_expiry'&&c.interruptedVersion===task.version;
  if((task.status!=='running'&&!recover)||c.executionId!==input.executionId||c.generation!==input.generation)throw new ConflictError('Stale handoff owner',task.version);
- if(task.attachments?.length)throw new ValidationError('Reconnect original sources: automatic handoff does not transfer attachments.');
+ if(task.attachments?.length||task.checkpoint?.sourceBound)throw new ValidationError('Reconnect original sources: automatic handoff does not transfer attachments.');
  const history=c.handoffHistory??[];if(history.length>=2)throw new ValidationError('At most two provider handoffs per task.');
  const h=input.handoff;if(!h||!['codex','claude'].includes(h.provider)||h.provider===c.provider)throw new ValidationError('Handoff must target the other provider.');
  const record={executionId:input.executionId,generation:input.generation,from:c.provider,to:h.provider,instructions:bounded(h.instructions,'instructions',12000),reason:bounded(h.reason,'reason',1000),acceptance:bounded(h.acceptance,'acceptance',2000),createdAt:now()};
@@ -15,7 +15,7 @@ export function handoffTask(task,input,{now=()=>new Date().toISOString(),id=()=>
  let updated=task;for(const artifact of input.artifacts??[])updated=applyAction(updated,{action:'artifact',expectedVersion:updated.version,artifact},{now,id});
  if(updated.artifacts.length>20||updated.artifacts.reduce((sum,a)=>sum+a.content.length,0)>5000000)throw new ValidationError('Handoff generated files exceed 20 files or 5 MB encoded content.');
  record.artifactIds=updated.artifacts.map(a=>a.id);
- return {...updated,status:'queued',version:task.version+1,updatedAt:record.createdAt,messages:[...updated.messages,{id:id(),role:'assistant',content,createdAt:record.createdAt}],checkpoint:{...c,executionId:undefined,provider:h.provider,status:'queued',expiresAt:undefined,sessionUrl:undefined,failure:undefined,content,usage:executionUsage(c,input.usage,record.createdAt),updatedAt:record.createdAt,handoffHistory:[...history,record],handoff:record}};
+ return {...updated,status:'queued',version:task.version+1,updatedAt:record.createdAt,messages:[...updated.messages,{id:id(),role:'assistant',content,createdAt:record.createdAt}],checkpoint:{...c,executionId:undefined,provider:h.provider,status:'queued',expiresAt:undefined,sessionUrl:undefined,failure:undefined,content,usage:executionUsage(c,input.usage,record.createdAt),usageHistory:usageHistory(c,input.usage,record.createdAt),updatedAt:record.createdAt,handoffHistory:[...history,record],handoff:record}};
 }
 export function handoffContext(task){const h=task.checkpoint?.handoff;return h?['Current provider handoff (continue this stage, not the old provider stage):',JSON.stringify({from:h.from,to:h.to,instructions:h.instructions,reason:h.reason,acceptance:h.acceptance,transitions:task.checkpoint.handoffHistory?.length}), 'Previous generated progress:',task.checkpoint.content,'Newer user messages override these stage instructions. Validate the handed-off work before final integration. Generated progress is not primary-source evidence. Do not repeat completed work.'].join('\n'):'';}
 export const CODEX_HANDOFF_POLICY='On the managed cloud bridge only, a useful sequential handoff to Claude is supported for tasks with NO source attachments. Do not hand off trivial work or evade quota/authentication limits. At most two provider transitions per task. First understand the request, choose why the other provider is needed and its acceptance checks. To hand off, return final JSON with summary (verified generated progress, max 12000 chars), artifacts, routing, and handoff:{provider:"claude",instructions:"bounded next stage, max 12000 chars",reason:"why",acceptance:"checks"}. Stop after returning it; this is progress, not task completion. Do not archive originals in this handoff. If already two transitions, finish directly. The receiving master chooses its own supported subagent models.';

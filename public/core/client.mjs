@@ -1,9 +1,11 @@
+import {CreationRetries,creationId} from './create-requests.mjs';
+import {sanitizeSourceView} from './source-coverage.mjs';
 const attachmentKeys = ['id','name','path','size','lastModified','type','source','url'];
-const taskKeys = ['id','title','prompt','type','status','version','createdAt','updatedAt','messages','plan','artifacts','checkpoint','decision','sessionUrl','error','provider'];
+const taskKeys = ['id','title','prompt','type','status','version','createdAt','updatedAt','messages','plan','artifacts','checkpoint','decision','sessionUrl','error','provider','parentTaskId','batchId','parentEpoch','assignment','delegation'];
 const pick = (value, keys) => Object.fromEntries(keys.filter(k => value[k] !== undefined).map(k=>[k,value[k]]));
 export function exportBundle(state) {
   return {format:'inno-workspace-v1',exportedAt:new Date().toISOString(),tasks:(state.tasks||[]).map(t=>({
-    ...pick(t,taskKeys),attachments:(t.attachments||[]).map(a=>pick(a,attachmentKeys))
+    ...pick(t,taskKeys),attachments:(t.attachments||[]).map(a=>({...pick(a,attachmentKeys),...(a.view?{view:sanitizeSourceView(a.view,a)}:{})}))
   }))};
 }
 export function parseBundle(text) {
@@ -36,7 +38,7 @@ async function localMutate(update){
 }
 
 export class WorkspaceClient {
-  constructor({baseUrl='',token='',remote=false}={}){this.baseUrl=validateEndpoint(baseUrl);this.token=token;this.remote=remote;this.state=blank();this.lastSync=null;this.refreshSequence=0;this.appliedSequence=0;this.syncedRevision=undefined;}
+  constructor({baseUrl='',token='',remote=false,retryStorage}={}){this.baseUrl=validateEndpoint(baseUrl);this.token=token;this.remote=remote;this.state=blank();this.lastSync=null;this.syncError=null;this.refreshSequence=0;this.appliedSequence=0;this.syncedRevision=undefined;this.creationRetries=new CreationRetries(this.baseUrl+'\n'+token,retryStorage);}
   async request(path,body){
     const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),30000);
     try{
@@ -49,23 +51,63 @@ export class WorkspaceClient {
   async refresh(){
     if(!this.remote){this.state={...blank(),...await localRead()};return this.state;}
     const sequence=++this.refreshSequence,since=this.syncedRevision;
-    const s=await this.request('/api/state'+(Number.isSafeInteger(since)?'?since='+since:''));
-    if(sequence<this.appliedSequence||(this.syncedRevision!==undefined&&Number.isSafeInteger(s.revision)&&s.revision<this.state.revision))return this.state;
-    if(s.unchanged){
-      if(since===undefined||s.revision!==since||this.state.revision!==since)throw Error('동기화 변경 번호가 일치하지 않습니다. 다시 연결하세요.');
-      const {unchanged,...metadata}=s;this.state={...this.state,...metadata};
-    }else{this.state={...blank(),...s};}
-    this.syncedRevision=Number.isSafeInteger(s.revision)&&s.revision>=0?s.revision:undefined;
-    this.appliedSequence=sequence;this.lastSync=Date.now();return this.state;
+    try{
+      const s=await this.request('/api/state'+(Number.isSafeInteger(since)?'?since='+since:''));
+      if(sequence<this.appliedSequence||(Number.isSafeInteger(s.revision)&&s.revision<this.state.revision))return this.state;
+      if(s.unchanged){
+        if(since===undefined||s.revision!==since||this.state.revision!==since)throw Error('동기화 변경 번호가 일치하지 않습니다. 다시 연결하세요.');
+        const {unchanged,...metadata}=s;this.state={...this.state,...metadata};
+      }else{this.state={...blank(),...s};}
+      this.syncedRevision=Number.isSafeInteger(s.revision)&&s.revision>=0?s.revision:undefined;
+      this.appliedSequence=sequence;this.syncError=null;this.lastSync=Date.now();return this.state;
+    }catch(error){
+      if(sequence>=this.appliedSequence){this.syncError=error;this.lastSync=null;}
+      throw error;
+    }
+  }
+  async acceptWrite(task){
+    // The write was acknowledged. A later read failure must not invite a duplicate write.
+    this.appliedSequence=++this.refreshSequence;
+    this.syncedRevision=undefined;
+    this.lastSync=null;
+    const existing=this.state.tasks.find(t=>t.id===task.id);
+    if(!existing||task.version>=existing.version){
+      this.state={...this.state,tasks:existing?this.state.tasks.map(t=>t.id===task.id?task:t):[task,...this.state.tasks]};
+    }
+    try{await this.refresh();}catch{/* syncError retains the failed read; the write still succeeded. */}
+    return task;
   }
   async create(input){
-    if(this.remote){const {task}=await this.request('/api/tasks',input);await this.refresh();return task;}
+    if(this.remote){
+      creationId(input);
+      const retry=input.requestId===undefined?await this.creationRetries.begin(input):null;
+      let task;
+      try{({task}=await this.request('/api/tasks',{...input,requestId:retry?.id??input.requestId}));}
+      catch(error){if(retry&&[400,401,403,404,413,422].includes(error.status))this.creationRetries.finish(retry);throw error;}
+      if(!task||typeof task.id!=='string'||!Number.isSafeInteger(task.version)||task.version<1)throw Error('작업 저장 확인 응답이 올바르지 않습니다. 같은 내용으로 다시 시도하세요.');
+      if(retry)this.creationRetries.finish(retry);
+      return this.acceptWrite(task);
+    }
     const {createTask}=await import('./tasks.mjs');const task=createTask(input);const saved=await localMutate(state=>{state.tasks.unshift(task);return task;});this.state=saved.state;return saved.result;
   }
   async action(id,input){
-    if(this.remote){const {task}=await this.request(`/api/tasks/${encodeURIComponent(id)}/actions`,input);await this.refresh();return task;}
+    if(this.remote){const {task}=await this.request(`/api/tasks/${encodeURIComponent(id)}/actions`,input);return this.acceptWrite(task);}
     const {applyAction}=await import('./tasks.mjs');const saved=await localMutate(state=>{const index=state.tasks.findIndex(t=>t.id===id);if(index<0)throw new Error('작업을 찾을 수 없습니다.');const task=applyAction(state.tasks[index],input);state.tasks[index]=task;return task;});this.state=saved.state;return saved.result;
   }
   async run(id,input){if(!this.remote)throw new Error('AI 실행기를 연결하세요. 작업과 첨부 참조는 이 기기에 저장돼 있습니다.');return this.request(`/api/tasks/${encodeURIComponent(id)}/run`,input);}
+  async resumeDelegation(id,expectedVersion){
+    if(!this.remote)throw new Error('병렬 작업 재개에는 서버 연결이 필요합니다.');
+    const {task}=await this.request(`/api/tasks/${encodeURIComponent(id)}/delegation/resume`,{expectedVersion});
+    return task;
+  }
+  async recoverDelegationChild(id,input){
+    if(!this.remote)throw new Error('하위 작업 복구에는 서버 연결이 필요합니다.');
+    return this.request(`/api/tasks/${encodeURIComponent(id)}/delegation/recover`,input);
+  }
+  async recoverExecution(id,input){
+    if(!this.remote)throw new Error('실행 복구에는 서버 연결이 필요합니다.');
+    const {task}=await this.request(`/api/tasks/${encodeURIComponent(id)}/execution/recover`,input);
+    return task;
+  }
   async restore(text){if(this.remote)throw new Error('기록 가져오기는 이 기기 보관 모드에서 지원합니다.');const b=parseBundle(text);const saved=await localMutate(state=>{const ids=new Set(state.tasks.map(t=>t.id));let n=0;for(const t of b.tasks)if(!ids.has(t.id)){state.tasks.push(t);ids.add(t.id);n++;}return n;});this.state=saved.state;return saved.result;}
 }

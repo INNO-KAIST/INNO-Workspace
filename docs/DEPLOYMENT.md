@@ -38,7 +38,7 @@ npx wrangler deploy
 
 공개 저장소의 Settings → Pages → Source를 **GitHub Actions**로 선택하면 `.github/workflows/pages.yml`을 사용할 수 있습니다. 생성되는 주소는 정적 화면입니다. AI 실행과 다른 기기 동기화를 위해서는 위 Worker URL을 설정해야 합니다.
 
-Pages 화면에서 Worker API에 접속할 경우 Worker의 `CORS_ORIGINS` 환경변수에 해당 Pages origin을 등록합니다. 예: `https://innokaist.github.io` (경로 제외). 임의 origin을 모두 허용하지 않습니다.
+Pages 화면에서 Worker API에 접속할 경우 Worker의 `CORS_ORIGINS` 환경변수에 해당 Pages origin을 등록합니다. 예: `https://inno-kaist.github.io` (경로 제외). 임의 origin을 모두 허용하지 않습니다.
 
 비공개 저장소는 GitHub 계정 플랜에 따라 Pages 가용성이 다릅니다. 무료가 아닌 요금제로 자동 전환하지 않습니다.
 

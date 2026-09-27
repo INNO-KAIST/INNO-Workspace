@@ -4,7 +4,7 @@
 
 INNO Workspace는 다른 INNO 앱 없이 사용할 수 있는 독립 플랫폼입니다. NanoLab·Prism·RefAtlas·Scheduler·Analytics·Ledger 연결은 필요한 작업에서만 사용하는 선택 기능이며, 설치나 연결을 기본 사용 조건으로 삼지 않습니다. 일반 파일·폴더와 직접 작성한 요청으로도 작업을 시작합니다.
 
-[클라우드 작업실](https://inno-workspace-api.innokaist.workers.dev) · [GitHub Pages 화면](https://innokaist.github.io/INNO-Workspace/)
+[클라우드 작업실](https://inno-workspace-api.innokaist.workers.dev) · [GitHub Pages 화면](https://inno-kaist.github.io/INNO-Workspace/)
 
 클라우드는 개인 접근 토큰이 필요합니다. AI 실행은 로컬 Codex 또는 별도 연결한 Claude Routine에서 수행합니다.
 
