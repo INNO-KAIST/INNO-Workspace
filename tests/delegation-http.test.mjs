@@ -40,7 +40,7 @@ test('legacy desktop model arrays cannot authorize HTTP delegation',async t=>{
 });
 
 test('authenticated child policy management derives its baseline and keeps null-version allocation usable',async t=>{
- const f=await fixture(t);await f.post('/api/desktop/poll',{models:observedModels()});
+ const f=await fixture(t),observedAt=Date.now();await f.post('/api/desktop/poll',{models:{models,observedAt,status:'fresh'}});
  const {task,claim}=await claimMaster(f);
  const allocated=await f.post(`/api/desktop/${task.id}/complete`,{...owner(claim),delegation:{independent:true,children}});
  assert.equal(allocated.status,200);
@@ -58,14 +58,33 @@ test('authenticated child policy management derives its baseline and keeps null-
  const current=await read.json();assert.equal(current.profile.family,'delegation_codex');
  assert.equal(current.route.status,'fallback');assert.equal(current.route.reason,'baseline_version_unverified');
  assert.equal(current.accountAvailability.provider,'codex');
+ assert.deepEqual(current.accountAvailability,{provider:'codex',source:'desktop_account_catalog',status:'fresh',observedAt,expiresAt:observedAt+7_200_000,effortSource:'account_catalog',models:[{model:'gpt-5.6-luna',efforts:['low']}]});
  const claude=allocated.task.delegation.children.find(x=>x.provider==='claude');
  const claudeRead=await createWorker().fetch(new Request(`https://inno.example/api/tasks/${claude.taskId}/model-policy`,{headers:{authorization:'Bearer test-secret-01234567890123456789'}}),{DB:f.db,ACCESS_TOKEN:'test-secret-01234567890123456789'});
- assert.equal((await claudeRead.json()).accountAvailability.status,'static_supported_models_unverified');
+ assert.deepEqual((await claudeRead.json()).accountAvailability,{provider:'claude',source:'built_in_catalog',status:'static_supported_models_unverified',observedAt:null,expiresAt:null,effortSource:'assignment_planning_intent',models:['haiku','sonnet','opus'].map(model=>({model,efforts:['low']}))});
  assert.equal((await f.post(`/api/tasks/${task.id}/model-policy`,{operation:'initialize',expectedStateVersion:0})).status,400);
  const next=await claimMaster(f);
  const second=await f.post(`/api/desktop/${next.task.id}/complete`,{...owner(next.claim),delegation:{independent:true,children}});
  assert.equal(second.status,200,JSON.stringify(second));
  assert.equal(second.task.delegation.children.find(x=>x.provider==='codex').selection.reason,'baseline_version_unverified');
+});
+test('policy choices retain a valid last-good observation after refresh failure and clear on expiry',async t=>{
+ const f=await fixture(t),observedAt=Date.now();await f.post('/api/desktop/poll',{models:{models,observedAt,status:'fresh'}});
+ const {task,claim}=await claimMaster(f);
+ const allocated=await f.post(`/api/desktop/${task.id}/complete`,{...owner(claim),delegation:{independent:true,children}});
+ const child=allocated.task.delegation.children.find(x=>x.provider==='codex'),path=`/api/tasks/${child.taskId}/model-policy`;
+ const read=async()=>{const response=await createWorker().fetch(new Request('https://inno.example'+path,{headers:{authorization:'Bearer test-secret-01234567890123456789'}}),{DB:f.db,ACCESS_TOKEN:'test-secret-01234567890123456789'});assert.equal(response.status,200);return (await response.json()).accountAvailability;};
+ await f.post('/api/desktop/poll',{models:{models:[],observedAt,status:'unavailable'}});
+ const failed=await read();assert.equal(failed.status,'refresh_failed');assert.equal(failed.observedAt,observedAt);assert.equal(failed.expiresAt,observedAt+7_200_000);assert.deepEqual(failed.models,[{model:'gpt-5.6-luna',efforts:['low']}]);
+ await f.db.prepare("UPDATE metadata SET value=json_set(value,'$.reportedAt',?1) WHERE key='desktop_models'").bind(Date.now()-7_200_001).run();
+ const expired=await read();assert.equal(expired.status,'expired');assert.deepEqual(expired.models,[]);assert.equal(expired.expiresAt,expired.observedAt+7_200_000);
+ assert.equal((await f.post(path,{operation:'withdraw',expectedStateVersion:0,candidateId:'baseline'})).status,404);
+});
+test('worker state advertises model policy management on full and unchanged responses',async t=>{
+ const f=await fixture(t),worker=createWorker(),env={DB:f.db,ACCESS_TOKEN:'test-secret-01234567890123456789'};
+ const get=async path=>{const response=await worker.fetch(new Request('https://inno.example'+path,{headers:{authorization:'Bearer '+env.ACCESS_TOKEN}}),env);assert.equal(response.status,200);return response.json();};
+ const first=await get('/api/state');assert.equal(first.capabilities.modelPolicyManagement,true);
+ const unchanged=await get(`/api/state?since=${first.revision}`);assert.equal(unchanged.unchanged,true);assert.equal(unchanged.capabilities.modelPolicyManagement,true);
 });
 
 test('child policy operations reject forged inputs and stale writes while preserving frozen assignments',async t=>{

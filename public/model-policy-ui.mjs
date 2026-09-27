@@ -1,0 +1,91 @@
+const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+const providerName=value=>value==='claude'?'Claude':value==='codex'?'Codex':value||'미확인';
+const time=value=>{if(value==null)return '확인 불가';const date=new Date(value);return Number.isNaN(+date)?'확인 불가':date.toLocaleString('ko-KR');};
+const reasonNames={baseline_version_unverified:'기준 모델의 실제 버전 미확인',account_model_unavailable:'계정에서 모델 사용 가능 여부 미확인',unobserved_model_version:'후보의 실제 모델 버전 미관측',candidate_unavailable:'계정 가용성 확인 필요',candidate_quality_regression:'필수 품질 기준 미충족',insufficient_comparable_evidence:'비교 가능한 검토 근거 부족',missing_measured_efficiency:'실측 토큰 또는 지연 기록 부족',no_measured_efficiency_gain:'실측 효율 개선 미확인',already_active:'이미 사용 중',withdrawn:'후보 철회됨',existing_route_pending_evidence:'기준 경로에서 추가 근거 대기',no_fresh_eligible_route:'현재 사용 가능한 경로 없음',profile_scoped_observation:'이 작업군에서 검증된 관측',policy_missing_evidence_insufficient:'정책의 비교 근거 부족',policy_missing:'정책 미등록',matched_quality_and_measured_efficiency:'필수 품질 기준과 실측 효율 확인'};
+const routeText=route=>!route?'정책 경로가 아직 없습니다.':`${route.status==='selected'?'정책 선택':route.status==='wait'?'다음 배정 대기':'기준 경로'} · ${route.model||'모델 미확인'}${route.effort?' · '+route.effort:''} · ${reasonNames[route.reason]||route.reason||'선택 이유 미제공'}`;
+const statusName={active:'사용 중',candidate:'후보',testing:'검토 중',withdrawn:'철회'};
+
+export function modelPolicyChoices(availability){
+ if(!Array.isArray(availability?.models))return [];
+ return availability.models.flatMap(row=>typeof row?.model==='string'&&Array.isArray(row.efforts)?row.efforts.filter(effort=>typeof effort==='string').map(effort=>({model:row.model,effort})):[]);
+}
+export function modelPolicyOutcome(operation,result){
+ const reason=result?.reason;
+ if(operation==='promote')return reason==='profile_scoped_evidence'?'이 작업군의 검증 근거로 후보를 앞으로의 배정 정책에 승격했습니다.':`승격 보류 · ${reasonNames[reason]||reason||'근거 부족'}. 다음 배정 정책은 유지됩니다.`;
+ if(operation==='withdraw')return reason==='restored_previous'?'사용 중인 후보를 철회하고 검증된 이전 경로로 복구했습니다. 앞으로의 배정부터 적용됩니다.':reason==='safe_fallback_required'?'사용 중인 후보를 철회했습니다. 사용 가능한 이전 경로가 없어 이후 배정은 확인을 기다립니다.':'후보를 철회했습니다. 앞으로의 배정에서 제외됩니다.';
+ return operation==='initialize'?'현재 배정을 기준 정책으로 등록했습니다. 이미 배정된 작업은 바뀌지 않습니다.':'후보를 등록했습니다. 품질과 사용량은 아직 검증되지 않았습니다.';
+}
+
+export function createModelPolicyUI({dialog,getContext}){
+ const content=dialog.querySelector('[data-policy-content]'),error=dialog.querySelector('[data-policy-error]'),notice=dialog.querySelector('[data-policy-notice]');
+ let generation=0,readSequence=0,opened=null,data=null,busy=false,choices=[];
+ const current=token=>{
+  const context=getContext();
+  return dialog.open&&generation===token.generation&&context.client===token.client&&context.activeTaskId===token.activeTaskId&&context.epoch===token.epoch&&context.client?.remote&&context.capabilities?.modelPolicyManagement===true&&context.tasks?.some(task=>task.id===token.childId&&task.parentTaskId&&task.assignment?.selection?.profile);
+ };
+ const token=()=>opened&&{...opened,generation};
+ const setError=message=>{error.textContent=message||'';};
+ const setNotice=message=>{notice.textContent=message||'';};
+ const render=()=>{
+  if(!data)return;
+  const assignment=data.assignment||{},policy=data.policy,availability=data.accountAvailability||{},route=data.route;
+  const supportedChoices=modelPolicyChoices(availability);
+  choices=supportedChoices.filter(choice=>!policy?.candidates?.some(candidate=>candidate.model===choice.model&&candidate.effort===choice.effort));
+  const isClaude=assignment.provider==='claude';
+  const accountStatus=availability.status==='fresh'?'최근 계정 목록 확인':availability.status==='static_supported_models_unverified'?'내장 목록 · 계정 사용 가능성 미확인':availability.status==='expired'?'계정 목록 만료':availability.status==='refresh_failed'?'최근 조회 실패':availability.status==='legacy_unverified'?'기존 보고 · 시각 미확인':availability.status||'확인 불가';
+  const source=availability.source==='desktop_account_catalog'?'데스크톱 계정 목록':availability.source==='built_in_catalog'?'앱 내장 목록':availability.source||'출처 미확인';
+  const rows=(policy?.candidates||[]).map(candidate=>`<li class="model-policy-candidate"><span><strong>${escape(candidate.model)}</strong> · ${escape(candidate.effort)} · 실제 버전 ${escape(candidate.modelVersion??'미확인')}<br><small>${escape(statusName[candidate.status]||candidate.status||'상태 미확인')}</small></span><span class="model-policy-actions">${candidate.status!=='active'&&candidate.status!=='withdrawn'&&candidate.id!==policy.baselineId?`<button type="button" class="secondary-button" data-policy-action="promote" data-candidate="${escape(candidate.id)}">승격 검토</button>`:''}${candidate.status!=='withdrawn'&&candidate.id!==policy.baselineId?`<button type="button" class="secondary-button" data-policy-action="withdraw" data-candidate="${escape(candidate.id)}">${candidate.status==='active'?'철회 · 이후 배정 복구':'후보 철회'}</button>`:''}</span></li>`).join('');
+  content.innerHTML=`<p class="model-policy-scope">이 정책의 변경은 <strong>앞으로 같은 작업군에 배정되는 작업</strong>에만 적용됩니다. 현재 하위 작업의 배정과 실행은 그대로 유지됩니다.</p><section><h3>현재 작업의 고정 배정</h3><p>${escape(providerName(assignment.provider))} · ${escape(assignment.model||'모델 미확인')} · ${escape(assignment.effort||'강도 미확인')} · 실제 모델 버전 ${escape(assignment.selection?.modelVersion??'미확인')}</p><p class="small-copy">배정 이유 · ${escape(reasonNames[assignment.selection?.reason]||assignment.selection?.reason||'기록 없음')} · 정책 버전 ${escape(assignment.selection?.policyVersion??'미확인')}</p></section><section><h3>계정 확인 상태</h3><p>${escape(accountStatus)} · ${escape(source)}</p><p class="small-copy">관측 ${escape(time(availability.observedAt))} · 만료 ${escape(time(availability.expiresAt))}${isClaude?' · 계획의 검토 강도(실제 CLI 적용 미확인)':''}</p></section><section><h3>앞으로의 정책 경로</h3><p>${escape(routeText(route))}</p>${policy?`<p class="small-copy">정책 버전 ${escape(policy.policyVersion)} · 관측 기록 ${escape(policy.observationCount)}건 / 비교 최소 ${escape(policy.minSamples)}쌍. 건수만으로 품질이 검증되지는 않습니다.</p><ul class="model-policy-list">${rows}</ul>`:'<p class="small-copy">저장된 정책이 없습니다. 현재 배정을 기준으로 초기화할 수 있습니다.</p><button type="button" class="primary-button" data-policy-action="initialize">기준 정책 초기화</button>'}</section>${policy?`<section><h3>후보 등록</h3>${choices.length?`<label for="model-policy-choice">${isClaude?'역할 별칭과 계획의 검토 강도 (계정 사용 가능성 미확인)':'계정 목록의 모델과 검토 강도'}</label><select id="model-policy-choice">${choices.map((choice,index)=>`<option value="${index}">${escape(choice.model)} · ${escape(choice.effort)}</option>`).join('')}</select><button type="button" class="secondary-button" data-policy-action="register_candidate">선택한 후보 등록</button><p class="small-copy">후보 등록은 품질 검증이나 자동 승격을 뜻하지 않습니다.</p>`:`<p class="small-copy">${supportedChoices.length?'계정 목록의 모든 모델·강도 조합이 이미 후보로 등록돼 있습니다.':'등록 가능한 계정 모델 목록이 없습니다. 계정 연결과 관측 시각을 확인하세요.'}</p>`}</section>`:''}`;
+  const canInitialize=isClaude||availability.status==='fresh'&&supportedChoices.some(choice=>choice.model===assignment.model&&choice.effort===assignment.effort);
+  if(!policy&&!canInitialize){
+   const initialize=content.querySelector('[data-policy-action="initialize"]');
+   if(initialize){const note=document.createElement('p');note.className='small-copy';note.textContent='계정에서 현재 배정 모델을 다시 확인해야 기준 정책을 초기화할 수 있습니다.';initialize.replaceWith(note);}
+  }
+  content.querySelectorAll('[data-policy-action]').forEach(button=>button.disabled=busy);
+ };
+ const read=async tokenValue=>{
+  if(!current(tokenValue))return;
+  const sequence=++readSequence;
+  let response;try{response=await tokenValue.client.readModelPolicy(tokenValue.childId);}catch(error){if(current(tokenValue)&&sequence===readSequence)throw error;return;}
+  if(!current(tokenValue)||sequence!==readSequence)return;
+  data=response;render();
+ };
+ const close=()=>{generation++;opened=null;data=null;busy=false;if(dialog.open)dialog.close();};
+ dialog.addEventListener('close',()=>{if(dialog.open)return;generation++;opened=null;data=null;busy=false;content.replaceChildren();setError('');setNotice('');});
+ dialog.addEventListener('click',async event=>{
+  const button=event.target.closest('[data-policy-action]');if(!button||busy)return;
+  const captured=token();if(!captured||!current(captured))return;
+  const operation=button.dataset.policyAction;
+  if(operation==='refresh'){busy=true;setError('');setNotice('');try{await read(captured);}catch(e){if(current(captured))setError(e.message||'정책 조회 실패');}finally{if(current(captured)){busy=false;render();}}return;}
+  if(!data)return;
+  const expectedStateVersion=data.policy?.stateVersion??0;
+  let input={operation,expectedStateVersion};
+  if(operation==='register_candidate'){
+   const index=Number(content.querySelector('#model-policy-choice')?.value),choice=choices[index];if(!choice)return;
+   input.candidate={id:`candidate-${crypto.randomUUID()}`,model:choice.model,effort:choice.effort};
+  }else if(operation==='promote'||operation==='withdraw')input.candidateId=button.dataset.candidate;
+  else if(operation!=='initialize')return;
+  if(!current(captured))return;
+  busy=true;render();setError('');setNotice('');
+  try{
+   const response=await captured.client.changeModelPolicy(captured.childId,input);
+   if(!current(captured))return;
+   data=response;render();setNotice(modelPolicyOutcome(operation,response));
+  }catch(e){
+   if(!current(captured))return;
+   if(e.status===409){setError('다른 기기에서 정책이 변경됐습니다. 최신 내용을 다시 확인한 뒤 원하는 작업을 다시 선택하세요.');try{await read(captured);}catch(readError){if(current(captured))setError(`최신 정책 조회 실패 · ${readError.message}`);}}
+   else setError(e.message||'정책 변경 실패. 서버 상태를 확인하세요.');
+  }finally{if(current(captured)){busy=false;render();}}
+ });
+ return {
+  close,
+  async open(childId){
+   close();const context=getContext();
+   if(!context.client?.remote||context.capabilities?.modelPolicyManagement!==true)return;
+   if(!context.tasks?.some(task=>task.id===childId&&task.parentTaskId&&task.assignment?.selection?.profile))return;
+   opened={client:context.client,activeTaskId:context.activeTaskId,epoch:context.epoch,childId};
+   dialog.showModal();content.textContent='모델 정책을 불러오는 중입니다.';setError('');setNotice('');
+   const captured=token();try{await read(captured);}catch(e){if(current(captured)){content.replaceChildren();setError(e.message||'정책 조회 실패. 연결을 확인하세요.');}}
+  },
+ };
+}

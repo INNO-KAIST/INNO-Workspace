@@ -1,6 +1,7 @@
 import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
 import {delegationProfile,availabilitySnapshot,unverifiedBaselineRoute} from './allocation-policy.mjs';
 import {D1ModelPolicies} from './model-policies.mjs';
+import {CLAUDE_ROLE_MODELS} from '../public/core/claude-routing.mjs';
 
 const own=(value,allowed,label)=>{
  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!allowed.includes(key)))throw new ValidationError(`Invalid ${label}`);
@@ -20,6 +21,12 @@ const projection=state=>state?{
  baseline:candidateSummary(state.candidates.find(row=>row.id===state.baselineId)),
  candidates:state.candidates.map(candidateSummary),
 }:null;
+const accountChoices=(provider,account,assignment)=>{
+ if(provider==='claude')return {provider,source:'built_in_catalog',status:'static_supported_models_unverified',observedAt:null,expiresAt:null,effortSource:'assignment_planning_intent',models:CLAUDE_ROLE_MODELS.map(model=>({model,efforts:[assignment.effort]}))};
+ const observedAt=Number.isFinite(account.reportedAt)&&account.reportedAt>=0?account.reportedAt:null;
+ return {provider,source:'desktop_account_catalog',status:account.availability,observedAt,expiresAt:observedAt===null?null:observedAt+7_200_000,effortSource:'account_catalog',
+  models:account.codex.map(({model,efforts})=>({model,efforts:[...efforts]}))};
+};
 
 export function createTaskPolicyManagement(store,catalog){
  async function context(taskId){
@@ -45,9 +52,7 @@ export function createTaskPolicyManagement(store,catalog){
    }catch(error){if(!(error instanceof ValidationError))throw error;route={status:'wait',policyVersion:state.policyVersion,evidenceIds:[],reason:'account_model_unavailable'};}
   }
   const provider=ctx.child.assignment.provider;
-  const accountAvailability=provider==='codex'
-   ?{provider,source:'desktop_account_catalog',status:ctx.account.availability}
-   :{provider,source:'built_in_catalog',status:'static_supported_models_unverified'};
+  const accountAvailability=accountChoices(provider,ctx.account,ctx.child.assignment);
   return {taskId:ctx.child.id,profile:ctx.profile,accountAvailability,
    assignment:{provider:ctx.child.assignment.provider,model:ctx.child.assignment.requestedModel,effort:ctx.child.assignment.effort,selection:ctx.child.assignment.selection},
    policy:projection(state),route,...(reason?{reason}:{})};

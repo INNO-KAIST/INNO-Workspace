@@ -31,6 +31,7 @@ export function createDesktopServer({token,publicDir,request,bridge,localRecords
     const run=p.match(/^\/api\/tasks\/([^/]+)\/run$/);
     if(req.method==='POST'&&run){const input=await body(req);if(input.provider==='codex')return json(res,202,{task:await bridge.startTask(decodeURIComponent(run[1]),input)});if(input.provider==='claude')return json(res,202,await request(p,input));return json(res,400,{error:'Invalid provider'});}
     if(req.method==='POST'&&/^\/api\/tasks\/[^/]+\/(?:delegation\/(?:resume|recover)|execution\/recover)$/.test(p))return json(res,200,await request(p,await body(req)));
+    if(/^\/api\/tasks\/[^/]+\/model-policy$/.test(p)&&['GET','POST'].includes(req.method))return json(res,200,await request(p,req.method==='POST'?await body(req):undefined));
     if(req.method==='POST'&&(p==='/api/tasks'||/^\/api\/tasks\/[^/]+\/actions$/.test(p)))return json(res,p==='/api/tasks'?201:200,await request(p,await body(req)));
     return json(res,404,{error:'not found'});
    }
