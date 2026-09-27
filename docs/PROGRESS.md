@@ -483,3 +483,17 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 실구독최소smoke1건 75b5debf-b50d-449a-8dad-00b5e06ebf1e: 도구/자료/위임없는Codex한줄요청 queued→completed/version4, INNO 연결 확인 결과클라우드회수. 실행ID579cad8a-76e3-424b-8398-4b8a930c5dd3, reported input18871/output46/cachedInput12416(입력포함), phase1기록. 실제Claude는이번릴리스에서재호출하지않음; MCPhelper불변/호환회귀와기존실증거에한정. 이smoke는추가모델품질비교가아님.
 - 짧은요청의기본입력문맥18871token관측: 품질유지조건에서고정prompt/도구/설정문맥의불필요소모분석이후속필요. 무조건모델하향/컨텍스트삭제로절감했다고주장하지않음.
 - 잔여: 실제여러기기/오프라인장기여정, 자동선택CR004/availability/comparison근거, 전용평가실행격리/정산, 유동에이전트및연구/문서제작품질. 부분릴리스완료이며PRD M5전체/전체플랫폼완료선언아님.
+
+### 2026-09-28 단일 원요청 중복 전달 절감 — 서버 단계
+- 직전 승인확인 턴은 상태 재확인만으로 no progress. 현재 tree9687d79 clean 재확인 후 승인된 사용량효율 범위의 원인 분석 재개.
+- createTask는 원요청을 prompt와 첫 user message에 저장하며 taskPrompt는 양쪽을 출력한다. 유일한 메시지가 user이고 원요청과 정확히 같을 때만 중복 대화 렌더를 기존 No additional messages 문구로 대체. 대체 문구가 기존 행보다 짧을 때만 적용한다.
+- 원요청 전문, 다중 대화/동일문장 후속 반복/수정/비user, 기존20개·8k/80k 경계 보존. stored task/message 원본은 수정하지 않는다. imported 단일동일본문에도 동일한 의미 유지.
+- 구현자 RED2/4→GREEN4/4 및 인접22/22, 메인 대상4/4 통과(.inno/tmp/prompt-dedup-main-target.log). server/runners.mjs 및 tests/runner-prompt.test.mjs만 해당. 독립리뷰와 cloud routine 별도 경로 검증 진행 중.
+- 이 변경은 플랫폼이 생성하는 문자열의 중복을 줄인다. 기존 smoke18871 입력토큰 전체의 원인 규명이나 실측 토큰 절감률을 주장하지 않는다. 사용자/프로젝트 지시문·도구 문맥은 제거하지 않았고 실제AI/네트워크 실행 없음. CR004결정 및 전체목표 미완료 유지.
+
+### 2026-09-28 단일 원요청 중복 전달 절감 — 클라우드·통합 완료
+- Worker routineText에도 서버와 동일한 유일 user/정확본문일치/짧은문구 조건 적용. createWorker의 인증된 run HTTP→가짜 Routine POST body까지 검증하며 Codex/local Routine/cloud Routine 세 경로를 모두 다뤘다.
+- 서버 독립53/53, Worker RED8/9→GREEN9/9 및 독립인접39/39. 메인 동결후 전체688/688(.inno/tmp/prompt-dedup-full.log), Worker dry-run(.inno/tmp/prompt-dedup-dry-run.log), 구문/diff 검사 통과. 실제 AI·운영 작업·외부 Routine 호출 없음.
+- 변경은 실행 프롬프트 렌더만이며 원요청, 저장 대화, 첨부, checkpoint, 라우팅/가용성/품질기준은 보존한다. 아주짧은 요청은 대체문구가 더길면 기존중복을 유지한다. 실제 tokenizer/구독소비 절감률은 미측정. 18871token 고정 문맥의 전체원인은 아직 확정하지 않았다.
+- PRD M1의 오래된 운영미배포 상태를 이미검증된 2026-09-28 a830cf3 부분릴리스 상태로 정정(범위변경없음). 이번 프롬프트 패치는 개발트리 검증완료이며 main/운영에는 아직 미반영. 다음 릴리스에서 브리지 idle/outbox 및 클라우드 작업상태 확인후 반영할 것.
+- CR004결정, 실제 자동선택/비교근거, 예산실행격리/정산, 유동에이전트와 연구·문서·기기/장기복구 여정은 여전히 미완료. 전체goal active 유지.

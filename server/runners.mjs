@@ -107,7 +107,14 @@ function taskPrompt(task, materials = [], ownership = {}) {
       material.text,
       '</source>',
     ].join('\n')).join('\n\n');
-  const conversation = Array.isArray(task.messages)
+  const noAdditionalMessages = '- No additional messages.';
+  const soleOriginal = Array.isArray(task.messages) && task.messages.length === 1
+    && task.messages[0]?.role === 'user'
+    && typeof task.messages[0].content === 'string'
+    && task.messages[0].content === task.prompt;
+  const conversation = soleOriginal && `user: ${task.prompt.slice(0, 8_000)}`.length > noAdditionalMessages.length
+    ? noAdditionalMessages
+    : Array.isArray(task.messages)
     ? task.messages.slice(-20).map(message => {
       const role = ['user', 'assistant', 'system'].includes(message?.role) ? message.role : 'system';
       return `${role}: ${String(message?.content ?? '').slice(0, 8_000)}`;
@@ -135,7 +142,7 @@ function taskPrompt(task, materials = [], ownership = {}) {
     task.prompt,
     '',
     'Recent durable conversation (newer messages can revise the original request):',
-    conversation || '- No additional messages.',
+    conversation || noAdditionalMessages,
     '',
     'Last durable checkpoint:',
     checkpoint ? String(checkpoint).slice(0, 8_000) : '- No checkpoint.',

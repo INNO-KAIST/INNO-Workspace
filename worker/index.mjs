@@ -70,7 +70,14 @@ function routineText(task, materials, ownership, catalog, capability, sourceDele
   const excerpts = materials.length
     ? materials.map((item, index) => `<source index="${index + 1}" name=${JSON.stringify(item.name)}>\n${item.text}\n</source>`).join('\n\n')
     : 'No source excerpts were supplied.';
-  const conversation = Array.isArray(task.messages)
+  const noAdditionalMessages = '- No additional messages.';
+  const soleOriginal = Array.isArray(task.messages) && task.messages.length === 1
+    && task.messages[0]?.role === 'user'
+    && typeof task.messages[0].content === 'string'
+    && task.messages[0].content === task.prompt;
+  const conversation = soleOriginal && `user: ${task.prompt.slice(0, 8_000)}`.length > noAdditionalMessages.length
+    ? noAdditionalMessages
+    : Array.isArray(task.messages)
     ? task.messages.slice(-20).map(message => `${message.role}: ${String(message.content ?? '').slice(0, 8_000)}`).join('\n\n').slice(-80_000)
     : '';
   const checkpoint = typeof task.checkpoint === 'string' ? task.checkpoint : task.checkpoint?.content;
@@ -92,7 +99,7 @@ function routineText(task, materials, ownership, catalog, capability, sourceDele
     `Execution generation: ${ownership.generation}`,
     `Request: ${task.prompt}`,
     'Recent durable conversation (newer messages can revise the original request):',
-    conversation || '- No additional messages.',
+    conversation || noAdditionalMessages,
     'Last durable checkpoint:',
     checkpoint ? String(checkpoint).slice(0, 8_000) : '- No checkpoint.',
     handoffContext(task),
