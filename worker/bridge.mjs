@@ -3,7 +3,7 @@ import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
 
 export class CloudBridge {
   constructor(store,{sourceDelegationVersion=0}={}){this.store=store;this.sourceDelegationVersion=sourceDelegationVersion;}
-  async start(id,input){
+  async start(id,input,claimOptions){
     const t=await this.store.requireTask(id);
     const sourceVersion=this.sourceDelegationVersion===1&&input.sourceDelegationVersion===1?1:0;
     if(t.attachments.length&&(t.parentTaskId||t.delegation?.state==='queued_for_review')&&sourceVersion!==1)throw new ValidationError('A compatible updated desktop is required for source delegation');
@@ -13,7 +13,7 @@ export class CloudBridge {
     if(t.attachments.some(a=>a.source==='url'))throw new ValidationError('URL references are not source content. Connect the required document before direct execution.');
     const names=t.attachments.filter(a=>a.source!=='url').map(a=>a.path||a.name).sort();
     if(!Array.isArray(input.sourceNames)||input.sourceNames.length>20||input.sourceNames.some(n=>typeof n!=='string')||JSON.stringify([...input.sourceNames].sort())!==JSON.stringify(names))throw new ValidationError('Reconnect every required source on this desktop.');
-    const claim=await this.store.claimExecution(id,{provider:'codex',expectedVersion:input.expectedVersion,leaseMs:120000,sourceBound:input.sourceNames.length>0});
+    const claim=await this.store.claimExecution(id,{provider:'codex',expectedVersion:input.expectedVersion,leaseMs:120000,sourceBound:input.sourceNames.length>0},claimOptions);
     await this.seen();return {...claim,sourceDelegationVersion:sourceVersion};
   }
   async enqueue(id,input){
@@ -24,7 +24,7 @@ export class CloudBridge {
       const now=this.store.now();return {...t,status:'queued',version:t.version+1,updatedAt:now,checkpoint:{...t.checkpoint,provider:'codex',status:'queued',updatedAt:now}};
     });
   }
-  async claim(){
+  async claim(claimOptions){
     await this.seen();
     const expired=await this.store.db.prepare("SELECT body FROM tasks WHERE json_extract(body,'$.status')='running' AND json_extract(body,'$.checkpoint.provider')='codex' AND json_extract(body,'$.checkpoint.expiresAt') < ?1 ORDER BY updated_at ASC LIMIT 1").bind(this.store.now()).first();
     if(expired){const t=JSON.parse(expired.body);try{await this.store.replaceTask(t.id,t.version,current=>({...current,status:'paused',version:current.version+1,updatedAt:this.store.now(),checkpoint:{...current.checkpoint,status:'paused',interruptedBy:'lease_expiry',interruptedVersion:current.version+1,failure:failureRecord({failure:{kind:'interrupted'}},this.store.now())}}));}catch(e){if(!(e instanceof ConflictError))throw e;}}
@@ -33,7 +33,7 @@ export class CloudBridge {
     const t=JSON.parse(row.body);
     if(t.checkpoint?.provider!=='codex')return null;
     if(t.attachments.length)return null;
-    try{return await this.store.claimExecution(t.id,{provider:'codex',expectedVersion:t.version,leaseMs:120000});}catch(e){if(e instanceof ConflictError)return null;throw e;}
+    try{return await this.store.claimExecution(t.id,{provider:'codex',expectedVersion:t.version,leaseMs:120000},claimOptions);}catch(e){if(e instanceof ConflictError&&e.code!=='DESKTOP_DELIVERY_CAPACITY')return null;throw e;}
   }
   async seen(){
     const now=Date.parse(this.store.now());

@@ -9,6 +9,7 @@ import {failureRecord} from '../public/core/failures.mjs';
 import {assertEvaluationAttachable,assertEvaluationBindingPreserved,evaluationBinding,reserveClaimBudget} from '../public/core/evaluation-claim.mjs';
 import {encodeStoredEvaluationBudget,parseStoredEvaluationBudget} from './evaluation-budgets.mjs';
 import {prepareDeliveryReceipt,receiptStatements} from './delivery-receipts.mjs';
+import {DesktopDeliveryCapacityError,prepareClaimReservation,reservationCapacity,reservationCapacityGuard,reservationStatements,MAX_DESKTOP_DELIVERIES} from './delivery-reservations.mjs';
 import {createSelectionState} from '../public/core/model-selection.mjs';
 import {MAX_MODEL_POLICY_PROFILES,profileKey} from './model-policies.mjs';
 import {delegationProfile} from './allocation-policy.mjs';
@@ -26,6 +27,7 @@ import {
 const REMOTE_RECOVERY = Symbol('remote recovery');
 const EVALUATION_ATTACH = Symbol('evaluation attach');
 const BUDGET_COMMIT = Symbol('budget commit');
+const CLAIM_RESERVATION = Symbol('desktop claim reservation');
 
 export const D1_SCHEMA = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -123,21 +125,29 @@ export class D1TaskStore {
     const budget=authorization?.[BUDGET_COMMIT];
     if(deliveryReceipt!==undefined&&budget)throw new ValidationError('Evaluation budget cannot carry a desktop receipt');
     const receipt=deliveryReceipt!==undefined?await prepareDeliveryReceipt(this.db,deliveryReceipt,current,next,this.now()):null;
+    const reservation=authorization?.[CLAIM_RESERVATION]
+      ?await prepareClaimReservation(this.db,authorization[CLAIM_RESERVATION],current,next):null;
+    if(reservation&&receipt)throw new ValidationError('Claim reservation cannot carry an accepted receipt');
     const budgetGuard=budget?' AND EXISTS (SELECT 1 FROM metadata m WHERE m.key = ?'+(bindings.length+1)+' AND m.value = ?'+(bindings.length+2)+')':'';
     if(budget)bindings.push(budget.key,budget.raw);
-    const statements=[this.db.prepare('UPDATE tasks SET version = ?1, updated_at = ?2, body = ?3 WHERE id = ?4 AND version = ?5' + guard + budgetGuard).bind(...bindings)];
+    const capacityGuard=reservation?reservationCapacityGuard(reservation,bindings.length+1):null;
+    if(capacityGuard)bindings.push(capacityGuard.value);
+    const statements=[this.db.prepare('UPDATE tasks SET version = ?1, updated_at = ?2, body = ?3 WHERE id = ?4 AND version = ?5' + guard + budgetGuard+(capacityGuard?.sql??'')).bind(...bindings)];
     if(budget)statements.push(this.db.prepare(`UPDATE metadata SET value=?1 WHERE key=?2 AND value=?3 AND changes()=1 AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=?4 AND t.version=?5 AND json_extract(t.body,'$.checkpoint.executionId')=?6 AND json_extract(t.body,'$.checkpoint.generation')=?7)`).bind(budget.nextRaw,budget.key,budget.raw,id,next.version,next.checkpoint.executionId,next.checkpoint.generation));
     statements.push(this.db.prepare("UPDATE metadata SET value = value + 1 WHERE key = 'revision' AND changes() = 1"));
-    if(budget)statements.push(this.db.prepare("INSERT INTO metadata (key,value) SELECT 'revision',0 WHERE changes()!=1"));
+    if(budget&&!reservation)statements.push(this.db.prepare("INSERT INTO metadata (key,value) SELECT 'revision',0 WHERE changes()!=1"));
+    if(reservation)statements.push(...reservationStatements(this.db,reservation,next));
     if(receipt)statements.push(...receiptStatements(this.db,receipt,next));
     let results;
     try{results=await this.db.batch(statements);}
     catch(error){
-      if(receipt){const latest=await this.db.prepare('SELECT version FROM tasks WHERE id=?1').bind(id).first();if(latest?.version!==expectedVersion)throw new ConflictError('task changed during update',latest?.version);}
+      if(receipt||reservation){const latest=await this.db.prepare('SELECT version FROM tasks WHERE id=?1').bind(id).first();if(latest?.version!==expectedVersion)throw new ConflictError('task changed during update',latest?.version);}
+      if(reservation&&await reservationCapacity(this.db,reservation.workspaceId)>=MAX_DESKTOP_DELIVERIES)throw new DesktopDeliveryCapacityError();
       throw error;
     }
     if (Number(results[0]?.meta?.changes ?? 0) !== 1) {
       const latest = await this.requireTask(id);
+      if(reservation&&await reservationCapacity(this.db,reservation.workspaceId)>=MAX_DESKTOP_DELIVERIES)throw new DesktopDeliveryCapacityError();
       throw new ConflictError('task changed during update', latest.version);
     }
     if(budget&&Number(results[1]?.meta?.changes??0)!==1)throw new Error('evaluation budget transaction invariant failed');
@@ -302,13 +312,18 @@ export class D1TaskStore {
     });
   }
 
-  async claimExecution(id, input) {
+  async claimExecution(id, input, options = {}) {
     const {provider, expectedVersion, leaseMs = 15 * 60_000, sourceBound = false, executionBudgetVersion} = input;
+    if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>!['deliveryReceiptVersion','workspaceId'].includes(key)))throw new ValidationError('Invalid desktop claim options');
+    const deliveryReceiptVersion=options.deliveryReceiptVersion;
+    if(deliveryReceiptVersion!==undefined&&(deliveryReceiptVersion!==1||provider!=='codex'||typeof options.workspaceId!=='string'))throw new ValidationError('Invalid desktop claim reservation');
+    if(deliveryReceiptVersion===undefined&&options.workspaceId!==undefined)throw new ValidationError('Invalid desktop claim reservation');
     if(typeof sourceBound!=='boolean')throw new ValidationError('sourceBound must be boolean');
     if (!['codex', 'claude'].includes(provider)) throw new ValidationError('provider must be codex or claude');
     if (!Number.isFinite(leaseMs) || leaseMs < 1_000 || leaseMs > 60 * 60_000) throw new ValidationError('invalid execution lease');
-    if(Object.keys(input).some(key=>key!=='executionBudgetVersion'&&(/budget|grant|reservation/i.test(key)||['jobId','phase','maxDurationMs','deadlineAtMs'].includes(key))))throw new ValidationError('unsupported execution budget option');
+    if(Object.keys(input).some(key=>key!=='executionBudgetVersion'&&(/budget|grant|reservation/i.test(key)||['jobId','phase','maxDurationMs','deadlineAtMs','deliveryReceiptVersion','workspaceId'].includes(key))))throw new ValidationError('unsupported execution budget option');
     const authorization={};
+    if(deliveryReceiptVersion===1)authorization[CLAIM_RESERVATION]={workspaceId:options.workspaceId};
     let claim;
     return this.replaceTask(id, expectedVersion, async current => {
       let budget;
@@ -343,7 +358,7 @@ export class D1TaskStore {
         ...current, status: 'running', version: current.version + 1, updatedAt: now,
         ...(current.delegation?.state==='queued_for_review'?{delegation:{...current.delegation,state:'reviewing'}}:{}),
         checkpoint: {
-          ...previous, ...(previous.handoff?{handoff:{...previous.handoff,dispatched:true}}:{}), failure: undefined, executionEvidence: undefined, wallElapsedMs: undefined, completedAt: undefined, ...claim, provider, sourceBound, status: 'running', claimedAt: now,
+          ...previous, ...(previous.handoff?{handoff:{...previous.handoff,dispatched:true}}:{}), failure: undefined, executionEvidence: undefined, wallElapsedMs: undefined, completedAt: undefined, ...claim, provider, sourceBound, status: 'running', claimedAt: now, deliveryReceiptVersion:deliveryReceiptVersion===1?1:undefined,
           ...(reserved?{evaluationBudget:reserved.checkpoint}:{}),
           expiresAt: new Date(nowMs + leaseMs).toISOString(), updatedAt: now,
         },

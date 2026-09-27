@@ -2,8 +2,8 @@
 ## 현재 재개 지점 (2026-09-28)
 - 전체 목표: 진행 중. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
-- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. 아직 ACK 및 클라이언트 정리·저장 상한 연결 없음.
-- 다음: claim 슬롯/보관 상한과 ack_pending 정리 프로토콜 → 통합·독립 검증 후 배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다.
+- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. 아직 예약의 receipt 전환·ACK 및 클라이언트 정리 연결 없음.
+- 다음: 예약→receipt 원자 전환 및 서버 ACK → 클라이언트 ack_pending 정리 프로토콜 → 통합·독립 검증 후 배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -578,3 +578,11 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 검증: HTTP RED 7건 중 6건 실패 재현 후 GREEN 11/11, 최종 전체 753/753 (.inno/tmp/receipt-http-full.log), 메인 대상 11/11, 독립 인접 80/80, 구문·diff 및 Wrangler dry-run 통과. 실제 AI·운영 호출 없음.
 - 다음 Task3: 실행 회차별 admission 예약과 receipt 합계 상한, 원자 예약→수신 기록 전환, 로컬 pending→ack_pending→서버 해제→파일 정리, 불확실 실행의 명시적 복구. 후속 설계는 delivery-receipts 계획에 기록했다. 전체 복구 및 제품 전체 완료는 아니다.
 - 마지막 테스트 보강: 실제 새 Codex generation 시작 후 이전 결과 replay에서도 새 owner·running 상태·전체 task snapshot·revision 보존을 확인했다. 테스트 파일만 변경했으며 최종 메인 대상 11/11 통과 (.inno/tmp/receipt-http-main-final.log). 전체 753/753 및 독립 80/80은 이 테스트 보강 전 동일 구현 코드 기준이다.
+
+## 2026-09-28 — SRC02/06 Task3a 내부 claim 예약·상한
+- claimExecution의 별도 내부 options에서만 receiptVersion1 Codex claim을 예약한다. API 입력에 예약 권한을 넣을 수 없고, HTTP 경로는 아직 이를 전달하지 않는다.
+- owner(workspace/task/execution/generation)별 reservation과 receipt 합계 1024건 상한. 실제 task UPDATE와 예약 INSERT 모두 workspace/cap guard를 가지며, task→budget(있는 경우)→revision→reservation→rollback sentinel 순서로 원자 처리한다. 상한은 DESKTOP_DELIVERY_CAPACITY로 구분하고 bridge가 삼키지 않는다.
+- 새 claim은 이전 checkpoint의 protocol version을 명시 갱신하며 legacy가 version1을 물려받지 않는다. 이전 실행 예약은 자동 삭제하지 않는다.
+- 검증: RED 8건 실패 후 최종 대상 12/12, 인접 74/74, 전체 765/765 (.inno/tmp/receipt-reservation-full.log); 메인 대상 12/12, 독립 71/71, 구문·diff 및 Wrangler dry-run 통과. 마지막 한 슬롯 동시 요청/동일 작업 CAS/INSERT 실패·0행/작업실 교체/평가예산 롤백을 포함한다.
+- 미완료: Task3b reservation→receipt 전환과 unreceipted 결과 거절, ACK 해제; 공개 claim 협상, 클라이언트 pending→ack_pending, no-result 명시 복구와 UI. 운영 기본 protocol은 계속 비활성이다. 새 스택·AI 실행·배포 없음.
+- 클라이언트 설계 검토에서 초기 outbox 쓰기 실패 후 새 claim 차단, Codex 로그인과 독립적인 pending drain, Windows power-loss 보장 한계를 계획에 추가했다.
