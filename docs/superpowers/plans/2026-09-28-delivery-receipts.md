@@ -1,0 +1,21 @@
+# Durable desktop delivery receipts — staged implementation
+
+Goal: SRC-02/06 accepted result response loss must not force AI rerun or block after a follow-up/new generation. Keep result originals out of receipts and avoid unbounded retention.
+Spec: docs/PRD.md approved recovery, account isolation, bounded accumulation requirements. Existing workspace binding stays enforced.
+Stack: existing JavaScript/Node/Worker/D1. No new language, runtime or schema assumed; metadata storage under review.
+
+- [x] Task1 shared descriptor: public/core/delivery-receipt.mjs + tests/delivery-receipt.test.mjs. Canonical JSON-wire payload hashing (object key order irrelevant, array order significant). Task/workspace/execution/generation/action define receipt ID; all payload fields define payload digest. Validate complete|fail, positive safe generation, bounded identifiers, UUID workspace, wire size <=700000 bytes, max64 nesting. No raw result/source/token fields returned. Real SHA256 tests with reordered fields, changed content/owner/action, invalid/oversized/deep JSON, undefined omitted per wire semantics. No production integration or capability advertisement.
+- [ ] Task2 store atomic receipt acceptance in the same batch as every desktop result transition: ordinary completion, failure, handoff, delegation, review retry/decision/pass. Explicit per-operation receipt intent; never inherit into unrelated reconciliation/dispatch. Replay read must precede catalog updates and dispatch. Same identity/different digest conflict; missing receipt is not evidence of an accepted result.
+- [ ] Task3 crash-safe local result→ack_pending→server release→local clear. Ack-pending only after verified success receipt, durable atomic replacement before release. Restart never reposts the result from ack phase. Missing release idempotence and corruption threat scope need independent final review. No TTL deletion of unacknowledged offline receipts; cap/new acceptance guards atomic. Validate all crash/write/network cuts and bounded retention.
+- [ ] Task4 integration/regression/independent review and guides. Do not enable public receipt protocol until the full lifecycle is tested. No actual AI calls. Existing legacy result recovery must be explicit, not inferred from current status alone.
+
+Design questions being resolved before Task2/3: explicit store hook for replaceTask and replaceDelegation; transaction cap behavior; protocol acknowledgment validation; normal cleanup versus incomplete offline deliveries. Task1 is deliberately not an operational recovery claim.
+
+## Independent review decisions (2026-09-28)
+- Receipt replay lookup must precede catalog.report and all status-only legacy shortcuts. CAS loser re-reads receipt; same descriptor only can ACK. Do not manufacture a receipt for predeployment legacy successes.
+- Atomic hooks are replaceTask and replaceDelegation. Pass explicit intent only to the accepting transition, never a mutable request-scoped flag inherited by dispatch/reconciliation. Preserve changes()-dependent budget/revision SQL; delegation receipt is gated by the accepted parent operationId and required child writes.
+- ACK missing can safely mean idempotent release under the trusted phase contract: ack_pending persisted only after a verified server acceptance descriptor. No HMAC key is necessary for this threat scope. Malicious local-file tampering and arbitrary D1 restore are not claimed supported. If a receipt exists, a different digest/owner is conflict.
+- A proposed global cap requires admission before AI: in-flight claim reservations plus unacknowledged receipts share slots, atomically. Applying a cap only at completion is insufficient. Resolve reservation cleanup for uncertain executions before enabling a capped protocol. No arbitrary TTL of unacknowledged records.
+- Existing temp-file+rename is atomic replacement but not proof of power-loss durability. Flush/rename behavior and recovery tests must substantiate any stronger crash-durability claim. Do not advertise more than tested.
+
+Task1 integration rule: derive the server descriptor from body(request) parsed JSON, and the client from the exact JSON-wire payload it will send. No separate unsent pre-serialization object. Descriptor module is not imported by production routes yet.

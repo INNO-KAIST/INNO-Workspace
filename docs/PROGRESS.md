@@ -538,3 +538,11 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 배포전후18작업(completed16/paused1/cancelled1), active0/outbox없음확인. 기존PID9488의desktop-bridge/idle재확인후종료, root clean b2b1886→1e504e3 fast-forward, 새PID26892 hidden실행. 양측sourcegate1, localbusyfalse/stoppedfalse/pendingfalse, stderr0bytes.
 - 실제Worker identity반복GET동일ID, 비인증401, 임의다른workspaceID+malformedbody POST /api/desktop/poll은본문검사/claim전409. 새bridge인증state조회정상, 기존작업상태보존. 토큰/작업본문/identity값출력없음. 실제구독AI실행은추가하지않았고 실제outbox동일결과회수는직전fakeWorker+실제파일통합증거에한정.
 - 남은복구: 수락완료응답유실후후속메시지/세대변경의receipt재전송, legacy명시귀속도구, 실행renew실패전후결과보존. CR004결정과전체기획도미완료. 전체goal active.
+
+### 2026-09-28 SRC02/06 내구성 수신 기록 Task1
+- 직전c925a00 계정격리운영반영은progress. 현재clean코드확인후완료응답유실+후속message/newgeneration 복구계획 docs/superpowers/plans/2026-09-28-delivery-receipts.md 작성. 기존승인복구/축적관리범위, 새스택없음.
+- 독립원자성감사: replaceTask/replaceDelegation accepting전이에만명시receipt전달, task mutation과receipt동일D1batch. changes()예산/리비전의존SQL보존, parentoperation/child성공검사, 동시CAS패자의receipt재조회필요. upfrontreplay는catalog.report/legacyshortcut/dispatch보다앞이어야함. receipt없는과거수락은추정증명하지않음.
+- 독립보존감사: pending→수락descriptor확인→atomic ack_pending저장→서버release→localclear 계약. 신뢰된로컬phase하에missingrelease는멱등응답가능, 별도HMAC영구키불필요. offlineunacked임의TTL삭제금지. 제안상한은inflightclaim슬롯예약까지원자결합해야완료후거절로AI낭비안함; 아직슬롯/정리구현전. fileflush/rename전원상실내구성은별도입증필요.
+- Task1 public/core/delivery-receipt.mjs의createDeliveryReceipt는JSONwire정규화·객체key순서무관/배열순서보존으로owner tuple id와전체payloadDigest SHA256생성. 반환은version/workspace/task/execution/generation/action/id/digest만, 원문없음. 700000UTF8bytes/depth64/식별자200문자/positiveSafeGeneration/UUIDv4와complete|fail검증. prototype형key·undefined/nonfinite/toJSON·cycle/BigInt 경계확인.
+- 구현자RED stub7/7실패→대상/인접15/15, 전체717/717보고. 메인대상8/8직접통과(.inno/tmp/delivery-receipt-target.log). 서버body파싱결과와클라이언트실제wirepayload기준으로만사용해야함. 아직productionimport/API연결/자동복구활성화/운영배포없음. Task2atomic전이와Task3ack/정리/예산슬롯을이어구현해야함.
+- 동결후독립대상8/8·모듈구문·diff검사통과, 차단결함없음. 전체goal active이며수신기록실연결/정리/legacy복구및전체기획잔여를유지한다.
