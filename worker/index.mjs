@@ -1,4 +1,5 @@
 import {sourceDelegationContext} from '../public/core/delegation-sources.mjs';
+import {sourceDelegationVersionFromEnvironment} from '../public/core/source-delegation-gate.mjs';
 import {deliveryPolicy} from '../public/core/delivery.mjs';
 import {sourceCoverageContext,verifyMaterialViews} from '../public/core/source-coverage.mjs';
 import {runClaudeClaim} from './dispatch.mjs';
@@ -250,4 +251,11 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
   };
 }
 
-export default createWorker();
+const defaultWorker = createWorker();
+const sourceDelegationWorker = createWorker({sourceDelegationVersion: 1});
+const configuredWorker = env => sourceDelegationVersionFromEnvironment(env) === 1 ? sourceDelegationWorker : defaultWorker;
+
+export default {
+  fetch(request, env, context) { return configuredWorker(env).fetch(request, env, context); },
+  scheduled(event, env, context) { return configuredWorker(env).scheduled(event, env, context); },
+};

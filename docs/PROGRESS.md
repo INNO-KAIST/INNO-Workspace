@@ -177,3 +177,13 @@ CR-003은 모델 출시 자동 감지뿐 아니라 계정 가용성, 작업 종�
 ### 2026-09-27 배포 후 실제 Claude callback 통과
 
 동일 시험 task1c797d64-1726-4d0f-9ef5-016e82e21101이 completed/version7로 종료했고 callback-check.txt 내용 INNO_CALLBACK_20260927_OK가 일치했다. 실제 Claude 구독→새 helper/executionCapability→운영 artifact 저장→완료 callback 경계를 1회 실행으로 확인했다(.inno/release-callback-result.json). Pages run36312501954 success, 실제 source-execution.mjs HTTP200. 인증 거절401 및 sourceGate0 유지도 확인했다. 전체 혼합 제공자/원본 첨부 협업 활성화는 여전히 다음 단계이며 이번 callback 성공을 그 증거로 대체하지 않는다.
+
+### 2026-09-27 SRC-04/REL-01 원본 협업 옵트인 준비
+
+Worker 실제 기본 export와 데스크톱 시작 스크립트가 동일한 `INNO_SOURCE_DELEGATION_VERSION` 문자열 `1`에만 버전 1을 선택하도록 연결했다. Worker fetch/scheduled는 같은 선택 함수를 사용하며 기존 테스트용 createWorker() 기본값 0과 서버·로컬 capability 교집합은 유지한다. 선행 RED에서 실제 기본 export의 버전 0을 확인했고 구현 후 대상 32/32, 전체 Node 429/429 통과(.inno/tmp/source-gate-node-tests.log). 실행·되돌림 절차는 DESKTOP-BRIDGE/DEPLOYMENT에 기록했다. 운영 변수·Wrangler 설정·실제 AI·배포는 변경하지 않았다. 따라서 W3 혼합 실험과 W4 운영 활성화는 계속 미완료다.
+
+### 2026-09-27 원본 협업 활성화 준비
+
+이전 goal turn은 main/Worker/Pages 실제 반영과 live Claude callback 완료로 진전됨. 이번 재개 clean/HEADcc07a53 확인. 실제 사용자 폴더 E:/Develop/INNO Workspace는 기존 codex/inno-workspace(4a93387)를 보존하고 codex/desktop-release를 origin/main에서 생성해 최신화했다. 전환 전 미커밋 변경, 4174/4175 listener, pending 결과 파일 없음 확인. 격리 구현 폴더는 codex/source-release 유지.
+
+기본 비활성 gate를 서버와 데스크톱 각각 명시적 INNO_SOURCE_DELEGATION_VERSION=1로 활성화하는 운영 설정과 회귀검증을 Sol 구현자에게 위임했다. 별도 Sol은 실제 2child+1review 혼합 구독 시험의 단계별 스크립트만 준비 중이며, 양측 gate를 확인하기 전 실구독 시험/운영 task 생성은 하지 않는다. 신규 기능 범위 확장이 아닌 승인된 SRC04/REL01 활성화 작업이다.

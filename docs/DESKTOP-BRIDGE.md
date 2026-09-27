@@ -6,6 +6,8 @@
 ## 실행
 프로젝트의 `Start INNO Workspace.cmd` 또는 `Start INNO Cloud Bridge.cmd`를 실행합니다. 이어서 프로젝트의 `.inno/DESKTOP-ACCESS.md`에 있는 개인 접속 링크를 엽니다. 별도 인증값 입력은 필요 없습니다. 기존 로컬 전용 모드는 `Start INNO Local Only.cmd`로 보존했습니다. Node.js 24와 ChatGPT 구독으로 로그인한 Codex가 필요합니다. 현재 Codex 앱 터미널에서는 `node scripts/desktop-bridge.mjs`로 실행할 수 있습니다. 기존 `.inno/cloud-access-token.txt`를 사용하며 키를 다시 입력할 필요는 없습니다. Ctrl+C로 중지합니다. 중복 실행은 로컬 잠금으로 차단됩니다.
 
+원본 협업 하위 작업은 시작 시 프로세스 환경변수 `INNO_SOURCE_DELEGATION_VERSION`이 정확히 문자열 `1`일 때만 데스크톱에서 지원을 알립니다. PowerShell에서 시험할 때는 실행 전에 `$env:INNO_SOURCE_DELEGATION_VERSION='1'`을 설정하고 위 Node 명령으로 연결기를 시작합니다. `.cmd` 실행기도 시작한 셸의 환경을 상속합니다. 이미 실행 중인 연결기는 환경 변경을 반영하지 않으므로 정상 종료한 뒤 다시 시작해야 합니다. 되돌릴 때는 연결기를 종료하고 `Remove-Item Env:INNO_SOURCE_DELEGATION_VERSION -ErrorAction SilentlyContinue` 후 다시 시작합니다. 값이 없거나 `1` 이외이면 지원 버전은 0입니다. 서버도 별도로 같은 버전을 지원해야 하며, 실제 실행에는 양쪽 capability의 교집합만 사용합니다. 현재 운영 설정을 이 안내만으로 변경하지 않습니다.
+
 휴대폰은 기존 클라우드 URL, 데스크톱은 위 개인 접속 링크를 사용하면 같은 클라우드 작업 기록을 봅니다. 데스크톱 화면에서 작업을 선택하고 파일 또는 폴더를 연결한 뒤 Codex 실행을 누르세요. 원본 내용은 로컬 Codex에만 일시 전달되며, 클라우드에는 참조 메타데이터와 생성 결과만 저장됩니다. 파일이 바뀌거나 연결이 끊겼으면 재연결해야 합니다. 로컬 전용 화면에서 생성한 작업의 자동 이전은 아직 하지 않습니다. PC가 꺼져 있을 때 Codex 요청은 대기하며, Claude 클라우드 실행은 별도로 사용할 수 있습니다.
 
 ## 효율성과 보존

@@ -10,6 +10,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {withoutApiEnvironment,createCodexRunner} from '../server/runners.mjs';
 import {createDesktopBridge} from '../server/desktop-bridge.mjs';
+import {sourceDelegationVersionFromEnvironment} from '../public/core/source-delegation-gate.mjs';
 import {createFileOutbox} from '../server/file-outbox.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const privateDir=path.join(root,'.inno');mkdirSync(privateDir,{recursive:true});
@@ -28,7 +29,7 @@ if(process.platform==='win32'&&process.env.LOCALAPPDATA){
  }
 }
 const spawnCodex=(command,args,options)=>spawn(command==='codex'?codexCommand:command,args,options);
-const runner=createCodexRunner({spawnProcess:spawnCodex,modelCatalog:createModelCatalog({spawnProcess:spawnCodex,env:withoutApiEnvironment(),cwd:root}),cwd:path.join(privateDir,'desktop-runs'),managedDelivery:true});
+const runner=createCodexRunner({spawnProcess:spawnCodex,modelCatalog:createModelCatalog({spawnProcess:spawnCodex,env:withoutApiEnvironment(),cwd:root}),cwd:path.join(privateDir,'desktop-runs'),managedDelivery:true,sourceDelegationVersion:sourceDelegationVersionFromEnvironment(process.env)});
 if(!await runner.available())throw Error('Sign in to Codex using your ChatGPT subscription before starting the desktop bridge.');
 let lock;try{lock=await acquireBridgeLock();}catch(error){const message=startupPortMessage(error);if(!message)throw error;console.error(message);process.exit(1);}
 const bridge=createDesktopBridge({request,runner,outbox,beforeClaim:()=>checkRunStorage(path.join(privateDir,'desktop-runs')),onError:e=>console.error(e.status?'INNO result delivery HTTP '+e.status:'INNO execution interrupted; saved results are retained.')});

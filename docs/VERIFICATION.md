@@ -326,3 +326,9 @@ Evidence: .inno/source-live-review.mjs and .inno/tmp/source-live-review/result.j
 ### 2026-09-27 배포 후 실제 Claude callback 통과
 
 동일 시험 task1c797d64-1726-4d0f-9ef5-016e82e21101이 completed/version7로 종료했고 callback-check.txt 내용 INNO_CALLBACK_20260927_OK가 일치했다. 실제 Claude 구독→새 helper/executionCapability→운영 artifact 저장→완료 callback 경계를 1회 실행으로 확인했다(.inno/release-callback-result.json). Pages run36312501954 success, 실제 source-execution.mjs HTTP200. 인증 거절401 및 sourceGate0 유지도 확인했다. 전체 혼합 제공자/원본 첨부 협업 활성화는 여전히 다음 단계이며 이번 callback 성공을 그 증거로 대체하지 않는다.
+
+### 2026-09-27 — source delegation release opt-in preparation
+
+The production Worker export now selects fixed gate-0 or gate-1 instances from the exact string `INNO_SOURCE_DELEGATION_VERSION='1'`; both fetch and scheduled use the same selection. The desktop launcher passes the same strict environment gate into createCodexRunner. The existing createWorker() default and local/server capability intersection remain unchanged. Missing, numeric, approximate and other values fail closed. No Wrangler variable, machine environment, live AI run, or deployment was changed.
+
+TDD evidence: the new test against the real default Worker export failed before implementation because opt-in still advertised version 0; after implementation, the focused source/desktop tests passed 32/32. Final focused gate test passed 2/2; full Node suite passed 429/429 with `node --test --test-isolation=none tests/*.test.mjs` (log: `.inno/tmp/source-gate-node-tests.log`). `npm` is unavailable in this shell, so the package script's Node command was run directly. This verifies local wiring and regression behavior, not operational activation or a mixed-provider source run.
