@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {reviewObservationSection} from '../public/review-observation-ui.mjs';
+import {reviewObservationSection,createReviewObservationRecovery} from '../public/review-observation-ui.mjs';
+import {WorkspaceClient} from '../public/core/client.mjs';
 
 const parent=()=>({
- id:'parent',status:'completed',checkpoint:{status:'completed',executionId:'review-current',generation:2},
+ id:'parent',version:7,status:'completed',checkpoint:{status:'completed',executionId:'review-current',generation:2},
  delegation:{state:'completed',batchId:'batch-current',epoch:3,children:[
   {taskId:'child-a',role:'첫 검토',provider:'codex'},
   {taskId:'child-b',role:'둘째 검토',provider:'claude'},
@@ -13,6 +14,13 @@ const parent=()=>({
   {childTaskId:'child-b',status:'duplicate',reason:'duplicate_execution',attempts:0,nextAt:null},
  ]},
 });
+const failedParent=()=>{const task=parent();task.reviewObservation.children[0]={childTaskId:'child-a',status:'failed',reason:'storage_error',attempts:3,nextAt:null};return task;};
+const deferred=()=>{let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};};
+function recoveryFixture(){
+ const context={client:{remote:true},task:failedParent(),epoch:1,capabilities:{reviewObservationRecovery:true}},notices=[],changes=[];
+ const recovery=createReviewObservationRecovery({getContext:()=>context,onChange:()=>changes.push(context.task?.id),onNotice:message=>notices.push(message)});
+ return {context,notices,changes,recovery};
+}
 
 test('completed parent snapshot shows recorded and duplicate storage states without claiming quality',()=>{
  const html=reviewObservationSection(parent());
@@ -21,6 +29,13 @@ test('completed parent snapshot shows recorded and duplicate storage states with
  assert.match(html,/품질 통과나 자동 승격을 뜻하지 않습니다/);
  assert.match(html,/작업 결과와 별도/);
  assert.doesNotMatch(html,/<button|data-retry|정책 품질 통과/);
+});
+
+test('actual saved observation reason keys have clear labels',()=>{
+ const task=parent();task.reviewObservation.children[0].reason='recorded';
+ assert.match(reviewObservationSection(task),/정책 관측이 기록됐습니다/);
+ task.reviewObservation.children[0].reason='critical_regression';
+ assert.match(reviewObservationSection(task),/중대한 품질 문제의 관측이 기록됐습니다/);
 });
 
 test('current completed parent identity gates all stored success labels',()=>{
@@ -89,4 +104,113 @@ test('existing task snapshot supplies diagnostics without a new request or actio
  assert.match(html,/정책 관측 기록/);
  assert.equal((html.match(/class="review-observation-row(?:\s|")/g)||[]).length,2);
  assert.doesNotMatch(html,/href=|<button|data-action/);
+});
+
+test('remote client sends only explicit saved-observation recovery POST',async()=>{
+ const client=new WorkspaceClient({remote:true,baseUrl:'https://example.test'}),calls=[];
+ client.request=async(path,body)=>{calls.push({path,body});return {task:failedParent(),requeued:1};};
+ const input={operation:'retry_failed',expectedVersion:7,reviewExecutionId:'review-current',reviewGeneration:2,batchId:'batch-current',epoch:3};
+ assert.equal((await client.retryReviewObservations('parent/one',input)).requeued,1);
+ assert.deepEqual(calls,[{path:'/api/tasks/parent%2Fone/review-observations',body:input}]);
+ await assert.rejects(new WorkspaceClient().retryReviewObservations('parent',input),/서버 연결/);
+});
+
+test('failed completed review shows one saved-results recovery action only when supported',()=>{
+ const f=recoveryFixture();
+ assert.match(reviewObservationSection(f.context.task,{recovery:f.recovery.control()}),/관측 기록 다시 수집/);
+ assert.match(reviewObservationSection(f.context.task,{recovery:f.recovery.control()}),/저장된 검토 결과.*AI를 다시 실행하지 않습니다.*다음 정기 처리/s);
+ f.context.capabilities.reviewObservationRecovery=false;
+ assert.doesNotMatch(reviewObservationSection(f.context.task,{recovery:f.recovery.control()}),/<button/);
+ f.context.capabilities.reviewObservationRecovery=true;f.context.client.remote=false;
+ assert.doesNotMatch(reviewObservationSection(f.context.task,{recovery:f.recovery.control()}),/<button/);
+ f.context.client.remote=true;f.context.task.reviewObservation.reviewGeneration=1;
+ assert.doesNotMatch(reviewObservationSection(f.context.task,{recovery:f.recovery.control()}),/<button/);
+ f.context.task=failedParent();f.context.task.reviewObservation.children[1].status='unknown';
+ assert.doesNotMatch(reviewObservationSection(f.context.task,{recovery:f.recovery.control()}),/<button/);
+});
+
+test('duplicate click stays disabled through rerenders and refreshes once after an acknowledged POST',async()=>{
+ const f=recoveryFixture(),pending=deferred(),calls=[];let reads=0;
+ f.context.client.retryReviewObservations=(id,input)=>{calls.push({id,input});return pending.promise;};
+ f.context.client.refresh=async()=>{reads++;f.context.task={...f.context.task,version:8,reviewObservation:{...f.context.task.reviewObservation,children:f.context.task.reviewObservation.children.map((row,i)=>i?row:{...row,status:'pending',attempts:0,nextAt:null})}};};
+ const first=f.recovery.retry();const second=f.recovery.retry();
+ assert.equal(calls.length,1);assert.equal(f.recovery.control().disabled,true);
+ assert.match(reviewObservationSection(f.context.task,{recovery:f.recovery.control()}),/disabled/);
+ pending.resolve({task:{...f.context.task,version:8},requeued:1});await Promise.all([first,second]);
+ assert.equal(reads,1);assert.equal(f.changes.length,2);assert.equal(f.recovery.control(),null);
+ assert.doesNotMatch(reviewObservationSection(f.context.task,{recovery:f.recovery.control()}),/<button/);
+ assert.deepEqual(calls[0],{id:'parent',input:{operation:'retry_failed',expectedVersion:7,reviewExecutionId:'review-current',reviewGeneration:2,batchId:'batch-current',epoch:3}});
+});
+
+test('task switch or client replacement drops delayed response without refresh, render or old notice',async()=>{
+ for(const switchContext of [context=>{context.task={...failedParent(),id:'other'};context.epoch++;},context=>{context.client={remote:true,refresh:async()=>{throw Error('wrong account')}};context.epoch++;}]){
+  const f=recoveryFixture(),pending=deferred();let reads=0;
+  f.context.client.retryReviewObservations=()=>pending.promise;f.context.client.refresh=async()=>{reads++;};
+  const running=f.recovery.retry();switchContext(f.context);pending.resolve({task:{...failedParent(),version:8},requeued:1});await running;
+  assert.equal(reads,0);assert.deepEqual(f.notices,[]);assert.deepEqual(f.changes,['parent']);
+ }
+});
+
+test('uncertain POST and failed refresh lock mutation until explicit read-only confirmation',async()=>{
+ const f=recoveryFixture();let posts=0,reads=0,failRead=true;
+ f.context.client.retryReviewObservations=async()=>{posts++;throw Error('connection lost');};
+ f.context.client.refresh=async()=>{reads++;if(failRead)throw Error('offline');};
+ await f.recovery.retry();assert.equal(posts,1);assert.equal(reads,1);
+ assert.equal(f.recovery.control().mode,'verify');
+ assert.match(reviewObservationSection(f.context.task,{recovery:f.recovery.control()}),/상태 다시 확인/);
+ await f.recovery.retry();assert.equal(posts,1);
+ await f.recovery.verify();assert.equal(reads,2);assert.equal(posts,1);assert.equal(f.recovery.control().mode,'verify');
+ failRead=false;await f.recovery.verify();assert.equal(reads,3);assert.equal(f.recovery.control().mode,'retry');
+ await f.recovery.retry();assert.equal(posts,2);assert.equal(reads,4);
+});
+
+test('a 409 refreshes once and a still-failed row needs another explicit click',async()=>{
+ const f=recoveryFixture();let posts=0,reads=0;
+ f.context.client.retryReviewObservations=async()=>{posts++;throw Object.assign(Error('version conflict'),{status:409});};
+ f.context.client.refresh=async()=>{reads++;};
+ await f.recovery.retry();assert.equal(posts,1);assert.equal(reads,1);
+ assert.equal(f.recovery.control().mode,'retry');assert.match(f.notices.at(-1),/최신 상태/);
+ assert.equal(posts,1);
+ await f.recovery.retry();assert.equal(posts,2);
+});
+
+test('uncertain POST with successful confirmation GET permits only a new explicit click',async()=>{
+ const f=recoveryFixture();let posts=0,reads=0;
+ f.context.client.retryReviewObservations=async()=>{posts++;throw Error('connection lost');};
+ f.context.client.refresh=async()=>{reads++;};
+ await f.recovery.retry();
+ assert.equal(posts,1);assert.equal(reads,1);assert.equal(f.recovery.control().mode,'retry');
+ await Promise.resolve();assert.equal(posts,1);
+ await f.recovery.retry();assert.equal(posts,2);
+});
+
+test('same selected task with a new review identity redraws fresh state without old notice',async()=>{
+ const f=recoveryFixture();let reads=0;
+ f.context.client.retryReviewObservations=async()=>({requeued:1});
+ f.context.client.refresh=async()=>{reads++;f.context.task={...failedParent(),version:8,checkpoint:{...f.context.task.checkpoint,executionId:'review-next'},reviewObservation:{...f.context.task.reviewObservation,reviewExecutionId:'review-next'}};};
+ await f.recovery.retry();
+ assert.equal(reads,1);assert.deepEqual(f.changes,['parent','parent']);assert.deepEqual(f.notices,[]);
+});
+
+test('late confirmation for an old review cannot unlock a newer uncertain review',async()=>{
+ const f=recoveryFixture(),oldRead=deferred();let reads=0;
+ f.context.client.retryReviewObservations=async()=>{throw Error('connection lost');};
+ f.context.client.refresh=()=>++reads===1?oldRead.promise:Promise.reject(Error('offline'));
+ const old=f.recovery.retry();await Promise.resolve();
+ f.context.task={...failedParent(),version:8,checkpoint:{...f.context.task.checkpoint,executionId:'review-next'},reviewObservation:{...f.context.task.reviewObservation,reviewExecutionId:'review-next'}};
+ await f.recovery.retry();assert.equal(f.recovery.control().mode,'verify');
+ oldRead.resolve();await old;
+ assert.equal(f.recovery.control().mode,'verify');
+});
+
+test('old review read failure cannot re-enable a newer in-flight recovery',async()=>{
+ const f=recoveryFixture(),oldRead=deferred(),newPost=deferred();let posts=0;
+ f.context.client.retryReviewObservations=()=>++posts===1?Promise.reject(Error('old connection lost')):newPost.promise;
+ f.context.client.refresh=()=>oldRead.promise;
+ const old=f.recovery.retry();await Promise.resolve();
+ f.context.task={...failedParent(),version:8,checkpoint:{...f.context.task.checkpoint,executionId:'review-next'},reviewObservation:{...f.context.task.reviewObservation,reviewExecutionId:'review-next'}};
+ const next=f.recovery.retry();assert.equal(f.recovery.control().disabled,true);
+ oldRead.reject(Error('old read failed'));await old;
+ assert.equal(f.recovery.control().disabled,true);
+ newPost.resolve({requeued:1});await next;
 });

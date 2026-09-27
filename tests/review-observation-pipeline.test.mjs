@@ -21,6 +21,84 @@ async function fixture(t,{policy=true}={}){
  return {db,store,parent,children,assignments,pipeline:createReviewObservationPipeline(store)};
 }
 
+const recoveryInput=task=>({operation:'retry_failed',expectedVersion:task.version,reviewExecutionId:task.checkpoint.executionId,reviewGeneration:task.checkpoint.generation,batchId:task.delegation.batchId,epoch:task.delegation.epoch});
+async function failedParent(f){
+ await f.pipeline.process('parent');
+ const current=await f.store.requireTask('parent');
+ return f.store.replaceTask('parent',current.version,task=>({...task,version:task.version+1,updatedAt:when,reviewObservation:{...task.reviewObservation,children:task.reviewObservation.children.map((row,i)=>i===0?{...row,status:'failed',reason:'storage_error',attempts:3,nextAt:null}:row)}}));
+}
+
+test('authenticated recovery queues only failed saved observation and never runs AI',async t=>{
+ const f=await fixture(t),before=await failedParent(f);let fires=0;
+ const worker=createWorker({fetchFn:async()=>{fires++;throw Error('AI must not run')}}),env={DB:f.db,ACCESS_TOKEN:'test-secret-01234567890123456789'};
+ const url='https://inno.example/api/tasks/parent/review-observations',input=recoveryInput(before);
+ assert.equal((await worker.fetch(new Request(url,{method:'POST',body:JSON.stringify(input)}),env)).status,401);
+ const response=await worker.fetch(new Request(url,{method:'POST',headers:{authorization:`Bearer ${env.ACCESS_TOKEN}`,'content-type':'application/json'},body:JSON.stringify(input)}),env);
+ assert.equal(response.status,200);const {task,requeued}=await response.json();assert.equal(requeued,1);assert.equal(fires,0);
+ assert.equal(task.status,'completed');assert.deepEqual(task.checkpoint,before.checkpoint);assert.deepEqual(task.messages,before.messages);assert.deepEqual(task.artifacts,before.artifacts);
+ assert.deepEqual(task.reviewObservation.children[0],{childTaskId:'child-0',status:'pending',attempts:0,nextAt:null});
+ assert.deepEqual(task.reviewObservation.children[1],before.reviewObservation.children[1]);
+ assert.equal(task.reviewObservation.recoveryCount,1);assert.ok(Date.parse(task.reviewObservation.lastRecoveryAt)>=Date.parse(before.updatedAt));
+ const state=await worker.fetch(new Request('https://inno.example/api/state',{headers:{authorization:`Bearer ${env.ACCESS_TOKEN}`}}),env);
+ assert.equal((await state.json()).capabilities.reviewObservationRecovery,true);
+ await f.pipeline.process('parent');const after=await f.store.requireTask('parent');assert.equal(after.reviewObservation.children[0].status,'duplicate');
+ assert.equal((await new D1ModelPolicies(f.db).read(f.assignments[0].selection.profile)).observations.length,1);
+});
+
+test('recovery rejects extra keys, invalid types, stale identity and malformed saved rows',async t=>{
+ const f=await fixture(t),before=await failedParent(f),worker=createWorker(),env={DB:f.db,ACCESS_TOKEN:'test-secret-01234567890123456789'};
+ const url='https://inno.example/api/tasks/parent/review-observations';
+ const post=async input=>worker.fetch(new Request(url,{method:'POST',headers:{authorization:`Bearer ${env.ACCESS_TOKEN}`,'content-type':'application/json'},body:JSON.stringify(input)}),env);
+ for(const change of [input=>({...input,unexpected:true}),input=>({...input,reviewExecutionId:1}),input=>({...input,reviewGeneration:0}),input=>({...input,batchId:''}),input=>({...input,epoch:1.5}),input=>({...input,operation:'run'})])assert.equal((await post(change(recoveryInput(before)))).status,400);
+ for(const change of [input=>({...input,reviewExecutionId:'review-old'}),input=>({...input,batchId:'batch-old'}),input=>({...input,epoch:2})])assert.equal((await post(change(recoveryInput(before)))).status,409);
+ const altered={...before,version:before.version+1,reviewObservation:{...before.reviewObservation,children:[{...before.reviewObservation.children[0],childTaskId:'child-1'},before.reviewObservation.children[1]]}};
+ await f.db.prepare('UPDATE tasks SET version=?1,body=?2 WHERE id=?3').bind(altered.version,JSON.stringify(altered),'parent').run();
+ assert.equal((await post(recoveryInput(altered))).status,409);
+ assert.equal((await f.store.requireTask('parent')).reviewObservation.children[0].status,'failed');
+});
+
+test('same-version dual recovery has one CAS winner and the second click conflicts',async t=>{
+ const f=await fixture(t),before=await failedParent(f),worker=createWorker(),env={DB:f.db,ACCESS_TOKEN:'test-secret-01234567890123456789'};
+ // TestD1 wraps synchronous SQLite; serialize its batches like D1 transactions.
+ const batch=f.db.batch.bind(f.db);let lane=Promise.resolve();
+ f.db.batch=statements=>{const next=lane.then(()=>batch(statements));lane=next.catch(()=>{});return next;};
+ const url='https://inno.example/api/tasks/parent/review-observations',input=recoveryInput(before);
+ const post=()=>worker.fetch(new Request(url,{method:'POST',headers:{authorization:`Bearer ${env.ACCESS_TOKEN}`,'content-type':'application/json'},body:JSON.stringify(input)}),env);
+ const replies=await Promise.all([post(),post()]);
+ assert.deepEqual(replies.map(r=>r.status).sort(),[200,409],JSON.stringify(await Promise.all(replies.map(r=>r.clone().json()))));
+ const saved=await f.store.requireTask('parent');assert.equal(saved.version,before.version+1);assert.equal(saved.reviewObservation.recoveryCount,1);
+ assert.deepEqual(saved.reviewObservation.children.map(row=>row.status),['pending','recorded']);
+ assert.equal((await post()).status,409);
+});
+
+test('no failed row and a child or malformed marker cannot request recovery',async t=>{
+ const f=await fixture(t),worker=createWorker(),env={DB:f.db,ACCESS_TOKEN:'test-secret-01234567890123456789'};
+ await f.pipeline.process('parent');let parent=await f.store.requireTask('parent');
+ const post=async input=>worker.fetch(new Request('https://inno.example/api/tasks/parent/review-observations',{method:'POST',headers:{authorization:`Bearer ${env.ACCESS_TOKEN}`,'content-type':'application/json'},body:JSON.stringify(input)}),env);
+ assert.equal((await post(recoveryInput(parent))).status,409);
+ assert.equal((await f.store.requireTask('parent')).version,parent.version);
+ parent=await failedParent(f);
+ const childLike={...parent,version:parent.version+1,parentTaskId:'other'};
+ await f.db.prepare('UPDATE tasks SET version=?1,body=?2 WHERE id=?3').bind(childLike.version,JSON.stringify(childLike),'parent').run();
+ assert.equal((await post(recoveryInput(childLike))).status,409);
+ const malformed={...childLike,version:childLike.version+1,parentTaskId:undefined,reviewObservation:{...childLike.reviewObservation,reviewExecutionId:undefined}};
+ await f.db.prepare('UPDATE tasks SET version=?1,body=?2 WHERE id=?3').bind(malformed.version,JSON.stringify(malformed),'parent').run();
+ assert.equal((await post(recoveryInput(malformed))).status,409);
+ assert.equal((await f.store.requireTask('parent')).reviewObservation.children[0].status,'failed');
+});
+
+test('old in-flight observation cannot overwrite a manually requeued generation',async t=>{
+ const f=await fixture(t);let release,entered;const waiting=new Promise(resolve=>{release=resolve}),blocked=new Promise(resolve=>{entered=resolve});
+ let held=false;const wrapped=Object.create(f.store);
+ wrapped.requireTask=async id=>{if(id==='child-0'&&!held){held=true;entered();await waiting;}return f.store.requireTask(id);};
+ const old=createReviewObservationPipeline(wrapped).process('parent');await blocked;
+ let parent=await f.store.requireTask('parent');parent=await f.store.replaceTask('parent',parent.version,task=>({...task,version:task.version+1,updatedAt:when,reviewObservation:{...task.reviewObservation,children:task.reviewObservation.children.map((row,i)=>i===0?{...row,status:'failed',reason:'storage_error',attempts:3,nextAt:null}:row)}}));
+ const queued=await f.pipeline.retryFailed('parent',recoveryInput(parent));assert.equal(queued.requeued,1);
+ release();await old;
+ const saved=await f.store.requireTask('parent');assert.equal(saved.reviewObservation.children[0].status,'pending');assert.equal(saved.reviewObservation.recoveryCount,1);
+ await f.pipeline.process('parent');assert.equal((await f.store.requireTask('parent')).reviewObservation.children[0].status,'duplicate');
+});
+
 test('drain recovers an unmarked completed review, records both children once, and leaves a durable result',async t=>{
  const f=await fixture(t);assert.deepEqual(await f.pipeline.drain(),{checked:1,failed:0});
  const parent=await f.store.requireTask('parent');assert.deepEqual(parent.reviewObservation.children.map(x=>x.status),['recorded','recorded']);

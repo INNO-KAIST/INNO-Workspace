@@ -105,6 +105,10 @@ export class WorkspaceClient {
     if(!this.remote)throw new Error('하위 작업 복구에는 서버 연결이 필요합니다.');
     return this.request(`/api/tasks/${encodeURIComponent(id)}/delegation/recover`,input);
   }
+  async retryReviewObservations(id,input){
+    if(!this.remote)throw new Error('관측 기록 복구에는 서버 연결이 필요합니다.');
+    return this.request(`/api/tasks/${encodeURIComponent(id)}/review-observations`,input);
+  }
   async readModelPolicy(id){
     if(!this.remote)throw new Error('모델 정책을 보려면 서버 연결이 필요합니다.');
     return this.request(`/api/tasks/${encodeURIComponent(id)}/model-policy`);

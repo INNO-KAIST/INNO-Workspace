@@ -456,3 +456,18 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - RED: 표시누락, prototype 원인키, 숫자ID의 regex 강제변환 재현 후 수정. 메인 중간전체는 마지막 숫자ID RED와 겹쳐664/665 실패했으며, 구현 동결 후 최종전체665/665 통과(.inno/tmp/observation-status-final-tests.log). 독립 대상/pipeline17/17은 마지막 타입guard 이전 검토이며, 최종guard는 구현자 대상5/5와 메인전체로 검증. Worker dry-run 통과는 타입guard 이전 패키징; 신규파일/모듈연결은 동일. diff check 통과.
 - 실제 합성 TestD1+Worker+desktop UI fixture를 CUA로1280x900/390x844 검증: 저장/실패 상태 표시, 모바일doc390/viewport390 및panel329/client329로 가로넘침없음, 진단블록1개, 새작업전환0개. 최종코드 reload 후 상태 재확인. screenshot .inno/tmp/observation-status-mobile.png. 운영DB·실구독 실행 없음.
 - 남은 범위: failed 관측의 명시적 재수집/원인 복구, CR004 및 자동선택 실경로, MOD06 비교/정산, 릴리스. index.html 앱script cache version 갱신은 릴리스에 포함해 기존 브라우저 갱신 확인 필요. 신규스택·운영배포 없음.
+
+### 2026-09-28 MOD06/07 실패 관측 재수집 backend 검증
+- 직전85c2288/665개 검증으로 progress. 현재 계획 docs/superpowers/plans/2026-09-28-observation-recovery.md에 따라 기존 저장결과만 재수집하는 복구 연결 중.
+- 인증된 POST review-observations retry_failed 계약 구현. 현재 완료 부모·검토 identity·고정자식2개·task version CAS 검증 후 failed만 pending으로 변경. 완료결과/소유권/성공관측 보존. failed없음409. AI dispatch 없이 기존cron처리.
+- manual recoveryCount는 safeinteger 증가(임의누적3회한도없음), 자동시도는기존3회. process/mark가 recoveryCount를검사해 이전비동기결과의 ABA덮어쓰기방지. legacycount0.
+- 구현자RED20/25→GREEN26/26, 메인대상26/26(.inno/tmp/observation-recovery-backend-tests.log). UI연결/통합전체/브라우저검증은다음단계, 실제배포없음. backend코드동결, 독립review대기.
+
+### 2026-09-28 MOD06/07 실패 관측 재수집 UI·통합 완료
+- backend독립26/26 후 UI순차구현. 지원서버(remote+reviewObservationRecovery)와 현재유효한실패marker에만 관측 기록 다시 수집 표시. client.POST는 기존저장결과 재수집만 요청하며 결과/AI실행 재생성없음.
+- UI는 요청중중복click차단, POST이후현재선택에한해capturedclient상태조회. 조회성공시최신실패여부확인후사용자새click만허용, 자동재POST없음. 조회실패시 상태 다시 확인(GET만) 잠금. 계정/task/epoch변경시old결과알림적용X. same-task 검토identity변경시fresh전체렌더와oldnotice억제분리.
+- 독립리뷰에서 marker A/B 교차의 늦은조회가 새uncertain/pending을해제하는두경계를각각RED로재현후token일치시에만해제하도록수정. backend recoveryCount ABA guard와 UI request token guard를구분. 실제서버recorded/critical_regression사유한국어표시추가.
+- 최종동결후 메인전체682/682(.inno/tmp/observation-recovery-final-tests.log), 독립42/42, Worker dry-run(.inno/tmp/observation-recovery-dry-run.log), app구문/diff check통과. 이전680개전체통과후2개교차회귀가추가되었으며 최종수치는682.
+- 실제합성TestD1+Worker+desktop+C UA브라우저:390x844모바일에서버튼click→두failed가pending→합성8초scheduler의기존pipeline.process→두recorded로전환, 정상결과보존/버튼제거확인. 실제운영cron은기존5분이며8초는검증fixture전용. desktop기존1280폭흐름에서도버튼표시확인. doc390==viewport390/panel329==client329로가로넘침없음. screenshot .inno/tmp/observation-recovered-mobile.png. 마지막token-only패치는자동회귀로검증했고최종브라우저전체복구재실행은하지않음.
+- 가이드 MODEL-ROUTING.md에복구순서/자동반복금지/정책미등록·귀속불가제외/저장성공≠품질검증기록. PRD와새스택변경없음. 실제AI·운영DB변경·운영배포없음.
+- 남은전체범위 유지: CR004선택과실제모델/가용성·비교근거연결, MOD06전용비교/실행격리/정산, M5기존클라이언트캐시·bridge갱신/배포, 유동에이전트·연구/문서·장기복구등. 이번완료는관측재수집하위단계에한정.

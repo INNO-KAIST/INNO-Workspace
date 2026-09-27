@@ -175,7 +175,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
           if (!authorized(request, env)) return responseJson({error: 'unauthorized'}, 401, {...headers, 'www-authenticate': 'Bearer'});
         }
         const {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement}=runtime(env,context);
-        const capabilities = {sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,cloudCodex: true, localCodex: false, claudeRoutine: hasRoutine, cloud: true, connected: true};
+        const capabilities = {sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,reviewObservationRecovery:true,cloudCodex: true, localCodex: false, claudeRoutine: hasRoutine, cloud: true, connected: true};
 
         if (request.method === 'GET' && pathname === '/api/state') {
           return responseJson({...await store.getState(capabilities,parseRevision(url.searchParams.get('since'))), desktop: await bridge.presence()}, 200, headers);
@@ -197,6 +197,9 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
         if(request.method==='GET'&&observationMatch){
           const task=await store.requireTask(decodeURIComponent(observationMatch[1]));
           return responseJson({taskId:task.id,reviewObservation:task.reviewObservation??null},200,headers);
+        }
+        if(request.method==='POST'&&observationMatch){
+          return responseJson(await reviewObservations.retryFailed(decodeURIComponent(observationMatch[1]),await body(request)),200,headers);
         }
         if (request.method === 'POST' && pathname === '/api/imports') {
           const input=await body(request);return responseJson(await new RecordImporter(store).import(input.task,{copy:input.copy??false}),200,headers);

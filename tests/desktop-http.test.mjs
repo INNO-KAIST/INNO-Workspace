@@ -23,3 +23,18 @@ test('desktop passes policy capability and only authenticated policy GET and POS
  const input={operation:'initialize',expectedStateVersion:0};const write=await fetch(base+'/api/tasks/child/model-policy',{method:'POST',headers:{...auth,'content-type':'application/json'},body:JSON.stringify(input)});assert.equal(write.status,200);assert.deepEqual(calls.at(-1),{p:'/api/tasks/child/model-policy',b:input});
  const count=calls.length;assert.equal((await fetch(base+'/api/tasks/child/model-policy',{method:'PUT',headers:auth})).status,404);assert.equal((await fetch(base+'/api/tasks/child/model-policy/extra',{headers:auth})).status,404);assert.equal(calls.length,count);
 });
+
+test('desktop forwards only authenticated review-observation GET and recovery POST',async t=>{
+ const f=await setup(t),p='/api/tasks/parent/review-observations';
+ const auth={authorization:'Bearer '+token},input={operation:'retry_failed',expectedVersion:5,reviewExecutionId:'review',reviewGeneration:1,batchId:'batch',epoch:1};
+ assert.equal((await fetch(f.base+p)).status,401);
+ assert.equal((await fetch(f.base+p,{method:'POST',body:JSON.stringify(input)})).status,401);
+ assert.equal((await fetch(f.base+p,{headers:auth})).status,200);
+ assert.deepEqual(f.forwarded.at(-1),{p,b:undefined});
+ assert.equal((await fetch(f.base+p,{method:'POST',headers:{...auth,'content-type':'application/json'},body:JSON.stringify(input)})).status,200);
+ assert.deepEqual(f.forwarded.at(-1),{p,b:input});assert.equal(f.starts.length,0);
+ const count=f.forwarded.length;
+ for(const path of [p+'/extra','/api/tasks/parent/other'])assert.equal((await fetch(f.base+path,{headers:auth})).status,404);
+ assert.equal((await fetch(f.base+p,{method:'PUT',headers:auth})).status,404);
+ assert.equal(f.forwarded.length,count);
+});
