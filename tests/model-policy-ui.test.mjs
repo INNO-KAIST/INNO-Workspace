@@ -9,7 +9,7 @@ function fakeDialog(){
  const dialog={open:false,querySelector(selector){return ({'[data-policy-content]':content,'[data-policy-error]':error,'[data-policy-notice]':notice})[selector];},addEventListener(name,fn){listeners[name]=fn;},showModal(){this.open=true;},close(){this.open=false;listeners.close?.();},click(action,candidate='next'){return listeners.click({target:{closest:()=>({dataset:{policyAction:action,candidate}})}});}};
  return {dialog,content,error,notice};
 }
-const policyResponse=(version=1)=>({assignment:{provider:'codex',model:'gpt-old',effort:'low',selection:{reason:'existing_route_pending_evidence',policyVersion:1}},accountAvailability:{source:'desktop_account_catalog',status:'fresh',observedAt:1,expiresAt:10000,models:[{model:'gpt-old',efforts:['low']},{model:'gpt-next',efforts:['low']}]},policy:{stateVersion:version,policyVersion:1,baselineId:'baseline',activeId:'baseline',minSamples:3,observationCount:0,candidates:[{id:'baseline',model:'gpt-old',effort:'low',status:'active'},{id:'next',model:'gpt-next',effort:'low',status:'candidate'}]},route:{status:'fallback',model:'gpt-old',effort:'low',reason:'existing_route_pending_evidence'}});
+const policyResponse=(version=1)=>({assignment:{provider:'codex',model:'gpt-old',effort:'low',selection:{reason:'existing_route_pending_evidence',policyVersion:1}},accountAvailability:{source:'desktop_account_catalog',status:'fresh',observedAt:1,expiresAt:10000,models:[{model:'gpt-old',efforts:['low']},{model:'gpt-next',efforts:['low']}]},policy:{stateVersion:version,policyVersion:1,baselineId:'baseline',activeId:'baseline',minSamples:3,observationCount:0,candidates:[{id:'baseline',model:'gpt-old',effort:'low',status:'active'},{id:'next',model:'gpt-next',effort:'low',status:'candidate'}]},route:{status:'fallback',candidateId:'baseline',model:'gpt-old',effort:'low',reason:'existing_route_pending_evidence'}});
 const policyContext=client=>({client,activeTaskId:'parent',epoch:1,capabilities:{modelPolicyManagement:true},tasks:[{id:'child',parentTaskId:'parent',assignment:{selection:{profile:{}}}}]});
 
 test('policy client uses authenticated task route without altering the task snapshot',async()=>{
@@ -70,5 +70,64 @@ test('Claude candidate label identifies built-in aliases and unverified account 
  const ui=createModelPolicyUI({dialog:view.dialog,getContext:()=>policyContext(client)});await ui.open('child');
  assert.match(view.content.innerHTML,/역할 별칭과 계획의 검토 강도 \(계정 사용 가능성 미확인\)/);
  assert.doesNotMatch(view.content.innerHTML,/계정 목록의 모델과 검토 강도/);
+ ui.close();
+});
+
+test('pinning the effective active policy sends its state version and renders the pinned route',async()=>{
+ const writes=[];const response=policyResponse(7);
+ const client={remote:true,readModelPolicy:async()=>response,changeModelPolicy:async(_id,input)=>{
+  writes.push(input);return {...policyResponse(8),policy:{...policyResponse(8).policy,pin:{candidateId:'baseline'}},route:{status:'selected',candidateId:'baseline',model:'gpt-old',effort:'low',reason:'manual_pin_selected'},reason:'manual_pin_set'};
+ }};
+ const view=fakeDialog(),ui=createModelPolicyUI({dialog:view.dialog,getContext:()=>policyContext(client)});
+ await ui.open('child');
+ assert.match(view.content.innerHTML,/data-policy-action="pin"/);
+ await view.dialog.click('pin');
+ assert.deepEqual(writes,[{operation:'pin',candidateId:'baseline',expectedStateVersion:7}]);
+ assert.match(view.notice.textContent,/고정/);
+ assert.match(view.content.innerHTML,/고정 중/);
+ assert.match(view.content.innerHTML,/gpt-old/);
+ assert.match(view.content.innerHTML,/실제 모델 버전 미확인/);
+ assert.match(view.content.innerHTML,/동일 품질을 보장하지 않습니다/);
+ assert.doesNotMatch(view.content.innerHTML,/data-policy-action="promote"/);
+ assert.match(view.content.innerHTML,/data-policy-action="withdraw"/);
+ ui.close();
+});
+
+test('pin action is absent when active route is missing or points elsewhere',async()=>{
+ for(const alter of [response=>{response.policy.activeId=null;},response=>{response.route.candidateId='next';},response=>{response.route.status='wait';}]){
+  const response=policyResponse();alter(response);const writes=[];
+  const client={remote:true,readModelPolicy:async()=>response,changeModelPolicy:async(_id,input)=>{writes.push(input);return response;}};
+  const view=fakeDialog(),ui=createModelPolicyUI({dialog:view.dialog,getContext:()=>policyContext(client)});
+  await ui.open('child');assert.doesNotMatch(view.content.innerHTML,/data-policy-action="pin"/);
+  await view.dialog.click('pin');assert.equal(writes.length,0);ui.close();
+ }
+});
+
+test('pinned unavailable route offers unpin and active withdrawal without claiming a valid route',async()=>{
+ const response=policyResponse(4);response.policy.activeId='next';response.policy.pin={candidateId:'next'};response.policy.candidates[0].status='candidate';response.policy.candidates[1].status='active';response.route={status:'wait',reason:'pinned_route_unavailable'};
+ const writes=[];const client={remote:true,readModelPolicy:async()=>response,changeModelPolicy:async(_id,input)=>{writes.push(input);return {...policyResponse(5),reason:'manual_pin_cleared'};}};
+ const view=fakeDialog(),ui=createModelPolicyUI({dialog:view.dialog,getContext:()=>policyContext(client)});
+ await ui.open('child');
+ assert.match(view.content.innerHTML,/고정 중/);
+ assert.match(view.content.innerHTML,/가용성/);
+ assert.match(view.content.innerHTML,/data-policy-action="unpin"/);
+ assert.match(view.content.innerHTML,/data-policy-action="withdraw"/);
+ assert.doesNotMatch(view.content.innerHTML,/data-policy-action="promote"/);
+ await view.dialog.click('promote');assert.equal(writes.length,0);
+ await view.dialog.click('unpin');
+ assert.deepEqual(writes,[{operation:'unpin',expectedStateVersion:4}]);
+ assert.match(view.notice.textContent,/자동.*승격|승격.*자동/);
+ ui.close();
+});
+
+test('pin conflict refreshes the projection and stale pin completion cannot alter a reopened dialog',async()=>{
+ const pending=deferred();let reads=0,writes=0;
+ const client={remote:true,readModelPolicy:async()=>{reads++;return policyResponse(reads);},changeModelPolicy:()=>{writes++;return writes===1?Promise.reject(Object.assign(Error('conflict'),{status:409})):pending.promise;}};
+ let context=policyContext(client);const view=fakeDialog(),ui=createModelPolicyUI({dialog:view.dialog,getContext:()=>context});
+ await ui.open('child');await view.dialog.click('pin');
+ assert.equal(reads,2);assert.match(view.error.textContent,/최신 내용을 다시 확인/);
+ const stale=view.dialog.click('pin');ui.close();context={...context,epoch:2};await ui.open('child');
+ pending.resolve({...policyResponse(10),reason:'manual_pin_set'});await stale;
+ assert.equal(view.notice.textContent,'');assert.equal(writes,2);
  ui.close();
 });

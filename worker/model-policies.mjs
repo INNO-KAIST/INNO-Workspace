@@ -1,4 +1,4 @@
-import {createSelectionState,registerCandidate,recordObservation,pruneObservations,promoteCandidate,withdrawCandidate,selectAssignment} from '../public/core/model-selection.mjs';
+import {createSelectionState,registerCandidate,recordObservation,pruneObservations,promoteCandidate,withdrawCandidate,selectAssignment,pinCandidate,unpinCandidate} from '../public/core/model-selection.mjs';
 import {TASK_PINS_SQL,parseTaskEvidencePins} from './policy-retention.mjs';
 
 const PREFIX='model_policy:';
@@ -25,6 +25,9 @@ function parseState(text,profile){
  if(typeof text!=='string'||new TextEncoder().encode(text).byteLength>MAX_STATE_BYTES)fail('stored state size');
  const state=JSON.parse(text);
  if(!state||state.schemaVersion!==1||JSON.stringify(state.profile)!==JSON.stringify(normalizedProfile(profile))||!Number.isSafeInteger(state.stateVersion)||state.stateVersion<1)fail('stored state');
+ if(state.pin!==undefined&&state.pin!==null&&(!state.pin||typeof state.pin!=='object'||Array.isArray(state.pin)||Object.keys(state.pin).length!==1||typeof state.pin.candidateId!=='string'||!identifier.test(state.pin.candidateId)||state.pin.candidateId!==state.activeId))fail('stored pin');
+ if(state.pin&&!state.candidates?.some(row=>row.id===state.activeId&&row.status==='active'))fail('stored pin');
+ state.pin??=null;
  return state;
 }
 function serialize(state){
@@ -42,7 +45,7 @@ function sameObservation(a,b){
 
 // `verifyObservation` and `getAvailability` are trusted server callbacks, never request payloads.
 // The caller must authenticate the execution/review evidence before returning it here.
-export function createModelPolicyMethods(adapter,{now=Date.now,getAvailability=()=>[],verifyObservation}={}){
+export function createModelPolicyMethods(adapter,{now=Date.now,getAvailability=()=>[],verifyObservation,validateUnverifiedBaseline}={}){
  const clock=()=>{const value=now();if(!Number.isSafeInteger(value)||value<0)fail('clock');return value;};
  const availability=async()=>{const rows=await getAvailability();if(!Array.isArray(rows)||rows.length>100)fail('availability');return rows;};
  async function loaded(profile){const key=await profileKey(profile),raw=await adapter.read(key);if(raw===null)throw new Error('model policy not found');return {key,state:parseState(raw,profile)};}
@@ -97,6 +100,23 @@ export function createModelPolicyMethods(adapter,{now=Date.now,getAvailability=(
    expected(expectedStateVersion);const {key,state}=await loaded(profile);
    if(state.stateVersion!==expectedStateVersion){if(state.activeId===candidateId)return {state,promoted:false,reason:'already_active'};conflict();}
    const result=promoteCandidate(state,candidateId,{now:clock(),availability:await availability()});
+   return {...result,state:await write(key,state,result.state)};
+  },
+  async pin({profile,candidateId,expectedStateVersion}={}){
+   if(arguments[0]&&Object.keys(arguments[0]).some(key=>!['profile','candidateId','expectedStateVersion'].includes(key)))fail('pin input');
+   expected(expectedStateVersion);const {key,state}=await loaded(profile);
+   if(state.stateVersion!==expectedStateVersion)conflict();
+   const at=clock(),rows=await availability();
+   const unverified=state.activeId===state.baselineId&&state.policyVersion===1&&state.previousId===null&&state.activeEvidenceIds.length===0&&state.candidates.find(x=>x.id===state.activeId)?.modelVersion===null;
+   const allowed=unverified&&typeof validateUnverifiedBaseline==='function'&&await validateUnverifiedBaseline(state);
+   const result=pinCandidate(state,candidateId,{now:at,availability:rows,allowUnverifiedBaseline:allowed});
+   return {...result,state:await write(key,state,result.state)};
+  },
+  async unpin({profile,expectedStateVersion}={}){
+   if(arguments[0]&&Object.keys(arguments[0]).some(key=>!['profile','expectedStateVersion'].includes(key)))fail('unpin input');
+   expected(expectedStateVersion);const {key,state}=await loaded(profile);
+   if(state.stateVersion!==expectedStateVersion)conflict();
+   const result=unpinCandidate(state);
    return {...result,state:await write(key,state,result.state)};
   },
   async withdraw({profile,candidateId,expectedStateVersion}={}){

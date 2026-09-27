@@ -24,7 +24,7 @@ export async function availabilitySnapshot(store,catalog){
 
 export function unverifiedBaselineRoute(state,choice,provider){
  const baseline=state?.candidates.find(x=>x.id===state.baselineId);
- return choice?.status==='wait'&&state?.policyVersion===1&&state?.previousId===null&&state?.activeEvidenceIds.length===0&&state?.activeId===state?.baselineId&&baseline?.status==='active'&&baseline.modelVersion===null&&baseline.provider===provider?baseline:null;
+ return choice?.status==='wait'&&(!state?.pin||state.pin.candidateId===state.activeId)&&state?.policyVersion===1&&state?.previousId===null&&state?.activeEvidenceIds.length===0&&state?.activeId===state?.baselineId&&baseline?.status==='active'&&baseline.modelVersion===null&&baseline.provider===provider?baseline:null;
 }
 
 export async function resolveAllocationPolicy(store,catalog,assignments){

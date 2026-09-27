@@ -341,3 +341,18 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 독립 리뷰 차단 결함 없음, 전용8/8. 메인 전체 Node562/562, Worker dry-run 통과. 로그 .inno/tmp/model-diagnostics-tests.log 및 model-diagnostics-dry-run.log. 구현자 인접 SQLite 시험의 샌드박스 EPERM은 쓰기 권한 승인 실행에서13/13 통과했으며 메인 전체에도 포함.
 - 실제 Worker + TestD1 메모리 DB + 실제 desktop 프록시의 합성 자료로 브라우저 확인. 1280x900 및390x844, 모바일 문서390px/패널335px clientWidth=scrollWidth. 화면 .inno/tmp/model-diagnostics-desktop.png 및 model-diagnostics-mobile.png. 검증 서버 세션53880과 탭 종료, viewport 복원. 실제 구독 AI 실행·추가 유료API·운영 배포 없음.
 - 다음: 정책 수동 고정/해제·복구 통합, 추가 비교 실행 예산, 자동 초기화·승격 운영 연결과 실제 serving-version 귀속 제약 처리, M5 배포·캐시 갱신·desktop 재시작 검증. 이번 진단 화면은 모델 최신화 전체 또는 최초 플랫폼 완료가 아니다.
+
+### 2026-09-27 M2/M4 모델 정책 고정·해제 착수
+- 직전 목표 턴은 진단 UI 구현/562개 검증/커밋67318f2로 진행이 있었다. clean 상태 확인 후 동일 작업 트리를 재사용한다.
+- 승인 MOD04/07 범위: 현재 활성 경로를 수동 고정하고 해제한다. 임의 미검증 후보로 강제 전환하는 기능은 아니며 고정 중 승격은 보류한다. 가용성/근거 만료 시 다른 모델로 조용히 전환하지 않고 대기하고, 중대 회귀나 명시적 철회는 고정을 해제하며 기존 복구 검증을 적용한다.
+- 고정은 다음 배정에만 영향을 주고 저장된 실행 배정은 수정하지 않는다. 원자 배정은 이미 policy stateVersion을 검사하므로 제어 상태 변경도 경합 검증 대상이다. 초기 실제버전 미확인 baseline의 기존 명시적 fallback 조건을 넓히지 않는다.
+- WBS: backend/core·D1/SQLite 구현자, 기존 정책 모달 UI 구현자, 별도 리뷰어를 분리. 메인은 통합·전체 검증·브라우저 확인·기록. API 계약과 코드 검증 후 다음 항목으로 진행한다. 새 스택/추가 유료API 없음.
+
+### 2026-09-27 M2/M4 현재 정책 고정·해제 하위 단계 완료
+- public/core/model-selection에 현재 활성 경로 pin/unpin 추가. 상태 버전만 증가해 원자 배정 CAS에 포함하며 모델 정책 버전은 실제 경로 변경에만 증가. 레거시 pin 누락은 null, 저장된 불일치/철회 경로 pin은 거절하고 순수 선택도 조용한 fallback을 하지 않는다.
+- 고정 중 다른 후보 승격 보류. 승격된 고정 경로의 계정 가용성 또는 비교 근거 만료 시 새 배정 대기, 활성 후보 철회·중대 회귀 시 같은 상태 변경에서 고정 해제 후 기존 검증된 복구 적용. 현재 초기 baseline의 중대 회귀 처리는 기존 core에서 철회 대상이 아니므로 후속 품질 연결의 남은 범위다.
+- D1/SQLite 공통 pin/unpin CAS와 HTTP 엄격 입력 제한. 실제버전 미확인 초기 baseline은 기존 policyVersion1/이전정책 없음/활성근거 없음 조건과 서버 catalog.validate 콜백으로만 허용. 사용자 입력으로 검증 면제 불가. Claude 별칭 고정은 배정 계획을 유지하며 실제 Routine 제공 모델을 바꾸거나 확인했다는 뜻이 아니다.
+- 정책 모달에서 활성 경로와 일치하는 후보만 고정, 고정 중 승격 조작 차단, 해제와 철회 가능. 이전 실행 배정 불변, 해제만으로 AI 실행/자동 승격을 시작하지 않는 안내. 최신 상태 충돌409 재조회와 계정·작업·창 변경 시 오래된 응답 무시를 유지.
+- 구현자 core46/46, UI10/10, 독립56/56. 메인 전체 Node574/574, Worker dry-run 및 diff check 통과. 로그 .inno/tmp/policy-pin-tests.log 및 policy-pin-dry-run.log. SQLite 실제 파일 close/reopen 고정 보존과 레거시 복원, D1 배정 중 pin 변경 첫 CAS 0건/최신 재시도 성공, HTTP 위조/오래된 요청 거절 확인.
+- 브라우저 합성 데이터 + 실제 Worker/desktop 경로: Codex 초기화→고정→후보 등록(승격 버튼 없음)→해제(승격 버튼 복귀)→고정, Claude 별칭 초기화→모바일 고정 확인. 1280x900,390x844에서 모바일 문서390/dialog335 clientWidth=scrollWidth. 화면 .inno/tmp/policy-pin-desktop.png 및 policy-pin-mobile.png. 검증 서버68365와 탭 종료, viewport 복원. 최종 불일치 pin 방어는 독립/API 회귀로 확인했으며 브라우저는 정상 고정 흐름 확인이다.
+- 운영 미배포, 실제 구독 AI 실행·새 스택·추가 유료API 없음. 다음은 MOD06 추가 비교 실행 예산 및 실행 예약/취소 연결, MOD03/04 자동 정책 초기화·승격과 serving-version 귀속 제약·baseline 회귀, M5 실제 배포/desktop 갱신. 전체 원래 플랫폼과 CR003 완료로 표시하지 않는다.

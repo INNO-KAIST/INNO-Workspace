@@ -18,6 +18,21 @@ for(const [name,open] of [
  ['D1',()=>{const db=new TestD1(),reopen=(at=now)=>new D1ModelPolicies(db,{now:()=>at,getAvailability:()=>availability,verifyObservation:ref=>ref});return {store:reopen(),reopen,withoutVerifier:()=>new D1ModelPolicies(db,{now:()=>now}),close:()=>db.close()};}],
  ['SQLite',()=>{const db=new DatabaseSync(':memory:'),reopen=(at=now)=>new SqliteModelPolicies(db,{now:()=>at,getAvailability:()=>availability,verifyObservation:ref=>ref});return {store:reopen(),reopen,withoutVerifier:()=>new SqliteModelPolicies(db,{now:()=>now}),close:()=>db.close()};}],
 ]){
+ test(`${name} persists manual pin and rejects stale pin control writes`,async()=>{
+  const a=open();try{
+   const initial=await a.store.create({profile,baseline,expectedStateVersion:0});
+   const pinned=await a.store.pin({profile,candidateId:'base',expectedStateVersion:initial.stateVersion});
+   assert.deepEqual(pinned.state.pin,{candidateId:'base'});
+   assert.equal(pinned.state.policyVersion,1);
+   assert.deepEqual((await a.reopen().read(profile)).pin,{candidateId:'base'});
+   await assert.rejects(a.reopen().unpin({profile,expectedStateVersion:initial.stateVersion}),/version conflict/i);
+   await assert.rejects(a.reopen().pin({profile,candidateId:'next',expectedStateVersion:pinned.state.stateVersion}),/active/i);
+   const cleared=await a.reopen().unpin({profile,expectedStateVersion:pinned.state.stateVersion});
+   assert.equal(cleared.state.pin,null);
+   assert.equal(cleared.state.policyVersion,1);
+   await assert.rejects(a.store.pin({profile,candidateId:'base',expectedStateVersion:pinned.state.stateVersion}),/version conflict/i);
+  }finally{a.close();}
+ });
  test(`${name} persists policy transitions, replays exact operations, and rejects stale writes`,async()=>{
   const a=open();try{
    const {store}=a;
@@ -84,10 +99,14 @@ test('SQLite policy survives closing and reopening its database file',async()=>{
   let db=new DatabaseSync(file);
   const store=new SqliteModelPolicies(db,{now:()=>now,getAvailability:()=>availability});
   const state=await store.create({profile,baseline,expectedStateVersion:0});
+  const pinned=await store.pin({profile,candidateId:'base',expectedStateVersion:state.stateVersion});
   db.close();db=new DatabaseSync(file);
   try{
    const restored=new SqliteModelPolicies(db,{now:()=>now,getAvailability:()=>availability});
-   assert.deepEqual(await restored.read(profile),state);
+   assert.deepEqual(await restored.read(profile),pinned.state);
+   await restored.unpin({profile,expectedStateVersion:pinned.state.stateVersion});
+   db.prepare("UPDATE metadata SET value=json_remove(value,'$.pin') WHERE key LIKE 'model_policy:%'").run();
+   assert.equal((await new SqliteModelPolicies(db,{now:()=>now,getAvailability:()=>availability}).read(profile)).pin,null);
    assert.equal((await restored.select(profile)).status,'fallback');
   }finally{db.close();}
  }finally{rmSync(directory,{recursive:true,force:true});}

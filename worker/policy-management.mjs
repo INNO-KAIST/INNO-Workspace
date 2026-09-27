@@ -16,7 +16,7 @@ const translate=error=>{
 };
 const candidateSummary=({id,provider,model,modelVersion,effort,status})=>({id,provider,model,modelVersion,effort,status});
 const projection=state=>state?{
- stateVersion:state.stateVersion,policyVersion:state.policyVersion,baselineId:state.baselineId,activeId:state.activeId,
+ stateVersion:state.stateVersion,policyVersion:state.policyVersion,baselineId:state.baselineId,activeId:state.activeId,pin:state.pin??null,
  minSamples:state.minSamples,observationCount:state.observations.length,
  baseline:candidateSummary(state.candidates.find(row=>row.id===state.baselineId)),
  candidates:state.candidates.map(candidateSummary),
@@ -38,7 +38,14 @@ export function createTaskPolicyManagement(store,catalog){
   const profile=await delegationProfile(child.assignment);
   if(JSON.stringify(profile)!==JSON.stringify(child.assignment.selection.profile))throw new ValidationError('Task policy profile does not match its frozen assignment');
   const account=await catalog.read(),snapshot=await availabilitySnapshot(store,account);
-  const policies=new D1ModelPolicies(store.db,{now:()=>Date.parse(store.now()),getAvailability:()=>snapshot.rows});
+  const policies=new D1ModelPolicies(store.db,{now:()=>Date.parse(store.now()),getAvailability:()=>snapshot.rows,
+   validateUnverifiedBaseline:async state=>{
+    const baseline=unverifiedBaselineRoute(state,{status:'wait'},child.assignment.provider);
+    if(!baseline)return false;
+    await catalog.validate([{provider:baseline.provider,requestedModel:baseline.model,effort:baseline.effort}]);
+    return true;
+   },
+  });
   return {child,profile,account,policies};
  }
  async function view(ctx,reason){
@@ -48,7 +55,7 @@ export function createTaskPolicyManagement(store,catalog){
   if(baseline){
    try{
     await catalog.validate([{provider:baseline.provider,requestedModel:baseline.model,effort:baseline.effort}]);
-    route={status:'fallback',provider:baseline.provider,model:baseline.model,modelVersion:null,effort:baseline.effort,policyVersion:state.policyVersion,evidenceIds:[],confidence:'unvalidated_fallback',reason:'baseline_version_unverified'};
+    route={status:'fallback',candidateId:baseline.id,provider:baseline.provider,model:baseline.model,modelVersion:null,effort:baseline.effort,policyVersion:state.policyVersion,evidenceIds:[],confidence:'unvalidated_fallback',reason:'baseline_version_unverified'};
    }catch(error){if(!(error instanceof ValidationError))throw error;route={status:'wait',policyVersion:state.policyVersion,evidenceIds:[],reason:'account_model_unavailable'};}
   }
   const provider=ctx.child.assignment.provider;
@@ -85,6 +92,17 @@ export function createTaskPolicyManagement(store,catalog){
       own(input,['operation','expectedStateVersion','candidateId'],'policy transition');
       if(typeof input.candidateId!=='string')throw new ValidationError('candidateId is required');
       result=await ctx.policies[input.operation]({profile:ctx.profile,candidateId:input.candidateId,expectedStateVersion:input.expectedStateVersion});
+      break;
+     }
+     case 'pin':{
+      own(input,['operation','expectedStateVersion','candidateId'],'policy pin');
+      if(typeof input.candidateId!=='string')throw new ValidationError('candidateId is required');
+      result=await ctx.policies.pin({profile:ctx.profile,candidateId:input.candidateId,expectedStateVersion:input.expectedStateVersion});
+      break;
+     }
+     case 'unpin':{
+      own(input,['operation','expectedStateVersion'],'policy unpin');
+      result=await ctx.policies.unpin({profile:ctx.profile,expectedStateVersion:input.expectedStateVersion});
       break;
      }
      default:throw new ValidationError('Unknown policy operation');

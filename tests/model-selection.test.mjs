@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createSelectionState,registerCandidate,recordObservation,promoteCandidate,withdrawCandidate,selectAssignment} from '../public/core/model-selection.mjs';
+import {createSelectionState,registerCandidate,recordObservation,promoteCandidate,withdrawCandidate,selectAssignment,pinCandidate,unpinCandidate} from '../public/core/model-selection.mjs';
 
 const now=1_800_000_000_000;
 const profile={family:'analysis',requirementsVersion:'r1',evaluationVersion:'e1',criteria:['correct','sources'],requiredCapabilities:['tools','long_context'],contextClass:'large'};
@@ -13,6 +13,52 @@ const availability=(at=now)=>[
 const fresh=()=>createSelectionState({profile,baseline,minSamples:3});
 const observation=(id,modelId,comparisonId,opts={})=>({id,provider:modelId==='base'?'codex':'claude',executionId:`execution-${id}`,generation:1,candidateId:modelId,modelVersion:modelId==='base'?'v1':'v2',comparisonId,profile:{family:profile.family,requirementsVersion:profile.requirementsVersion,evaluationVersion:profile.evaluationVersion,contextClass:profile.contextClass,criteria:profile.criteria,requiredCapabilities:profile.requiredCapabilities},observedAt:now,source:'normal_execution',quality:{source:'independent_review',criteria:[{id:'correct',status:'pass'},{id:'sources',status:'pass'}],critical:false},usage:{source:'executor_report',inputTokens:modelId==='base'?100:70,outputTokens:20,latencyMs:modelId==='base'?1000:800},...opts});
 function paired(state,count=3){for(let i=0;i<count;i++){state=recordObservation(state,observation(`b${i}`,'base',`pair${i}`),{now,availability:availability()}).state;state=recordObservation(state,observation(`c${i}`,'new',`pair${i}`),{now,availability:availability()}).state;}return state;}
+
+test('manual pin locks the active route without changing its policy version',()=>{
+ let state=registerCandidate(fresh(),candidate);
+ assert.throws(()=>pinCandidate(state,'new',{now,availability:availability()}),/active/i);
+ const pinned=pinCandidate(state,'base',{now,availability:availability()});
+ assert.deepEqual(pinned.state.pin,{candidateId:'base'});
+ assert.equal(pinned.state.stateVersion,state.stateVersion+1);
+ assert.equal(pinned.state.policyVersion,state.policyVersion);
+ state=paired(pinned.state);
+ assert.equal(promoteCandidate(state,'new',{now,availability:availability()}).reason,'manual_pin_active_route');
+ const cleared=unpinCandidate(state);
+ assert.equal(cleared.state.pin,null);
+ assert.equal(cleared.state.policyVersion,state.policyVersion);
+ assert.equal(promoteCandidate(cleared.state,'new',{now,availability:availability()}).promoted,true);
+});
+
+test('pin eligibility and selected route expiry never cause a silent baseline switch',()=>{
+ let state=promoteCandidate(paired(registerCandidate(fresh(),candidate)),'new',{now,availability:availability()}).state;
+ assert.throws(()=>pinCandidate(state,'new',{now,availability:[]}),/eligible|available/i);
+ state=pinCandidate(state,'new',{now,availability:availability()}).state;
+ assert.equal(selectAssignment(state,{profile,availability:availability(),now}).candidateId,'new');
+ assert.deepEqual({status:selectAssignment(state,{profile,availability:availability().slice(0,1),now}).status,reason:selectAssignment(state,{profile,availability:availability().slice(0,1),now}).reason},{status:'wait',reason:'pinned_route_unavailable'});
+ const later=now+91*86400_000,refreshed=availability(later);
+ assert.equal(selectAssignment(state,{profile,availability:refreshed,now:later}).reason,'pinned_evidence_expired');
+ assert.equal(selectAssignment(unpinCandidate(state).state,{profile,availability:refreshed,now:later}).status,'fallback');
+});
+
+test('critical regression and explicit withdrawal clear an active pin before rollback',()=>{
+ const promoted=promoteCandidate(paired(registerCandidate(fresh(),candidate)),'new',{now,availability:availability()}).state;
+ const pinned=pinCandidate(promoted,'new',{now,availability:availability()}).state;
+ const withdrawn=withdrawCandidate(pinned,'new',{now,availability:availability()}).state;
+ assert.equal(withdrawn.pin,null);
+ assert.equal(withdrawn.activeId,'base');
+ const regressed=recordObservation(pinned,observation('pin-critical','new','critical',{quality:{source:'independent_review',criteria:[{id:'correct',status:'fail'},{id:'sources',status:'pass'}],critical:true}}),{now,availability:availability()}).state;
+ assert.equal(regressed.pin,null);
+ assert.equal(regressed.activeId,'base');
+});
+test('inconsistent pin state fails closed during selection and promotion',()=>{
+ const registered=registerCandidate(fresh(),candidate);
+ const mismatched={...registered,pin:{candidateId:'new'}};
+ assert.equal(selectAssignment(mismatched,{profile,availability:availability(),now}).status,'wait');
+ assert.equal(promoteCandidate(mismatched,'new',{now,availability:availability()}).reason,'manual_pin_active_route');
+ const inactive={...registered,pin:{candidateId:'base'},candidates:registered.candidates.map(x=>x.id==='base'?{...x,status:'testing'}:x)};
+ assert.equal(selectAssignment(inactive,{profile,availability:availability(),now}).status,'wait');
+ assert.equal(promoteCandidate(inactive,'new',{now,availability:availability()}).reason,'manual_pin_active_route');
+});
 
 test('starts with a conservative existing route and never mutates the caller state',()=>{
  const state=fresh(),copy=structuredClone(state),choice=selectAssignment(state,{profile,availability:availability(),now});

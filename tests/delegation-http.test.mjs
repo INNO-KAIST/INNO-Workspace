@@ -68,6 +68,29 @@ test('authenticated child policy management derives its baseline and keeps null-
  assert.equal(second.status,200,JSON.stringify(second));
  assert.equal(second.task.delegation.children.find(x=>x.provider==='codex').selection.reason,'baseline_version_unverified');
 });
+test('HTTP pin controls only the active null-version baseline and preserves frozen assignments',async t=>{
+ const f=await fixture(t);await f.post('/api/desktop/poll',{models:observedModels()});
+ const {task,claim}=await claimMaster(f);
+ const allocated=await f.post(`/api/desktop/${task.id}/complete`,{...owner(claim),delegation:{independent:true,children}});
+ const child=allocated.task.delegation.children.find(x=>x.provider==='codex'),path=`/api/tasks/${child.taskId}/model-policy`;
+ const frozen=structuredClone((await f.store.requireTask(child.taskId)).assignment);
+ assert.equal((await f.post(path,{operation:'initialize',expectedStateVersion:0})).status,200);
+ for(const extra of [{model:'gpt-5.6-luna'},{modelVersion:'v9'},{quality:{critical:false}},{availability:true}])assert.equal((await f.post(path,{operation:'pin',candidateId:'baseline',expectedStateVersion:1,...extra})).status,400);
+ assert.equal((await f.post(path,{operation:'pin',candidateId:'other',expectedStateVersion:1})).status,400);
+ const pinned=await f.post(path,{operation:'pin',candidateId:'baseline',expectedStateVersion:1});
+ assert.equal(pinned.status,200);assert.equal(pinned.reason,'manual_pin_set');
+ assert.deepEqual(pinned.policy.pin,{candidateId:'baseline'});
+ assert.equal(pinned.policy.policyVersion,1);assert.equal(pinned.policy.stateVersion,2);
+ assert.equal(pinned.route.candidateId,'baseline');assert.equal(pinned.route.reason,'baseline_version_unverified');
+ assert.equal((await f.post(path,{operation:'unpin',expectedStateVersion:1})).status,409);
+ assert.equal((await f.post(path,{operation:'unpin',expectedStateVersion:2,candidateId:'baseline'})).status,400);
+ const next=await claimMaster(f),allocatedNext=await f.post(`/api/desktop/${next.task.id}/complete`,{...owner(next.claim),delegation:{independent:true,children}});
+ assert.equal(allocatedNext.status,200,JSON.stringify(allocatedNext));
+ assert.equal(allocatedNext.task.delegation.children.find(x=>x.provider==='codex').selection.reason,'baseline_version_unverified');
+ const unpinned=await f.post(path,{operation:'unpin',expectedStateVersion:2});
+ assert.equal(unpinned.status,200);assert.equal(unpinned.reason,'manual_pin_cleared');assert.equal(unpinned.policy.pin,null);
+ assert.deepEqual((await f.store.requireTask(child.taskId)).assignment,frozen);
+});
 test('policy choices retain a valid last-good observation after refresh failure and clear on expiry',async t=>{
  const f=await fixture(t),observedAt=Date.now();await f.post('/api/desktop/poll',{models:{models,observedAt,status:'fresh'}});
  const {task,claim}=await claimMaster(f);
@@ -160,6 +183,23 @@ test('policy withdrawal during the allocation CAS recomputes before creating chi
  const result=await f.post(`/api/desktop/${task.id}/complete`,{...owner(claim),delegation:{independent:true,children}});
  assert.equal(result.status,200);assert.equal(raced,true);const saved=result.task.delegation.children.find(x=>x.provider==='codex');assert.equal(saved.requestedModel,'gpt-5.6-luna');assert.equal(saved.selection.status,'fallback');
  assert.equal((await f.store.requireTask(saved.taskId)).assignment.selection.status,'fallback');
+});
+test('policy pin during allocation CAS forces a fresh guarded attempt',async t=>{
+ const f=await fixture(t);await f.post('/api/desktop/poll',{models:{models:[...models,{model:'gpt-next',efforts:['low']}],observedAt:Date.now(),status:'fresh'}});
+ const seeded=await seededPolicy(f),{task,claim}=await claimMaster(f),originalBatch=f.db.batch.bind(f.db);let attempts=0,firstChanges=null;
+ f.db.batch=async statements=>{
+  if(statements[0]?.sql?.includes("json_extract(m.value,'$.stateVersion')")){
+   attempts++;
+   if(attempts===1)await seeded.policies.pin({profile:seeded.profile,candidateId:'candidate',expectedStateVersion:seeded.state.stateVersion});
+  }
+  const result=await originalBatch(statements);
+  if(attempts===1&&firstChanges===null&&statements[0]?.sql?.includes("json_extract(m.value,'$.stateVersion')"))firstChanges=result[0]?.meta?.changes;
+  return result;
+ };
+ const result=await f.post(`/api/desktop/${task.id}/complete`,{...owner(claim),delegation:{independent:true,children}});
+ assert.equal(result.status,200,JSON.stringify(result));assert.equal(firstChanges,0);assert.ok(attempts>=2);
+ assert.deepEqual((await seeded.policies.read(seeded.profile)).pin,{candidateId:'candidate'});
+ assert.equal(result.task.delegation.children.find(x=>x.provider==='codex').requestedModel,'gpt-next');
 });
 test('proof expiring inside the D1 batch cannot commit selected or fallback policy routes',async t=>{
  for(const mode of ['selected','fallback']){
