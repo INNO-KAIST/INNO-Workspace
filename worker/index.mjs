@@ -21,6 +21,7 @@ import { D1TaskStore } from './store.mjs';
 import {createReviewObservationPipeline} from './review-observation-pipeline.mjs';
 import {D1ModelPolicies} from './model-policies.mjs';
 import {createTaskPolicyManagement} from './policy-management.mjs';
+import {workspaceIdentity} from './workspace-identity.mjs';
 
 const ROUTINE_BETA = 'experimental-cc-routine-2026-04-01';
 
@@ -183,6 +184,15 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
         }
         const {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement}=runtime(env,context);
         const capabilities = {sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,reviewObservationRecovery:true,cloudCodex: true, localCodex: false, claudeRoutine: hasRoutine, cloud: true, connected: true};
+        const bridgeMatch=pathname.match(/^\/api\/desktop\/([^/]+)\/(start|renew|complete|fail)$/);
+        const desktopMutation=request.method==='POST'&&(pathname==='/api/desktop/poll'||Boolean(bridgeMatch));
+        const desktopWorkspaceId=desktopMutation?await workspaceIdentity(store.db):undefined;
+        if(desktopMutation&&request.headers.has('x-inno-workspace-id')&&request.headers.get('x-inno-workspace-id')!==desktopWorkspaceId)
+          throw new ConflictError('Workspace identity mismatch');
+
+        if (request.method === 'GET' && pathname === '/api/desktop/identity') {
+          return responseJson({workspaceId:await workspaceIdentity(store.db)},200,headers);
+        }
 
         if (request.method === 'GET' && pathname === '/api/state') {
           return responseJson({...await store.getState(capabilities,parseRevision(url.searchParams.get('since'))), desktop: await bridge.presence()}, 200, headers);
@@ -231,13 +241,12 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
         }
         if (request.method === 'POST' && pathname === '/api/desktop/poll') {
           const input=await body(request);if(input.models!==undefined)await catalog.report(input.models);
-          return responseJson({claim: await orchestration.hydrateClaim(await bridge.claim())}, 200, headers);
+          return responseJson({claim: await orchestration.hydrateClaim(await bridge.claim()),workspaceId:desktopWorkspaceId}, 200, headers);
         }
-        const bridgeMatch=pathname.match(/^\/api\/desktop\/([^/]+)\/(start|renew|complete|fail)$/);
         if(request.method==='POST'&&bridgeMatch){
           const id=decodeURIComponent(bridgeMatch[1]), input=await body(request);
           if(input.models!==undefined)await catalog.report(input.models);
-          if(bridgeMatch[2]==='start')return responseJson({claim:await orchestration.hydrateClaim(await bridge.start(id,input))},200,headers);
+          if(bridgeMatch[2]==='start')return responseJson({claim:await orchestration.hydrateClaim(await bridge.start(id,input)),workspaceId:desktopWorkspaceId},200,headers);
           if(bridgeMatch[2]==='complete'&&input.handoff)return responseJson({task:await handoff({...input,taskId:id})},200,headers);
           if(bridgeMatch[2]==='complete'&&input.delegation){const result=await delegate(id,{...input.delegation,executionId:input.executionId,generation:input.generation,content:input.content,usage:input.usage});return responseJson({task:result.parent},200,headers);}
           if(bridgeMatch[2]==='complete'&&input.reviewReport){

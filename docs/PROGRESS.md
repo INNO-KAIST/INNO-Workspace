@@ -512,3 +512,22 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 다음우선복구결함1: outbox가endpoint/account에결합되지않아 A결과미전달중현재endpoint/token을B로변경하면B에old본문POST가능. 서버404/409거절도전송자체를막지못함. 현재운영에서발생했다고주장하지않으며코드경로확인. 결과보존+서버가발급한안정workspace식별/정규화origin일치검사계약필요; 비밀평문저장금지.
 - 다음복구결함2: 실제TestD1합성재현에서 완료저장후응답유실→사용자후속message(completed→ready)→보관완료재전송이409. outbox가남고실제script는비재시도종료하여새작업차단. 단순409무시/old결과삭제/AI재실행금지; 원자적완료수신기록으로이미수락된동일전송만확인하는후속설계필요. 새generation/인계/위임도포함할것.
 - 위결함은기존승인 SRC02/03/06의복구·계정격리요구 범위. 전체목표active, CR004선택대기와독립적으로다음수정진행가능.
+
+### 2026-09-28 SRC02/03 outbox 작업실 귀속 — 서버 식별자
+- 직전61679b2 중단경계수정은progress. 현재clean확인후기존승인 SRC02/03/06 내계정격리수정계획 docs/superpowers/plans/2026-09-28-outbox-workspace-binding.md 작성. 새언어/런타임/스키마없음.
+- Task1 인증GET /api/desktop/identity는기존D1 metadata의desktop_workspace_id UUID v4 한행반환. 기존값읽기만, 최초INSERT OR IGNORE후read; 손상값failclosed, 인증없는요청storage접근전거절. 단일행이라작업수따른누적없음/revision변경없음.
+- 구현자RED1/4→GREEN4/4, 인접24/24; 메인4/4(.inno/tmp/workspace-identity-target.log), 구문/diff검사통과. 실제AI/네트워크/운영DB수정없음. 아직로컬outbox귀속연결이없어계정격리결함완료아님.
+- 다음서버기대workspaceheader검증+claim응답ID, 그후로컬binding캡처/재전송직전확인/redirect금지로순차진행. 조회→POST사이DB교체는네트워크본문전송원자보장불가, 서버저장차단으로구분. 같은UUID복제DB는구별불가. legacyoutbox는자동귀속/삭제금지이며후속명시복구계약필요.
+
+### 2026-09-28 outbox 귀속 Task2a 서버 경합 검사
+- Task1 독립4/4 후 서버순차단계. 인증된 desktop POST poll/start/renew/complete/fail는body·modelsreport·mutation이전 안정workspaceID조회. x-inno-workspace-id 헤더가존재하면비일치(빈값포함)409. 모든complete인계/위임/review분기전중앙검사. 기존무헤더클라이언트허용.
+- poll/start는 top-level workspaceId를반환해새desktop이preflight와실제claim의식별자를대조가능. 손상identity는500safe/작업변경없음. 구현자RED4/7→GREEN7/7, 인접64/64, 메인7/7(.inno/tmp/workspace-guard-target.log). 로컬binding Task2b진행중, 아직전체격리완료/배포아님.
+
+### 2026-09-28 outbox 귀속 Task2b·통합 검증 완료
+- 새desktop production script에 readDeliveryBinding 필수연결. preclaim identity확인+stopped재검사, 서버claim응답 ID대조후AI시작, 실행당binding복사·고정, renew기대ID header, outbox binding보존. deliver직전identity다시조회하고원주소/ID일치때만결과POST.
+- legacy/malformed/다른origin/새DB/identity조회실패는보관파일유지·결과POST0·새AI0. helper는HTTPSorigin정규화/외부absolute·protocol-relative·역슬래시URL차단/redirect:error/700000bytes한도. runtime오류안내는WORKSPACE_UNVERIFIED와WORKSPACE_MISMATCH구분, 토큰/원문추가저장없음. 기본옵션없는라이브러리호환경로는유지하지만실제script는항상검사주입.
+- Task2b RED0/9→GREEN9/9 후보강12/12. 처음RED의stop콜백대기하네스는bounded event-loop 판정으로수정해미구현검사도종료되도록함. fake Worker HTTP와실제fileoutbox통합: 정상complete,preflight후다른DB409/DB무변경/파일보존,원DB재연결및파일재시작후replay성공/AI재실행0. 실제AI·외부HTTP·운영DB 없음.
+- 메인최종전체709/709(.inno/tmp/workspace-binding-full.log), 독립43/43, Worker dry-run(.inno/tmp/workspace-binding-dry-run.log), 구문/diff검사통과. docs/DESKTOP-BRIDGE에정상복구/legacy보류/구버전호환과보장한계기록. REQUIREMENTS-STATUS의오래된CR003미배포표기도실제부분배포상태로정정.
+- 개발브랜치검증완료이며이번patch는아직운영미반영. 다음릴리스는기존idle/outboxempty확인후Worker→bridge순서. 무헤더구bridge는보호미적용; same-origin identity확인후DB교체의본문네트워크전송자체는보장불가(서버mutation은차단),같은ID복제DB구별불가.
+- 남은장기복구핵심: 이미수락된완료응답유실후후속message/newgeneration 재전송수신기록계약, 식별자없는legacy명시귀속도구, renew오류로outbox생성전중단되는결과보존범위. 이번패치로전체장기복구/전체플랫폼완료를주장하지않음. 전체goal active.
+- 검증순서보충: 전체709/709·독립43/43 이후소스변경없음. 동일ID의인증토큰교체를테스트만보강했고최종메인대상12/12(.inno/tmp/workspace-binding-final-target.log)로재확인. 실제자격증명교체나운영호출은없음.
