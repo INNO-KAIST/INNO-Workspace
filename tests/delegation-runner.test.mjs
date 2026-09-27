@@ -72,6 +72,12 @@ test('Codex runner exposes the sanitized account model catalog', async () => {
   const runner = createCodexRunner({modelCatalog: async () => [{model: 'gpt-5.6-terra', supportedReasoningEfforts: [{reasoningEffort: 'high'}], description: 'omit'}, {model: 'bad model', efforts: ['high']}]});
   assert.deepEqual(await runner.models(), [{model: 'gpt-5.6-terra', efforts: ['high'], isDefault: false}]);
 });
+test('Codex runner exposes the original account observation time with a cached model snapshot',async()=>{
+ const modelCatalog=async()=>[{model:'gpt-5.6-terra',efforts:['high']}];
+ modelCatalog.snapshot=async()=>({models:[{model:'gpt-5.6-terra',efforts:['high']}],observedAt:1234,status:'fresh'});
+ const runner=createCodexRunner({modelCatalog});
+ assert.deepEqual(await runner.models(),{models:[{model:'gpt-5.6-terra',efforts:['high'],isDefault:false}],observedAt:1234,status:'fresh'});
+});
 
 test('managed root preserves a valid two-provider delegation while ordinary delivery does not', async () => {
   const delegation = {independent: true, children: [assignment('codex'), assignment('claude')]};

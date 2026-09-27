@@ -18,6 +18,7 @@ const assignments=[
   {role:'beta analyst',provider:'claude',requestedModel:'haiku',effort:'low',sufficientReason:'bounded source check',acceptanceCriteria:['beta checked'],instructions:'Analyze beta only',sourceIds:['beta']},
 ];
 const models=[{model:'gpt-5.6-luna',efforts:['low'],isDefault:false}];
+const observedModels=()=>({models,observedAt:Date.now(),status:'fresh'});
 const owner=claim=>({executionId:claim.executionId,generation:claim.generation});
 
 async function fixture(t){
@@ -53,7 +54,7 @@ async function allocated(f){
   const created=await f.post('/api/tasks',{prompt:'Compare the original alpha and beta evidence',attachments:originals});
   assert.equal(created.status,201);
   const parent=created.task;
-  const start=await f.post(`/api/desktop/${parent.id}/start`,{expectedVersion:parent.version,sourceNames:['alpha.txt','beta.txt'],models});
+  const start=await f.post(`/api/desktop/${parent.id}/start`,{expectedVersion:parent.version,sourceNames:['alpha.txt','beta.txt'],models:observedModels()});
   assert.equal(start.status,200);
   const result=await f.post(`/api/desktop/${parent.id}/complete`,{...owner(start.claim),content:'Two independent source checks',delegation:{independent:true,children:assignments}});
   assert.equal(result.status,200);

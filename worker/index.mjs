@@ -5,6 +5,7 @@ import {sourceCoverageContext,verifyMaterialViews} from '../public/core/source-c
 import {runClaudeClaim} from './dispatch.mjs';
 import {executionCapability,authorizeExecution,scopedRead} from './execution-scope.mjs';
 import {ModelCatalog} from './model-catalog.mjs';
+import {OfficialModelDiscovery} from './model-discovery.mjs';
 import {Delegations} from './delegations.mjs';
 import {createOrchestration} from './orchestration.mjs';
 import {validateReviewReport} from '../public/core/delegation.mjs';
@@ -127,15 +128,24 @@ async function fireRoutine(fetchFn, env, task, materials, ownership, signal, cat
 export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
   function runtime(env,context={}){
     const store=new D1TaskStore(env.DB),bridge=new CloudBridge(store,{sourceDelegationVersion}),hasRoutine=routineConfigured(env);
-    const catalog=new ModelCatalog(store);
+    const catalog=new ModelCatalog(store),discovery=new OfficialModelDiscovery(store,{fetchFn});
     const orchestration=createOrchestration({store,delegations:new Delegations(store,{sourceDelegationVersion}),hasRoutine,waitUntil:context.waitUntil?promise=>context.waitUntil(promise):undefined,fire:async claim=>fireRoutine(fetchFn,env,claim.task,[],claim,undefined,await catalog.read(),sourceDelegationVersion)});
     const handoff=async input=>{const task=await store.handoffExecution(input.taskId,input);return orchestration.dispatch(task.id);};
     const afterComplete=async task=>{const recovery=orchestration.reconcileTask(task.id).catch(()=>null);if(context.waitUntil)context.waitUntil(recovery);else await recovery;};
     const delegate=async(taskId,input)=>{const current=await store.requireTask(taskId);if(current.delegation?.sourceExecutionId!==input.executionId)await catalog.validate(input.children);return orchestration.allocate(taskId,input);};
-    return {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,delegate};
+    return {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate};
   }
   return {
-    async scheduled(event,env,context={}) {return runtime(env,context).orchestration.drain();},
+    async scheduled(event,env,context={}) {
+      const {orchestration,discovery}=runtime(env,context);
+      // CR-003 MOD-02: an official-only, bounded daily refresh runs independently of orchestration.
+      const refresh=discovery.refresh().catch(()=>null);
+      const drain=orchestration.drain();
+      if(context.waitUntil){context.waitUntil(refresh);return drain;}
+      const [result]=await Promise.allSettled([drain,refresh]);
+      if(result.status==='rejected')throw result.reason;
+      return result.value;
+    },
     async fetch(request, env, context = {}) {
       const headers = cors(request, env);
       try {
@@ -154,11 +164,16 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
         if (pathname.startsWith('/api/') || pathname === '/mcp') {
           if (!authorized(request, env)) return responseJson({error: 'unauthorized'}, 401, {...headers, 'www-authenticate': 'Bearer'});
         }
-        const {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,delegate}=runtime(env,context);
+        const {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate}=runtime(env,context);
         const capabilities = {sourceDelegationVersion:sourceDelegationVersion===1?1:0,cloudCodex: true, localCodex: false, claudeRoutine: hasRoutine, cloud: true, connected: true};
 
         if (request.method === 'GET' && pathname === '/api/state') {
           return responseJson({...await store.getState(capabilities,parseRevision(url.searchParams.get('since'))), desktop: await bridge.presence()}, 200, headers);
+        }
+        if (request.method === 'GET' && pathname === '/api/model-discovery') {
+          // The common /api/* gate above already authenticates; keep this check explicit.
+          if (!authorized(request, env)) return responseJson({error:'unauthorized'},401,{...headers,'www-authenticate':'Bearer'});
+          return responseJson(await discovery.read(),200,headers);
         }
         if (request.method === 'POST' && pathname === '/api/imports') {
           const input=await body(request);return responseJson(await new RecordImporter(store).import(input.task,{copy:input.copy??false}),200,headers);

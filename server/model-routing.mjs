@@ -6,26 +6,56 @@ const CLAUDE_ROLE_MODELS=new Set(['haiku','sonnet','opus']);
 export function modelCatalogRows(rows){
  return (Array.isArray(rows)?rows:[]).slice(0,100).filter(m=>typeof m?.model==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(m.model)&&!m.hidden).map(m=>({model:m.model,efforts:(m.efforts??m.supportedReasoningEfforts?.map(e=>e.reasoningEffort)??[]).filter(e=>EFFORTS.has(e)),isDefault:m.isDefault===true}));
 }
-// One small read-only app-server RPC per hour; no model execution, credentials, or transcript retained.
+// Read-only app-server catalog; no model execution, credentials, or transcript retained.
 export function createModelCatalog({spawnProcess=spawn,env=process.env,cwd=process.cwd(),now=Date.now,ttlMs=3600000,timeoutMs=10000}={}){
- let cached=[],expires=0,inflight;
+ let current={models:[],observedAt:null,status:'unavailable'},lastGood=null,expires=0,inflight;
  function query(){return new Promise(resolve=>{
-  let child,pending='',done=false,timer;
-  const finish=rows=>{if(done)return;done=true;clearTimeout(timer);child?.kill();resolve(modelCatalogRows(rows));};
-  try{child=spawnProcess('codex',['app-server','--stdio'],{env,cwd,shell:false,windowsHide:true,stdio:['pipe','pipe','pipe']});}catch{finish([]);return;}
-  const send=value=>{if(!done)child.stdin.write(JSON.stringify(value)+'\n');};
-  child.on('error',()=>finish([]));child.on('close',()=>finish([]));child.stdin.on('error',()=>finish([]));child.stderr.resume();
-  timer=setTimeout(()=>finish([]),timeoutMs);
+  let child,pending='',done=false,timer,bytes=0,page=0,rows=[],requested=2,initialized=false;
+  const cursors=new Set();
+  const finish=value=>{if(done)return;done=true;clearTimeout(timer);child?.kill();resolve(value);};
+  try{child=spawnProcess('codex',['app-server','--stdio'],{env,cwd,shell:false,windowsHide:true,stdio:['pipe','pipe','pipe']});}catch{finish(null);return;}
+  const send=value=>{if(done)return;try{child.stdin.write(JSON.stringify(value)+'\n');}catch{finish(null);}};
+  child.on('error',()=>finish(null));child.on('close',()=>finish(null));child.stdin.on('error',()=>finish(null));child.stderr.resume();
+  timer=setTimeout(()=>finish(null),timeoutMs);
   child.stdout.on('data',chunk=>{
-   pending+=String(chunk);if(pending.length>256000){finish([]);return;}
+   bytes+=Buffer.byteLength(chunk);if(bytes>256000){finish(null);return;}
+   pending+=String(chunk);
    let index;while(!done&&(index=pending.indexOf('\n'))>=0){const line=pending.slice(0,index);pending=pending.slice(index+1);let event;try{event=JSON.parse(line);}catch{continue;}
-    if(event.id===1){if(event.error){finish([]);return;}send({method:'initialized'});send({id:2,method:'model/list',params:{includeHidden:false}});}
-    if(event.id===2)finish(event.result?.data??[]);
+    if(event.id===1){if(initialized)continue;if(event.error||!event.result||typeof event.result!=='object'||Array.isArray(event.result)){finish(null);return;}initialized=true;send({method:'initialized'});send({id:requested,method:'model/list',params:{includeHidden:false}});}
+    if(event.id===requested){
+     const result=event.result;
+     if(event.error||!result||!Array.isArray(result.data)||rows.length+result.data.length>100||++page>20){finish(null);return;}
+     if(result.data.some(row=>{
+      if(!row||typeof row!=='object'||typeof row.model!=='string'||!/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(row.model))return true;
+      const efforts=row.efforts??row.supportedReasoningEfforts;
+      return !Array.isArray(efforts)||efforts.some(e=>!EFFORTS.has(typeof e==='string'?e:e?.reasoningEffort));
+     })){finish(null);return;}
+     rows.push(...result.data);
+     const cursor=result.nextCursor;
+     if(cursor===null||cursor===undefined){
+      const models=modelCatalogRows(rows);
+      if(new Set(models.map(item=>item.model)).size!==models.length){finish(null);return;}
+      finish(models);return;
+     }
+     if(typeof cursor!=='string'||!cursor||cursors.has(cursor)){finish(null);return;}
+     cursors.add(cursor);requested++;send({id:requested,method:'model/list',params:{includeHidden:false,cursor}});
+    }
    }
   });
   send({id:1,method:'initialize',params:{clientInfo:{name:'inno_model_catalog',version:'1.0'},capabilities:{experimentalApi:true}}});
  });}
- return async()=>{if(now()<expires)return cached;if(!inflight)inflight=query().then(rows=>{cached=rows;expires=now()+(rows.length?ttlMs:Math.min(ttlMs,60000));return rows;}).finally(()=>{inflight=null;});return inflight;};
+ const snapshot=async()=>{
+  if(now()<expires)return current;
+  if(!inflight)inflight=query().then(models=>{
+   if(models!==null){current={models,observedAt:now(),status:'fresh'};lastGood=current;expires=now()+ttlMs;}
+   else{current={models:[],observedAt:lastGood?.observedAt??null,status:'unavailable'};expires=now()+Math.min(ttlMs,60000);}
+   return current;
+  }).finally(()=>{inflight=null;});
+  return inflight;
+ };
+ const get=async()=> (await snapshot()).models;
+ get.snapshot=snapshot;
+ return get;
 }
 export function routingPolicy(rows){
  const models=modelCatalogRows(rows);

@@ -370,10 +370,14 @@ export function createCodexRunner({
   mcpToken,
 } = {}) {
   const env = withoutApiEnvironment(processEnv);
-  const loadModels = async () => modelCatalogRows(await modelCatalog().catch(() => []));
+  const readCatalog=async()=>{
+    try{return await (typeof modelCatalog.snapshot==='function'?modelCatalog.snapshot():modelCatalog());}
+    catch{return {models:[],observedAt:null,status:'unavailable'};}
+  };
+  const loadModels=async()=>{const catalog=await readCatalog();return modelCatalogRows(Array.isArray(catalog)?catalog:catalog?.models);};
   return {
     available: () => availability ? availability() : defaultCodexAvailability(spawnProcess, env),
-    models: loadModels,
+    models: async()=>{const catalog=await readCatalog();const models=modelCatalogRows(Array.isArray(catalog)?catalog:catalog?.models);return Array.isArray(catalog)?models:{models,observedAt:catalog?.observedAt??null,status:catalog?.status==='fresh'?'fresh':'unavailable'};},
     sourceDelegationVersion:sourceDelegationVersion===1?1:0,
     async run({task, materials = [], reviewInputs = [], executionId, generation, signal, sourceDelegationVersion:negotiatedSourceVersion=sourceDelegationVersion}) {
       const sourceVersion=sourceDelegationVersion===1&&negotiatedSourceVersion===1?1:0;
