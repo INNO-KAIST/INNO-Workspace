@@ -340,3 +340,9 @@ TDD evidence: the new test against the real default Worker export failed before 
 Claude child에는 beta-result.txt와final.md가저장됐지만 checkpoint.resultArtifactIds와 parent.delegation.review.children의목록에는final.md만있었다. 마스터는 beta-result.txt를제공받지못했다고정확히보고했지만 generic수치+textartifact기준은final.md로통과했다. 좁은smokeassert통과가전체생성파일전달을보장하지못했다. 원인추적/등록→완료→reviewInputs 회귀시험 및수정을 Sol에위임. 기존실험DB기록은변경하지않음.
 
 안전복구: wrangler gate0으로되돌려 Worker3654b036-42b3-463f-b128-1f3932489cab 배포, 실제GETstate gate0확인. 데스크톱은support1이지만교집합으로새원본협업차단. 모든시험작업completed; AI 재실행없음. 사용량 actualCodexchild input17484/output77/cache11008, masterreview input38611/output1256/cache31360; Claude미보고는null, 배정모델haiku의실제served모델은미관측. 초기부모배정은harness이며AI계획평가아님. .inno/mixed-source-result.json에합성결과보존.
+
+### 2026-09-27 누락 수정의 실제 callback 확인 및 재활성화
+
+수정 커밋f8dc81d/Worker f3b7669a-6c60-44d1-8ad6-7cc8ab5d74cc 배포 후 추가 Claude 실행은1건만사용했다. task3f3af851-988a-4cd5-9911-d6131a25281c completed/version6, owned-callback.txt 내용일치, 실행Id/generation일치, resultArtifactIds에 owned-callback.txt + inno-model-routing.json + final.md 포함을실제API에서확인(.inno/owned-callback-result.json). 수정전실험파일을소급편집하거나3실행혼합여정을재실행하지않았다. 수정후전체혼합구독3회를다시실행한증거가아니며, 기존혼합경계증거+수정경로8개회귀+실제등록/완료선택검증의조합이다.
+
+서버gate1재활성화설정을반영한다. 전체플랫폼의유동적에이전트수/모델최신화, 실행중사용량, 실제연구·문서품질과기기장기운영은여전히미완료다. CR003은아직별도PRD개정승인대상. 기존실험의누락기록은그대로보존한다.

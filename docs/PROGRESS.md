@@ -209,3 +209,9 @@ Claude child에는 beta-result.txt와final.md가저장됐지만 checkpoint.resul
 원인: artifact_task로 등록한 파일의 실행소유자 표식이 없고 finishExecution의 resultArtifactIds가 완료 시 생성 파일만 포함. public/core/tasks.mjs에 검증된 소유자의 등록파일 executionId/generation 표식과 동일콜백중복방지, D1/SQLite finishExecution에는 같은소유자등록파일+완료파일선택을 구현했다. 과거실행파일은보관되나새결과선택에혼합되지않음. 실제MCP→등록→완료재전송→부모manifest→reviewInputs 및오래된소유자409 회귀 RED→GREEN.
 
 구현자 전체432/432 통과, 메인독립코드검토 및 관련8/8 직접실행통과, Worker dry-run gate0통과. 과거완료된시험기록은수정하지않음. 기존등록파일에는owner표식이없어소급선택하지않으며 배포전실행중작업없음. 강화된 .inno/mixed-source-smoke.mjs는마스터실행전과최종검증에서실제artifactId 전달을확인하고, 과거실험에서누락을잡아RED확인했다. 기존smoke통과만으로완료선언하지않음.
+
+### 2026-09-27 누락 수정의 실제 callback 확인 및 재활성화
+
+수정 커밋f8dc81d/Worker f3b7669a-6c60-44d1-8ad6-7cc8ab5d74cc 배포 후 추가 Claude 실행은1건만사용했다. task3f3af851-988a-4cd5-9911-d6131a25281c completed/version6, owned-callback.txt 내용일치, 실행Id/generation일치, resultArtifactIds에 owned-callback.txt + inno-model-routing.json + final.md 포함을실제API에서확인(.inno/owned-callback-result.json). 수정전실험파일을소급편집하거나3실행혼합여정을재실행하지않았다. 수정후전체혼합구독3회를다시실행한증거가아니며, 기존혼합경계증거+수정경로8개회귀+실제등록/완료선택검증의조합이다.
+
+서버gate1재활성화설정을반영한다. 전체플랫폼의유동적에이전트수/모델최신화, 실행중사용량, 실제연구·문서품질과기기장기운영은여전히미완료다. CR003은아직별도PRD개정승인대상. 기존실험의누락기록은그대로보존한다.
