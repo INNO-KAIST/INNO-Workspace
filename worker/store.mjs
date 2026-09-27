@@ -8,6 +8,9 @@ import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execu
 import {failureRecord} from '../public/core/failures.mjs';
 import {assertEvaluationAttachable,assertEvaluationBindingPreserved,evaluationBinding,reserveClaimBudget} from '../public/core/evaluation-claim.mjs';
 import {encodeStoredEvaluationBudget,parseStoredEvaluationBudget} from './evaluation-budgets.mjs';
+import {createSelectionState} from '../public/core/model-selection.mjs';
+import {MAX_MODEL_POLICY_PROFILES,profileKey} from './model-policies.mjs';
+import {delegationProfile} from './allocation-policy.mjs';
 import {
   ConflictError,
   ValidationError,
@@ -145,7 +148,42 @@ export class D1TaskStore {
 
   // The parent CAS checks every child snapshot before any row changes. Every
   // subsequent statement is gated by the unique operation token installed by it.
-  async replaceDelegation(current,next,records=[],metadataGuards=[]){
+  async replaceDelegation(current,next,records=[],policyPlan=[]){
+    // Only the allocator may propose initial policies. Other callers keep the legacy guard-array form.
+    if(!Array.isArray(policyPlan)&&(!policyPlan||typeof policyPlan!=='object'||Object.keys(policyPlan).some(key=>!['guards','initialPolicies'].includes(key))))
+      throw new ValidationError('Invalid initial policy plan');
+    const metadataGuards=Array.isArray(policyPlan)?policyPlan:policyPlan.guards;
+    const proposed=Array.isArray(policyPlan)?[]:policyPlan.initialPolicies;
+    if(!Array.isArray(metadataGuards)||!Array.isArray(proposed)||proposed.length>2)throw new ValidationError('Invalid initial policy plan');
+    const initialPolicies=[];
+    const seenPolicyKeys=new Set();
+    for(const item of proposed){
+      if(!item||typeof item!=='object'||Array.isArray(item)||Object.keys(item).some(key=>!['key','state'].includes(key)))throw new ValidationError('Invalid initial policy proposal');
+      const baseline=item.state?.candidates?.[0];
+      if(baseline?.id!=='baseline'||baseline?.modelVersion!==null||baseline?.status!=='active'||item.state?.minSamples!==3)
+        throw new ValidationError('Invalid initial policy baseline');
+      const expected=createSelectionState({profile:item.state.profile,baseline:{id:baseline.id,provider:baseline.provider,model:baseline.model,modelVersion:null,effort:baseline.effort}});
+      if(item.key!==await profileKey(item.state.profile)||JSON.stringify(item.state)!==JSON.stringify(expected)||seenPolicyKeys.has(item.key))
+        throw new ValidationError('Invalid initial policy proposal');
+      const matching=[];
+      for(const record of records){
+        const child=record.next,assignment=child?.assignment;
+        if(record.current||child?.parentTaskId!==next.id||child?.batchId!==next.delegation?.batchId||!assignment)continue;
+        if(JSON.stringify(await delegationProfile(assignment))===JSON.stringify(item.state.profile))matching.push(child);
+      }
+      if(matching.length!==1)throw new ValidationError('Initial policy must belong to one new child');
+      const child=matching[0],assignment=child.assignment;
+      const frozen=next.delegation?.children?.find(row=>row.taskId===child.id);
+      if(!frozen)throw new ValidationError('Invalid initial policy child');
+      if(JSON.stringify((({taskId,...rest})=>rest)(frozen))!==JSON.stringify(assignment)
+        ||assignment.provider!==baseline.provider||assignment.requestedModel!==baseline.model||assignment.effort!==baseline.effort
+        ||assignment.selection?.status!=='fallback'||assignment.selection?.reason!=='baseline_version_unverified'
+        ||assignment.selection?.policyVersion!==1||assignment.selection?.modelVersion!==null
+        ||JSON.stringify(assignment.selection?.profile)!==JSON.stringify(item.state.profile))
+        throw new ValidationError('Initial policy does not match child assignment');
+      seenPolicyKeys.add(item.key);
+      initialPolicies.push({key:item.key,text:JSON.stringify(item.state)});
+    }
     const authoritative=await this.requireTask(current.id);
     if(authoritative.evaluationBudget||current.evaluationBudget||next.evaluationBudget||records.some(record=>record.current?.evaluationBudget||record.next?.evaluationBudget))
       throw new ConflictError('Evaluation budget task cannot use ordinary delegation',current.version);
@@ -167,6 +205,15 @@ export class D1TaskStore {
       else{values.push(check.value);guard+=` AND EXISTS (SELECT 1 FROM metadata m WHERE m.key = ?${n+1} AND m.value = ?${n+2})`;}
       if(check.expiresAt!==undefined){const at=values.length;values.push(check.expiresAt);guard+=` AND CAST((julianday('now') - 2440587.5) * 86400000 AS INTEGER) < ?${at+1}`;}
     }
+    if(initialPolicies.length){
+      const n=values.length;
+      values.push(initialPolicies.length);
+      guard+=` AND (SELECT COUNT(*) FROM metadata WHERE key GLOB 'model_policy:*') + ?${n+1} <= ${MAX_MODEL_POLICY_PROFILES}`;
+      for(const item of initialPolicies){
+        const at=values.length;values.push(item.key);
+        guard+=` AND NOT EXISTS (SELECT 1 FROM metadata m WHERE m.key = ?${at+1})`;
+      }
+    }
     const statements=[this.db.prepare('UPDATE tasks SET version = ?1, updated_at = ?2, body = ?3 WHERE id = ?4 AND version = ?5'+guard).bind(...values)];
     for(const {current:before,next:after} of records){
       if(!after)continue;
@@ -174,6 +221,20 @@ export class D1TaskStore {
       statements.push(before
         ? this.db.prepare(`UPDATE tasks SET version = ?2, updated_at = ?3, body = ?4 WHERE id = ?1 AND ${allowed}`).bind(after.id,after.version,after.updatedAt,JSON.stringify(after),next.id,next.delegation.operationId)
         : this.db.prepare(`INSERT INTO tasks (id,version,updated_at,body) SELECT ?1,?2,?3,?4 WHERE ${allowed}`).bind(after.id,after.version,after.updatedAt,JSON.stringify(after),next.id,next.delegation.operationId));
+    }
+    for(const item of initialPolicies){
+      statements.push(this.db.prepare(`INSERT INTO metadata(key,value) SELECT ?1,?2 WHERE EXISTS (SELECT 1 FROM tasks p WHERE p.id=?3 AND json_extract(p.body,'$.delegation.operationId')=?4)`).bind(item.key,item.text,next.id,next.delegation.operationId));
+      statements.push(this.db.prepare(`INSERT INTO metadata(key,value) SELECT 'revision',0 WHERE changes()!=1 AND EXISTS (SELECT 1 FROM tasks p WHERE p.id=?1 AND json_extract(p.body,'$.delegation.operationId')=?2)`).bind(next.id,next.delegation.operationId));
+    }
+    if(initialPolicies.length){
+      const childValues=[next.id,next.delegation.operationId],missing=[];
+      for(const record of records){
+        if(!record.next)continue;
+        const at=childValues.length;
+        childValues.push(record.next.id,record.next.version,next.id,next.delegation.batchId);
+        missing.push(`NOT EXISTS (SELECT 1 FROM tasks c WHERE c.id=?${at+1} AND c.version=?${at+2} AND json_extract(c.body,'$.parentTaskId')=?${at+3} AND json_extract(c.body,'$.batchId')=?${at+4})`);
+      }
+      if(missing.length)statements.push(this.db.prepare(`INSERT INTO metadata(key,value) SELECT 'revision',0 WHERE EXISTS (SELECT 1 FROM tasks p WHERE p.id=?1 AND json_extract(p.body,'$.delegation.operationId')=?2) AND (${missing.join(' OR ')})`).bind(...childValues));
     }
     statements.push(this.db.prepare(`UPDATE metadata SET value = value + 1 WHERE key = 'revision' AND EXISTS (SELECT 1 FROM tasks p WHERE p.id = ?1 AND json_extract(p.body,'$.delegation.operationId') = ?2)`).bind(next.id,next.delegation.operationId));
     const results=await this.db.batch(statements);

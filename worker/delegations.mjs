@@ -20,7 +20,7 @@ export class Delegations {
    const validated=validateAssignments(parent,input,{sourceDelegationVersion:this.sourceDelegationVersion});
    const resolved=this.catalog?await resolveAllocationPolicy(this.store,this.catalog,validated):null;
    const allocation=allocateDelegation(parent,input,{now:this.store.now,id:this.store.id,sourceDelegationVersion:this.sourceDelegationVersion,...(resolved?{assignments:resolved.assignments}:{})});
-   try{await this.store.replaceDelegation(parent,allocation.parent,allocation.children.map(next=>({next})),resolved?.guards??[]);return {...allocation,replayed:false};}
+   try{await this.store.replaceDelegation(parent,allocation.parent,allocation.children.map(next=>({next})),resolved?{guards:resolved.guards,initialPolicies:resolved.initialPolicies}:[]);return {...allocation,replayed:false};}
    catch(error){if(!(error instanceof ConflictError)||attempt===2)throw error;}
   }
  }

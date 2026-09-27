@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {TestD1} from './helpers/d1.mjs';
 import {createWorker} from '../worker/index.mjs';
 import {D1TaskStore} from '../worker/store.mjs';
-import {D1ModelPolicies} from '../worker/model-policies.mjs';
+import {D1ModelPolicies,profileKey} from '../worker/model-policies.mjs';
 import {delegationProfile} from '../worker/allocation-policy.mjs';
 const models=[{model:'gpt-5.6-luna',efforts:['low'],isDefault:false}];
 const observedModels=()=>({models,observedAt:Date.now(),status:'fresh'});
@@ -23,7 +23,7 @@ test('HTTP master allocates, preserves siblings, then reviews once with hydrated
  const {claim:review}=await f.post('/api/desktop/poll',{});assert.equal(review.task.id,task.id);assert.equal(review.reviewInputs.length,2);assert.equal(review.reviewInputs.find(c=>c.taskId===child.task.id).artifacts[0].content,'4');
  const report=parent.delegation.children.map(c=>({childTaskId:c.taskId,criteria:[{criterion:'equals 4',status:'pass',evidence:'Recomputed 2+2=4'}]}));
  for(let i=0;i<2;i++)assert.equal((await f.post(`/api/desktop/${task.id}/complete`,{...owner(review),content:'Both equal 4',reviewReport:report})).status,200);
- const finished=await f.store.requireTask(task.id);assert.equal(finished.status,'completed');assert.deepEqual(finished.reviewObservation.children.map(x=>x.status),['policy_missing','policy_missing']);assert.equal(f.fires(),1);assert.equal((await f.post('/api/desktop/poll',{})).claim,null);
+ const finished=await f.store.requireTask(task.id);assert.equal(finished.status,'completed');assert.deepEqual(finished.reviewObservation.children.map(x=>x.status),['recorded','recorded']);assert.equal(f.fires(),1);assert.equal((await f.post('/api/desktop/poll',{})).claim,null);
 });
 test('catalog rejects unsupported assignments before starting either child',async t=>{const f=await fixture(t);const {task}=await f.post('/api/tasks',{prompt:'plan'});const claim=await f.store.claimExecution(task.id,{provider:'claude',expectedVersion:1});const result=await f.mcp('delegate_task',{taskId:task.id,...owner(claim),independent:true,children});assert.equal(result.result.isError,true);assert.equal((await f.store.requireTask(task.id)).status,'running');assert.equal(f.fires(),0);});
 async function reviewing(t){const f=await fixture(t);await f.post('/api/desktop/poll',{models:observedModels()});const {task}=await f.post('/api/tasks',{prompt:'independent checks'});await f.post(`/api/tasks/${task.id}/run`,{provider:'codex',expectedVersion:1});const {claim}=await f.post('/api/desktop/poll',{});await f.post(`/api/desktop/${task.id}/complete`,{...owner(claim),content:'planned',delegation:{independent:true,children}});let parent=await f.store.requireTask(task.id);for(const assignment of parent.delegation.children){let child=await f.store.requireTask(assignment.taskId);const c=child.status==='running'?owner(child.checkpoint):owner((await f.post('/api/desktop/poll',{})).claim);await f.post(`/api/desktop/${child.id}/complete`,{...c,content:'4'});}const {claim:review}=await f.post('/api/desktop/poll',{});return {...f,parent,review};}
@@ -46,6 +46,8 @@ test('authenticated child policy management derives its baseline and keeps null-
  assert.equal(allocated.status,200);
  const child=allocated.task.delegation.children.find(x=>x.provider==='codex');
  const path=`/api/tasks/${child.taskId}/model-policy`;
+ // Historical batches can still lack a policy; keep the manual initialization path covered.
+ for(const assignment of allocated.task.delegation.children){const key=await profileKey(await delegationProfile(assignment));await f.db.prepare('DELETE FROM metadata WHERE key=?1').bind(key).run();}
  const before=await f.post(path,{operation:'initialize',expectedStateVersion:0,modelVersion:'forged'});
  assert.equal(before.status,400);
  const initialized=await f.post(path,{operation:'initialize',expectedStateVersion:0});
@@ -101,7 +103,7 @@ test('policy choices retain a valid last-good observation after refresh failure 
  const failed=await read();assert.equal(failed.status,'refresh_failed');assert.equal(failed.observedAt,observedAt);assert.equal(failed.expiresAt,observedAt+7_200_000);assert.deepEqual(failed.models,[{model:'gpt-5.6-luna',efforts:['low']}]);
  await f.db.prepare("UPDATE metadata SET value=json_set(value,'$.reportedAt',?1) WHERE key='desktop_models'").bind(Date.now()-7_200_001).run();
  const expired=await read();assert.equal(expired.status,'expired');assert.deepEqual(expired.models,[]);assert.equal(expired.expiresAt,expired.observedAt+7_200_000);
- assert.equal((await f.post(path,{operation:'withdraw',expectedStateVersion:0,candidateId:'baseline'})).status,404);
+ assert.equal((await f.post(path,{operation:'withdraw',expectedStateVersion:0,candidateId:'baseline'})).status,409);
 });
 test('worker state advertises model policy management on full and unchanged responses',async t=>{
  const f=await fixture(t),worker=createWorker(),env={DB:f.db,ACCESS_TOKEN:'test-secret-01234567890123456789'};
@@ -157,10 +159,11 @@ test('HTTP policy selection is frozen on both task records and replay ignores ch
  await seeded.policies.withdraw({profile:seeded.profile,candidateId:'candidate',expectedStateVersion:seeded.state.stateVersion});
  const replay=await f.post(`/api/desktop/${task.id}/complete`,{...owner(claim),delegation:input});assert.equal(replay.status,200);assert.deepEqual(replay.task.delegation.children,first.task.delegation.children);
 });
-test('HTTP missing policy records unvalidated fallback; expired account rejects allocation',async t=>{
+test('HTTP first allocation records an unverified baseline; expired account rejects allocation',async t=>{
  const f=await fixture(t);await f.post('/api/desktop/poll',{models:observedModels()});const {task,claim}=await claimMaster(f);
  const result=await f.mcp('delegate_task',{taskId:task.id,...owner(claim),independent:true,children});assert.equal(result.result.isError,undefined);
- const saved=await f.store.requireTask(task.id);assert.equal(saved.delegation.children[0].selection.status,'fallback');assert.equal(saved.delegation.children[0].selection.reason,'policy_missing_evidence_insufficient');assert.equal(saved.delegation.children[0].selection.policyVersion,null);
+ const saved=await f.store.requireTask(task.id);assert.equal(saved.delegation.children[0].selection.status,'fallback');assert.equal(saved.delegation.children[0].selection.reason,'baseline_version_unverified');assert.equal(saved.delegation.children[0].selection.policyVersion,1);
+ assert.equal(f.db.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key GLOB 'model_policy:*'").get().n,2);
  const g=await fixture(t);await g.post('/api/desktop/poll',{models:{models,observedAt:Date.now()-7_200_001,status:'fresh'}});const second=await claimMaster(g);const denied=await g.mcp('delegate_task',{taskId:second.task.id,...owner(second.claim),independent:true,children});assert.equal(denied.result.isError,true);assert.equal((await g.store.requireTask(second.task.id)).status,'running');
 });
 test('withdrawn or expired promoted route gives a new HTTP batch the verified baseline',async t=>{

@@ -413,3 +413,17 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 대기 사유 baseline_critical_regression을 실제 core 선택 경로와 한국어 UI 문구에 연결. 기존 레이아웃/조작 흐름 유지. 실제 recordObservation→selectAssignment→render 단위 통합 검증이며 이번 단계 새 브라우저 화면 검증을 수행했다는 주장은 하지 않는다.
 - RED: 새 pure 경계4건, D1/SQLite legacy prune2건, UI 원인 미연결을 재현 후 수정. 구현자 및 독립 대상64/64, 메인 최종 전체 Node644/644·Worker dry-run·diff check 통과. 로그 .inno/tmp/baseline-regression-tests.log 및 baseline-regression-dry-run.log. 독립 리뷰 차단 결함 없음.
 - 개발 브랜치에만 저장, 실제 AI 호출·새 스택·추가 API 비용·운영 배포 없음. 자동 재자격 부여를 무검증 철회 해제로 대체하지 않는다.
+
+### 2026-09-27 MOD03 초기 배정 정책 자동 연결 착수
+- 직전 턴6591f11/644개 검증으로 progress, clean 작업트리 확인.
+- 기존 수동 초기화만 있는 상태에서 실제 신규 배정이 성공할 때 초기 정책도 같은 D1 batch로 저장하도록 연결. modelVersion:null/품질미검증 유지. 상한32로 일반작업 차단하지 않고 초기화보류를 명시.
+- 계획 docs/superpowers/plans/2026-09-27-auto-initial-policy.md. 구현자/독립리뷰 분리, 기존스택/구독원칙 유지.
+
+### 2026-09-27 MOD03 초기 배정 정책 자동 연결 하위 단계 완료
+- 현재 상태: 실제 신규 하위 배정에 초기 정책 자동 생성 연결. 수동 초기화 없는 정상 관측 기반 진입점 확보. 실제 serving-version/가용성 근거 생성과 검증 후보 승격, MOD06 종료격리·정산·전용비교/UI, M5 배포와 원래 플랫폼 목표는 계속 남아 있다.
+- resolveAllocationPolicy는 읽기와 계획만 수행. catalog.validate를 통과한 요청 provider/model/effort로 baseline/id=baseline/modelVersion:null/정책version1을 준비한다. Codex는 fresh 계정 목록, Claude는 현재 정적 지원 별칭 검사이므로 Claude 계정 가용성·실제 모델 확인으로 표현하지 않는다. 초기 선택은 baseline_version_unverified/unvalidated_fallback, 품질/효율 근거를 만들어내지 않는다.
+- replaceDelegation은 새 정책 canonical state와 profile key, 해당 신규 child의 frozen assignment 연결을 검증. parent CAS에 기존 catalog/availability/policy 부재·정확한 GLOB policy 개수+신규개수<=32를 포함. 성공 operationId 아래에서 부모·자식·초기정책·revision을 같은 D1 batch에 저장, SQL 오류와 정책/자식 INSERT 0건에도 내부 assertion으로 전체 rollback.
+- 동시 초기화/부모 상태 충돌은 기존 제한된 재시도에서 최신 정책을 다시 읽으며 덮어쓰지 않음. 같은 요청 replay는 정책/자식 중복 생성 없음. 철회·고정 등 기존 정책 선택 조건은 유지. 일반 capacity 계산과 D1/SQLite 정책 저장소도 GLOB exact prefix로 통일.
+- 슬롯이 부족하면 입력 순서대로 가능한 초기화만 준비하고 남은 profile은 현재 카탈로그 검증을 거친 요청 경로로 배정. policyVersion:null/policy_capacity_unavailable 사유 및 한국어 표시, 자동 삭제 없음. 기존 과거 미등록 작업의 수동 initialize는 테스트 fixture를 분리해 보존. 32개는 누적 한도이므로 향후 수명주기 정리/재사용 개선은 남아 있다.
+- RED: 최초 초기화/저장실패/용량사유, 정책0건·자식0건·UI 원시사유 노출 재현 후 수정. 최종 구현자·독립 대상40/40, 메인 전체 Node656/656·Worker dry-run·diff check 통과. 로그 .inno/tmp/auto-initial-policy-tests.log 및 auto-initial-policy-dry-run.log. D1은 TestD1이며 운영DB 실제 검증 아님. UI는 기존 레이아웃의 사유 문자열만 변경하고 렌더 단위 검증함.
+- 신규 언어/런타임/의존성·실제 AI 호출·추가 API 비용·운영 배포 없음. 자동 초기화는 자동 모델 변경/품질 검증/승격 완료를 뜻하지 않는다.

@@ -2,7 +2,7 @@ import {createSelectionState,registerCandidate,recordObservation,pruneObservatio
 import {TASK_PINS_SQL,parseTaskEvidencePins} from './policy-retention.mjs';
 
 const PREFIX='model_policy:';
-const MAX_PROFILES=32;
+export const MAX_MODEL_POLICY_PROFILES=32;
 const MAX_STATE_BYTES=2_000_000;
 const identifier=/^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 const fail=message=>{throw new TypeError(`Invalid model policy ${message}`);};
@@ -60,7 +60,7 @@ export function createModelPolicyMethods(adapter,{now=Date.now,getAvailability=(
   async create({profile,baseline,minSamples=3,expectedStateVersion}={}){
    if(expected(expectedStateVersion)!==0)conflict();
    const state=createSelectionState({profile:normalizedProfile(profile),baseline,minSamples}),key=await profileKey(profile),text=serialize(state);
-   if(await adapter.create(key,text,MAX_PROFILES))return state;
+   if(await adapter.create(key,text,MAX_MODEL_POLICY_PROFILES))return state;
    const existing=await adapter.read(key);
    if(existing!==null&&existing===text)return parseState(existing,profile);
    if(existing!==null)conflict();
@@ -174,7 +174,7 @@ export class D1ModelPolicies{
   if(!db)fail('database');
   const adapter={
    read:async key=>(await db.prepare('SELECT value FROM metadata WHERE key=?1').bind(key).first())?.value??null,
-   list:async(after,limit)=>(await db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'model_policy:%' AND key>?1 ORDER BY key LIMIT ?2").bind(after,limit).all()).results,
+   list:async(after,limit)=>(await db.prepare("SELECT key,value FROM metadata WHERE key GLOB 'model_policy:*' AND key>?1 ORDER BY key LIMIT ?2").bind(after,limit).all()).results,
    taskPins:async()=>{
     const revision=Number((await db.prepare("SELECT value FROM metadata WHERE key='revision'").first())?.value??0);
     const rows=(await db.prepare(TASK_PINS_SQL).all()).results;
@@ -186,7 +186,7 @@ export class D1ModelPolicies{
    },
    create:async(key,text,limit)=>{
     const results=await db.batch([
-     db.prepare("INSERT INTO metadata(key,value) SELECT ?1,?2 WHERE (SELECT COUNT(*) FROM metadata WHERE key LIKE 'model_policy:%') < ?3 ON CONFLICT(key) DO NOTHING").bind(key,text,limit),
+     db.prepare("INSERT INTO metadata(key,value) SELECT ?1,?2 WHERE (SELECT COUNT(*) FROM metadata WHERE key GLOB 'model_policy:*') < ?3 ON CONFLICT(key) DO NOTHING").bind(key,text,limit),
      db.prepare("UPDATE metadata SET value=value+1 WHERE key='revision' AND changes()=1"),
     ]);return Number(results[0]?.meta?.changes??0)===1;
    },

@@ -1,6 +1,6 @@
-import {D1ModelPolicies,profileKey} from './model-policies.mjs';
+import {D1ModelPolicies,MAX_MODEL_POLICY_PROFILES,profileKey} from './model-policies.mjs';
 import {ValidationError} from '../public/core/tasks.mjs';
-import {baselineExcluded} from '../public/core/model-selection.mjs';
+import {baselineExcluded,createSelectionState} from '../public/core/model-selection.mjs';
 
 const hex=bytes=>Array.from(bytes,x=>x.toString(16).padStart(2,'0')).join('');
 const digest=async value=>hex(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))));
@@ -33,7 +33,9 @@ export async function resolveAllocationPolicy(store,catalog,assignments){
  const catalogRow=await store.db.prepare("SELECT value FROM metadata WHERE key='desktop_models'").first();
  const guards=[{key:'desktop_models',value:catalogRow?.value??null,...(account.reportedAt!==null?{expiresAt:account.reportedAt+7_200_000}:{})},{key:'model_policy_availability',value:availability.raw}];
  const policies=new D1ModelPolicies(store.db,{now:()=>instant(store.now()),getAvailability:()=>availability.rows});
- const resolved=[];
+ const count=Number((await store.db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key GLOB 'model_policy:*'").first()).n);
+ let slots=Math.max(0,MAX_MODEL_POLICY_PROFILES-count);
+ const resolved=[],initialPolicies=[];
  for(const child of assignments){
   const profile=await delegationProfile(child),key=await profileKey(profile);
   let state=null,choice=null;
@@ -57,10 +59,15 @@ export async function resolveAllocationPolicy(store,catalog,assignments){
   const model=policyRoute?choice.model:unverifiedBaseline?unverifiedBaseline.model:child.requestedModel,effort=policyRoute?choice.effort:unverifiedBaseline?unverifiedBaseline.effort:child.effort;
   // Even a valid policy cannot skip the account's present model/effort check.
   await catalog.validate([{provider:child.provider,requestedModel:model,effort}]);
+  let initializing=false;
+  if(!state&&slots>0&&!initialPolicies.some(item=>item.key===key)){
+   initialPolicies.push({key,state:createSelectionState({profile,baseline:{id:'baseline',provider:child.provider,model:child.requestedModel,modelVersion:null,effort:child.effort}})});
+   slots--;initializing=true;
+  }
   const selection=promoted
    ?{status:'selected',policyVersion:choice.policyVersion,evidenceIds:[...choice.evidenceIds],reason:choice.reason,modelVersion:choice.modelVersion,profile}
-   :{status:'fallback',policyVersion:state?.policyVersion??null,evidenceIds:[],reason:unverifiedBaseline?'baseline_version_unverified':choice?.reason??'policy_missing_evidence_insufficient',modelVersion:null,profile,confidence:'unvalidated_fallback'};
+   :{status:'fallback',policyVersion:state?.policyVersion??(initializing?1:null),evidenceIds:[],reason:unverifiedBaseline||initializing?'baseline_version_unverified':choice?.reason??'policy_capacity_unavailable',modelVersion:null,profile,confidence:'unvalidated_fallback'};
   resolved.push({...child,requestedModel:model,effort,selection});
  }
- return {assignments:resolved,guards};
+ return {assignments:resolved,guards,initialPolicies};
 }

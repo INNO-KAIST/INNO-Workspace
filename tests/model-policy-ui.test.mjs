@@ -57,6 +57,17 @@ test('baseline critical hold is explained in Korean without changing the policy 
  ui.close();
 });
 
+test('policy capacity fallback explains the frozen assignment in Korean',async()=>{
+ const response=policyResponse();response.policy=null;response.route=null;
+ response.assignment.selection={reason:'policy_capacity_unavailable',policyVersion:null};
+ const client={remote:true,readModelPolicy:async()=>response},view=fakeDialog();
+ const ui=createModelPolicyUI({dialog:view.dialog,getContext:()=>policyContext(client)});
+ await ui.open('child');
+ assert.match(view.content.innerHTML,/정책 저장 한도/);
+ assert.doesNotMatch(view.content.innerHTML,/policy_capacity_unavailable/);
+ ui.close();
+});
+
 test('failed first read can be retried and older overlapping read cannot replace the latest response',async()=>{
  const pending=[];const client={remote:true,readModelPolicy:()=>{const next=deferred();pending.push(next);return next.promise;}};
  const view=fakeDialog(),ui=createModelPolicyUI({dialog:view.dialog,getContext:()=>policyContext(client)});
