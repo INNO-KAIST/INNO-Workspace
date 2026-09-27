@@ -1,4 +1,5 @@
-import {createSelectionState,registerCandidate,recordObservation,promoteCandidate,withdrawCandidate,selectAssignment} from '../public/core/model-selection.mjs';
+import {createSelectionState,registerCandidate,recordObservation,pruneObservations,promoteCandidate,withdrawCandidate,selectAssignment} from '../public/core/model-selection.mjs';
+import {TASK_PINS_SQL,parseTaskEvidencePins} from './policy-retention.mjs';
 
 const PREFIX='model_policy:';
 const MAX_PROFILES=32;
@@ -45,9 +46,9 @@ export function createModelPolicyMethods(adapter,{now=Date.now,getAvailability=(
  const clock=()=>{const value=now();if(!Number.isSafeInteger(value)||value<0)fail('clock');return value;};
  const availability=async()=>{const rows=await getAvailability();if(!Array.isArray(rows)||rows.length>100)fail('availability');return rows;};
  async function loaded(profile){const key=await profileKey(profile),raw=await adapter.read(key);if(raw===null)throw new Error('model policy not found');return {key,state:parseState(raw,profile)};}
- async function write(key,oldState,nextState){
+ async function write(key,oldState,nextState,revision){
   if(nextState===oldState)return oldState;
-  const changed=await adapter.compareAndSwap(key,oldState.stateVersion,serialize(nextState));
+  const changed=await adapter.compareAndSwap(key,oldState.stateVersion,serialize(nextState),revision);
   if(!changed)conflict();
   return nextState;
  }
@@ -78,8 +79,19 @@ export function createModelPolicyMethods(adapter,{now=Date.now,getAvailability=(
    const prior=state.observations.find(x=>x.provider===observation.provider&&x.executionId===observation.executionId&&x.generation===observation.generation);
    if(prior){if(!sameObservation(prior,observation))conflict();return {state,recorded:false,reason:'duplicate_execution'};}
    if(state.stateVersion!==expectedStateVersion)conflict();
-   const result=recordObservation(state,observation,{now:clock(),availability:await availability()});
-   return {...result,state:await write(key,state,result.state)};
+   const at=clock(),critical=observation.candidateId===state.activeId&&state.activeId!==state.baselineId&&observation.quality?.source==='independent_review'&&observation.quality.critical===true;
+   const noRemoval=critical||state.observations.length<1000&&state.observations.every(x=>x.observedAt>at-90*86_400_000);
+   const pins=noRemoval?{ids:[],revision:null}:await adapter.taskPins();
+   const availableRows=await availability();
+   const result=recordObservation(state,observation,{now:at,availability:availableRows,taskEvidenceIds:pins.ids,preserveAllForCritical:critical});
+   if(critical){
+    try{serialize(result.state);}catch(error){
+     if(!/state size/.test(error.message))throw error;
+     const withdrawal=withdrawCandidate(state,state.activeId,{now:at,availability:availableRows});
+     return {state:await write(key,state,withdrawal.state),recorded:false,reason:'critical_regression_evidence_capacity'};
+    }
+   }
+   return {...result,state:await write(key,state,result.state,pins.revision)};
   },
   async promote({profile,candidateId,expectedStateVersion}={}){
    expected(expectedStateVersion);const {key,state}=await loaded(profile);
@@ -94,6 +106,43 @@ export function createModelPolicyMethods(adapter,{now=Date.now,getAvailability=(
    return {...result,state:await write(key,state,result.state)};
   },
   async select(profile){const {state}=await loaded(profile);return selectAssignment(state,{profile:normalizedProfile(profile),now:clock(),availability:await availability()});},
+  async prune({profile,expectedStateVersion}={}){
+   expected(expectedStateVersion);const {key,state}=await loaded(profile);
+   if(state.stateVersion!==expectedStateVersion)conflict();
+   const at=clock();
+   if(state.observations.length<=1000&&state.observations.every(x=>x.observedAt>at-90*86_400_000))return {...pruneObservations(state,{now:at}),state};
+   const pins=await adapter.taskPins();
+   const result=pruneObservations(state,{now:at,taskEvidenceIds:pins.ids});
+   return {...result,state:await write(key,state,result.state,pins.revision)};
+  },
+  async retentionStatus(){const raw=await adapter.read('model_policy_retention_status');return raw===null?{status:'never_run',removed:0,retainedExceptions:0,deferredCount:0,failedCount:0}:JSON.parse(raw);},
+  async cleanupBatch({limit=4}={}){
+   if(!Number.isSafeInteger(limit)||limit<1||limit>8)fail('cleanup batch limit');
+   const at=clock(),priorRaw=await adapter.read('model_policy_retention_status');
+   const prior=priorRaw===null?{status:'never_run',removed:0,retainedExceptions:0,deferredCount:0,failedCount:0}:JSON.parse(priorRaw);
+   if(prior.nextAt&&prior.nextAt>at)return prior;
+   const cursor=prior.cursor??PREFIX;
+   let rows;
+   try{rows=await adapter.list(cursor,limit);}catch{
+    const failed={...prior,status:'failed',lastAttemptAt:at,failedCount:(prior.failedCount??0)+1,lastError:'profile_scan_failed',nextAt:at+3_600_000};
+    if(!await adapter.writeStatus(JSON.stringify(failed),priorRaw))return this.retentionStatus();
+    return failed;
+   }
+   let removed=prior.cursor?prior.removed:0,retainedExceptions=prior.cursor?prior.retainedExceptions:0,deferredCount=prior.cursor?prior.deferredCount:0,failedCount=prior.cursor?prior.failedCount:0;
+   for(const row of rows){
+    try{
+     const state=JSON.parse(row.value);
+     const result=await this.prune({profile:state.profile,expectedStateVersion:state.stateVersion});
+     removed+=result.removed;retainedExceptions+=result.expiredPinned+result.overLimit;
+    }catch(error){
+     if(/deferred|conflict/i.test(error.message))deferredCount++;else failedCount++;
+    }
+   }
+   const complete=rows.length<limit;
+   const next={status:!complete?'running':failedCount?'failed':deferredCount?'deferred':'complete',lastAttemptAt:at,lastCleanupAt:removed?at:prior.lastCleanupAt??null,removed,retainedExceptions,deferredCount,failedCount,lastError:failedCount?'policy_cleanup_failed':deferredCount?'pin_scan_deferred':null,cursor:complete?null:rows.at(-1).key,nextAt:complete?at+(failedCount||deferredCount?3_600_000:86_400_000):null};
+   if(!await adapter.writeStatus(JSON.stringify(next),priorRaw))return this.retentionStatus();
+   return next;
+  },
  };
 }
 
@@ -102,15 +151,25 @@ export class D1ModelPolicies{
   if(!db)fail('database');
   const adapter={
    read:async key=>(await db.prepare('SELECT value FROM metadata WHERE key=?1').bind(key).first())?.value??null,
+   list:async(after,limit)=>(await db.prepare("SELECT key,value FROM metadata WHERE key LIKE 'model_policy:%' AND key>?1 ORDER BY key LIMIT ?2").bind(after,limit).all()).results,
+   taskPins:async()=>{
+    const revision=Number((await db.prepare("SELECT value FROM metadata WHERE key='revision'").first())?.value??0);
+    const rows=(await db.prepare(TASK_PINS_SQL).all()).results;
+    return {revision,ids:parseTaskEvidencePins(rows)};
+   },
+   writeStatus:async(text,priorRaw)=>{
+    const result=await db.prepare("INSERT INTO metadata(key,value) SELECT 'model_policy_retention_status',?1 WHERE (?2 IS NULL AND NOT EXISTS(SELECT 1 FROM metadata WHERE key='model_policy_retention_status')) OR (SELECT value FROM metadata WHERE key='model_policy_retention_status')=?2 ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE metadata.value=?2").bind(text,priorRaw).run();
+    return Number(result.meta?.changes??0)===1;
+   },
    create:async(key,text,limit)=>{
     const results=await db.batch([
      db.prepare("INSERT INTO metadata(key,value) SELECT ?1,?2 WHERE (SELECT COUNT(*) FROM metadata WHERE key LIKE 'model_policy:%') < ?3 ON CONFLICT(key) DO NOTHING").bind(key,text,limit),
      db.prepare("UPDATE metadata SET value=value+1 WHERE key='revision' AND changes()=1"),
     ]);return Number(results[0]?.meta?.changes??0)===1;
    },
-   compareAndSwap:async(key,version,text)=>{
+   compareAndSwap:async(key,version,text,revision)=>{
     const results=await db.batch([
-     db.prepare("UPDATE metadata SET value=?1 WHERE key=?2 AND json_extract(value,'$.stateVersion')=?3").bind(text,key,version),
+     db.prepare("UPDATE metadata SET value=?1 WHERE key=?2 AND json_extract(value,'$.stateVersion')=?3 AND (?4 IS NULL OR (SELECT value FROM metadata WHERE key='revision')=?4)").bind(text,key,version,revision??null),
      db.prepare("UPDATE metadata SET value=value+1 WHERE key='revision' AND changes()=1"),
     ]);return Number(results[0]?.meta?.changes??0)===1;
    },

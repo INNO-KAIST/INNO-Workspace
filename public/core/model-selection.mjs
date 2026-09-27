@@ -83,7 +83,28 @@ export function registerCandidate(state,value){
  if(state.candidates.some(x=>x.id===candidate.id||x.provider===candidate.provider&&x.model===candidate.model&&x.modelVersion===candidate.modelVersion&&x.effort===candidate.effort))fail('duplicate candidate');
  return {...state,stateVersion:state.stateVersion+1,candidates:[...state.candidates,{...candidate,status:'candidate'}]};
 }
-export function recordObservation(state,value,{now,availability=[]}={}){
+function retentionPins(state,taskEvidenceIds=[],now){
+ if(!Array.isArray(taskEvidenceIds)||taskEvidenceIds.some(x=>typeof x!=='string'||!IDENTIFIER.test(x)))fail('task evidence pins');
+ const pinned=new Set([...state.activeEvidenceIds,...taskEvidenceIds]);
+ for(const row of state.observations)if(row.quality?.source==='independent_review'&&row.quality.critical&&row.observedAt>now-EVIDENCE_MS)pinned.add(row.id);
+ const previous=routeById(state,state.previousId);
+ for(const id of previous?.evidenceIds??[])if(state.observations.some(row=>row.id===id&&row.observedAt>now-EVIDENCE_MS))pinned.add(id);
+ return pinned;
+}
+export function pruneObservations(state,{now,taskEvidenceIds=[]}={}){
+ instant(now,'now');const pinned=retentionPins(state,taskEvidenceIds,now);
+ const retained=state.observations.filter(x=>pinned.has(x.id)||x.observedAt>now-EVIDENCE_MS);
+ let removed=state.observations.length-retained.length;
+ while(retained.length>MAX_OBSERVATIONS){
+  let victim=-1;
+  for(let i=0;i<retained.length;i++)if(!pinned.has(retained[i].id)&&(victim<0||retained[i].observedAt<retained[victim].observedAt))victim=i;
+  if(victim<0)break;
+  retained.splice(victim,1);removed++;
+ }
+ const expiredPinned=retained.filter(x=>x.observedAt<=now-EVIDENCE_MS&&pinned.has(x.id)).length;
+ return {state:removed?{...state,stateVersion:state.stateVersion+1,observations:retained}:state,removed,expiredPinned,overLimit:Math.max(0,retained.length-MAX_OBSERVATIONS),retainedExceptions:retained.filter(x=>pinned.has(x.id)).length};
+}
+export function recordObservation(state,value,{now,availability=[],taskEvidenceIds=[],preserveAllForCritical=false}={}){
  instant(now,'now');const observation=validObservation(state,value,now);
  const existing=state.observations.find(x=>x.provider===observation.provider&&x.executionId===observation.executionId&&x.generation===observation.generation);
  if(existing)return {state,recorded:false,reason:'duplicate_execution'};
@@ -91,9 +112,10 @@ export function recordObservation(state,value,{now,availability=[]}={}){
  const critical=observation.candidateId===state.activeId&&state.activeId!==state.baselineId&&observation.quality?.source==='independent_review'&&observation.quality.critical;
  // Withdraw first so critical evidence can be recorded even when the old active policy pinned every slot.
  const current=critical?withdrawCandidate(state,state.activeId,{now,availability}).state:state;
- const pinned=new Set(current.activeEvidenceIds);
- const retained=current.observations.filter(x=>x.observedAt<=now&&(x.observedAt>now-EVIDENCE_MS||pinned.has(x.id)));
- while(retained.length>=MAX_OBSERVATIONS){
+ const pinned=retentionPins(current,taskEvidenceIds,now);
+ const preserve=critical&&preserveAllForCritical;
+ const retained=preserve?[...current.observations]:current.observations.filter(x=>pinned.has(x.id)||x.observedAt>now-EVIDENCE_MS);
+ while(!preserve&&retained.length>=MAX_OBSERVATIONS){
   let victim=-1;
   for(let i=0;i<retained.length;i++)if(!pinned.has(retained[i].id)&&(victim<0||retained[i].observedAt<retained[victim].observedAt))victim=i;
   if(victim<0)fail('observation capacity: all evidence pinned');

@@ -1,0 +1,86 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {usageHistory,sanitizeUsageHistory,usageSummary} from '../public/core/execution-usage.mjs';
+import {SqliteTaskStore} from '../server/store.mjs';
+import {D1TaskStore} from '../worker/store.mjs';
+import {Delegations} from '../worker/delegations.mjs';
+import {TestD1} from './helpers/d1.mjs';
+
+const start='2026-09-27T00:00:00.000Z',end='2026-09-27T00:00:03.000Z';
+const row=task=>task.checkpoint.usageHistory.at(-1);
+const assignment=provider=>({role:provider+' analyst',provider,requestedModel:provider==='codex'?'gpt-test':'sonnet-test',effort:'low',sufficientReason:'Independent check',acceptanceCriteria:['correct'],instructions:'Check result'});
+
+test('legacy and imported rows cannot claim server phase evidence',()=>{
+ const old={provider:'codex',executionId:'old',generation:1,completedAt:end,inputTokens:7,phase:'review',transition:'completion',wallElapsedMs:1,requestedModel:'forged',phaseSource:'server_state'};
+ const imported=sanitizeUsageHistory([old]);
+ assert.equal(imported[0].phase,'unknown');
+ assert.equal(imported[0].transition,'unknown');
+ assert.equal(imported[0].wallElapsedMs,null);
+ assert.equal(imported[0].requestedModel,null);
+ const later=usageHistory({provider:'codex',executionId:'new',generation:2,claimedAt:'invalid',usageHistory:imported},undefined,end,{phase:'review',transition:'completion'});
+ assert.equal(later[0].phase,'unknown');
+ assert.equal(later[1].wallElapsedMs,null);
+ assert.equal(later[1].inputTokens,null);
+ assert.equal(usageSummary([{checkpoint:{usageHistory:later}}]).codex.inputTokens,7);
+});
+
+for(const backend of ['sqlite','d1'])test(`${backend} records server phases for completion, decision, and failure without trusting payload`,async t=>{
+ const db=backend==='d1'?new TestD1():null;
+ const store=db?new D1TaskStore(db,{now:()=>start}):new SqliteTaskStore(':memory:',{now:()=>start});
+ t.after(()=>db?db.close():store.close());
+ let task=await store.createTask({prompt:'Work'});
+ let owner=await store.claimExecution(task.id,{provider:'codex',expectedVersion:task.version});
+ store.now=()=>end;
+ task=await store.requestDecision(task.id,{...owner,prompt:'Choose',options:[{label:'A',pros:'Fast',cons:'Risk'},{label:'B',pros:'Safe',cons:'Slow'}],usage:{inputTokens:3,phase:'review',wallElapsedMs:1}});
+ assert.deepEqual([row(task).phase,row(task).transition,row(task).wallElapsedMs,row(task).requestedModel],['master','decision',3000,null]);
+ assert.equal(row(task).phaseSource,'server_state');
+ assert.equal(row(task).source,'executor_report');
+ task=await store.applyAction(task.id,{action:'resume',expectedVersion:task.version});
+ store.now=()=>start;
+ owner=await store.claimExecution(task.id,{provider:'codex',expectedVersion:task.version});
+ store.now=()=>end;
+ task=await store.failExecution(task.id,{...owner,failure:{kind:'quota'}});
+ assert.deepEqual([row(task).phase,row(task).transition,row(task).wallElapsedMs,row(task).inputTokens],['master','failure',3000,null]);
+ task=await store.applyAction(task.id,{action:'resume',expectedVersion:task.version});
+ store.now=()=>start;
+ owner=await store.claimExecution(task.id,{provider:'codex',expectedVersion:task.version});
+ store.now=()=>end;
+ task=await store.finishExecution(task.id,{...owner,content:'Done',usage:{outputTokens:2}});
+ assert.deepEqual([row(task).phase,row(task).transition,row(task).wallElapsedMs],['master','completion',3000]);
+ assert.equal(task.checkpoint.usageHistory.length,3);
+ await assert.rejects(async()=>store.finishExecution(task.id,{...owner,content:'Replay',usage:{inputTokens:999}}));
+ assert.equal((await store.requireTask(task.id)).checkpoint.usageHistory.length,3);
+});
+
+test('D1 allocation, child completion, review retry, and handoff retain their transition identity',async t=>{
+ const db=new TestD1();t.after(()=>db.close());const store=new D1TaskStore(db,{now:()=>start});const delegation=new Delegations(store);
+ const root=await store.createTask({prompt:'Compare'});const owner=await store.claimExecution(root.id,{provider:'codex',expectedVersion:root.version});
+ store.now=()=>end;
+ const input={...owner,independent:true,children:[assignment('codex'),assignment('claude')],usage:{inputTokens:5}};
+ const allocated=await delegation.allocate(root.id,input);
+ assert.deepEqual([row(allocated.parent).phase,row(allocated.parent).transition,row(allocated.parent).wallElapsedMs],['master','delegation',3000]);
+ assert.equal((await delegation.allocate(root.id,{...input,usage:{inputTokens:999}})).parent.checkpoint.usageHistory.length,1);
+ store.now=()=>start;
+ const childOwner=await store.claimExecution(allocated.children[0].id,{provider:'codex',expectedVersion:allocated.children[0].version});
+ store.now=()=>end;
+ const child=await store.finishExecution(allocated.children[0].id,{...childOwner,content:'Checked'});
+ assert.deepEqual([row(child).phase,row(child).requestedModel,row(child).transition],['child','gpt-test','completion']);
+ store.now=()=>start;
+ const siblingOwner=await store.claimExecution(allocated.children[1].id,{provider:'claude',expectedVersion:allocated.children[1].version});
+ store.now=()=>end;
+ await store.finishExecution(allocated.children[1].id,{...siblingOwner,content:'Checked'});
+ const review=await delegation.reconcile(root.id);
+ store.now=()=>start;
+ const reviewOwner=await store.claimExecution(root.id,{provider:'codex',expectedVersion:review.parent.version});
+ store.now=()=>end;
+ const report=allocated.children.map(c=>({childTaskId:c.id,criteria:[{criterion:'correct',status:c.id===child.id?'fail':'pass',evidence:'Checked'}]}));
+ const retried=await delegation.retryReview(root.id,{...reviewOwner,reviewReport:report});
+ assert.deepEqual([row(retried.parent).phase,row(retried.parent).transition,row(retried.parent).wallElapsedMs],['review','retry',3000]);
+ const independent=await store.createTask({prompt:'Sequential work'});
+ store.now=()=>start;
+ const handoffOwner=await store.claimExecution(independent.id,{provider:'codex',expectedVersion:independent.version});
+ store.now=()=>end;
+ const handed=await store.handoffExecution(independent.id,{...handoffOwner,content:'Progress',handoff:{provider:'claude',instructions:'Continue',reason:'Review',acceptance:'Verify'}});
+ assert.deepEqual([row(handed).phase,row(handed).transition,row(handed).wallElapsedMs],['master','handoff',3000]);
+ assert.equal(row(handed).provider,'codex');
+});

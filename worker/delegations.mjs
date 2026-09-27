@@ -106,7 +106,7 @@ export class Delegations {
    }
    return {current,next};
   });
-  const next={...parent,status:'waiting_children',version:parent.version+1,updatedAt:now,delegation:{...parent.delegation,state:'waiting_children',epoch,retryCount:parent.delegation.retryCount+(retry?1:0),manualRecoveryCount:(parent.delegation.manualRecoveryCount??0)+(manualRecovery?1:0),review:undefined,reviewError:undefined,...(report?{reviewReport:report}:{}),...(reviewRetry?{lastReviewRetry:reviewRetry}:{})},checkpoint:{...parent.checkpoint,...(reviewRetry?{usageHistory:usageHistory(parent.checkpoint,usage,now)}:{}),status:'waiting_children',executionId:undefined,expiresAt:undefined,sessionUrl:undefined,interruptedBy:undefined,interruptedVersion:undefined,updatedAt:now}};
+  const next={...parent,status:'waiting_children',version:parent.version+1,updatedAt:now,delegation:{...parent.delegation,state:'waiting_children',epoch,retryCount:parent.delegation.retryCount+(retry?1:0),manualRecoveryCount:(parent.delegation.manualRecoveryCount??0)+(manualRecovery?1:0),review:undefined,reviewError:undefined,...(report?{reviewReport:report}:{}),...(reviewRetry?{lastReviewRetry:reviewRetry}:{})},checkpoint:{...parent.checkpoint,...(reviewRetry?{usageHistory:usageHistory(parent.checkpoint,usage,now,{task:parent,transition:'retry'})}:{}),status:'waiting_children',executionId:undefined,expiresAt:undefined,sessionUrl:undefined,interruptedBy:undefined,interruptedVersion:undefined,updatedAt:now}};
   await this.store.replaceDelegation(parent,next,records);
   if(records.every(r=>(r.next??r.current).status==='completed'))return this.reconcile(parent.id);
   return {parent:next,children:records.map(r=>r.next??r.current)};

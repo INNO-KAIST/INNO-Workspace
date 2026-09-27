@@ -19,6 +19,7 @@ import { ConflictError, ValidationError, sanitizeMaterials } from '../public/cor
 import { handleMcp } from '../server/mcp.mjs';
 import { D1TaskStore } from './store.mjs';
 import {createReviewObservationPipeline} from './review-observation-pipeline.mjs';
+import {D1ModelPolicies} from './model-policies.mjs';
 
 const ROUTINE_BETA = 'experimental-cc-routine-2026-04-01';
 
@@ -130,7 +131,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
   function runtime(env,context={}){
     const store=new D1TaskStore(env.DB),bridge=new CloudBridge(store,{sourceDelegationVersion}),hasRoutine=routineConfigured(env);
     const catalog=new ModelCatalog(store),discovery=new OfficialModelDiscovery(store,{fetchFn});
-    const reviewObservations=createReviewObservationPipeline(store);
+    const reviewObservations=createReviewObservationPipeline(store),policyRetention=new D1ModelPolicies(store.db);
     const orchestration=createOrchestration({store,delegations:new Delegations(store,{sourceDelegationVersion,catalog}),hasRoutine,waitUntil:context.waitUntil?promise=>context.waitUntil(promise):undefined,fire:async claim=>fireRoutine(fetchFn,env,claim.task,[],claim,undefined,await catalog.read(),sourceDelegationVersion)});
     const handoff=async input=>{const task=await store.handoffExecution(input.taskId,input);return orchestration.dispatch(task.id);};
     const afterComplete=async task=>{
@@ -139,17 +140,18 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
       if(context.waitUntil){context.waitUntil(recovery);context.waitUntil(observation);}else await Promise.all([recovery,observation]);
     };
     const delegate=async(taskId,input)=>orchestration.allocate(taskId,input);
-    return {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations};
+    return {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention};
   }
   return {
     async scheduled(event,env,context={}) {
-      const {orchestration,discovery,reviewObservations}=runtime(env,context);
+      const {orchestration,discovery,reviewObservations,policyRetention}=runtime(env,context);
       // CR-003 MOD-02: an official-only, bounded daily refresh runs independently of orchestration.
       const refresh=discovery.refresh().catch(()=>null);
       const drain=orchestration.drain();
       const observations=reviewObservations.drain().catch(()=>null);
-      if(context.waitUntil){context.waitUntil(refresh);context.waitUntil(observations);return drain;}
-      const [result]=await Promise.allSettled([drain,refresh,observations]);
+      const retention=policyRetention.cleanupBatch().catch(()=>null);
+      if(context.waitUntil){context.waitUntil(refresh);context.waitUntil(observations);context.waitUntil(retention);return drain;}
+      const [result]=await Promise.allSettled([drain,refresh,observations,retention]);
       if(result.status==='rejected')throw result.reason;
       return result.value;
     },
@@ -171,7 +173,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
         if (pathname.startsWith('/api/') || pathname === '/mcp') {
           if (!authorized(request, env)) return responseJson({error: 'unauthorized'}, 401, {...headers, 'www-authenticate': 'Bearer'});
         }
-        const {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations}=runtime(env,context);
+        const {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention}=runtime(env,context);
         const capabilities = {sourceDelegationVersion:sourceDelegationVersion===1?1:0,cloudCodex: true, localCodex: false, claudeRoutine: hasRoutine, cloud: true, connected: true};
 
         if (request.method === 'GET' && pathname === '/api/state') {
@@ -181,6 +183,9 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0} = {}) {
           // The common /api/* gate above already authenticates; keep this check explicit.
           if (!authorized(request, env)) return responseJson({error:'unauthorized'},401,{...headers,'www-authenticate':'Bearer'});
           return responseJson(await discovery.read(),200,headers);
+        }
+        if (request.method === 'GET' && pathname === '/api/model-policy-retention') {
+          return responseJson(await policyRetention.retentionStatus(),200,headers);
         }
         const observationMatch=pathname.match(/^\/api\/tasks\/([^/]+)\/review-observations$/);
         if(request.method==='GET'&&observationMatch){

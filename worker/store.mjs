@@ -183,7 +183,7 @@ export class D1TaskStore {
         ...current, status: 'waiting_user', version: current.version + 1, updatedAt: now,
         decision: {...decision, createdAt: now},
         ...(reviewReport?{delegation:{...current.delegation,reviewReport}}:{}),
-        checkpoint: {...current.checkpoint, status: 'waiting_user', usageHistory:usageHistory(current.checkpoint,input.usage,now), content: decision.prompt, updatedAt: now},
+        checkpoint: {...current.checkpoint, status: 'waiting_user', usageHistory:usageHistory(current.checkpoint,input.usage,now,{task:current,transition:'decision'}), content: decision.prompt, updatedAt: now},
       };
     });
   }
@@ -297,7 +297,7 @@ export class D1TaskStore {
         ...(reviewReport?{reviewObservation:{createdAt:now,reviewExecutionId:current.checkpoint.executionId,reviewGeneration:current.checkpoint.generation,batchId:current.delegation.batchId,epoch:current.delegation.epoch,children:current.delegation.children.map(child=>({childTaskId:child.taskId,...(child.selection?.profile?{status:'pending',attempts:0}:{status:'not_attributable',reason:'saved_profile_missing',attempts:0,nextAt:null})}))}}:{}),
         messages: [...current.messages, {id: this.id(), role: 'assistant', content, createdAt: now}],
         artifacts: [...current.artifacts, ...artifacts],
-        checkpoint: {...current.checkpoint, resultArtifactIds:[...current.artifacts.filter(a=>a.executionId===input.executionId&&a.generation===input.generation),...artifacts].map(a=>a.id), usage: executionUsage(current.checkpoint,input.usage,now), usageHistory: usageHistory(current.checkpoint,input.usage,now), failure: undefined, status: 'completed', content: input.checkpoint ?? 'Execution completed.', completedAt: now, wallElapsedMs:elapsed, ...(executionEvidence?{executionEvidence:{...executionEvidence,wallElapsedMs:elapsed}}:{}), updatedAt: now},
+        checkpoint: {...current.checkpoint, resultArtifactIds:[...current.artifacts.filter(a=>a.executionId===input.executionId&&a.generation===input.generation),...artifacts].map(a=>a.id), usage: executionUsage(current.checkpoint,input.usage,now), usageHistory: usageHistory(current.checkpoint,input.usage,now,{task:current,transition:'completion'}), failure: undefined, status: 'completed', content: input.checkpoint ?? 'Execution completed.', completedAt: now, wallElapsedMs:elapsed, ...(executionEvidence?{executionEvidence:{...executionEvidence,wallElapsedMs:elapsed}}:{}), updatedAt: now},
       };
     });
   }
@@ -323,7 +323,7 @@ export class D1TaskStore {
       const status = failure.kind === 'quota' ? 'waiting_quota' : failure.kind === 'authentication' ? 'waiting_connection' : 'failed';
       return {
         ...current, status, version: current.version + 1, updatedAt: now,
-        checkpoint: {...current.checkpoint, usageHistory:usageHistory(current.checkpoint,input.usage,now), status, failure, updatedAt: now},
+        checkpoint: {...current.checkpoint, usageHistory:usageHistory(current.checkpoint,input.usage,now,{task:current,transition:'failure'}), status, failure, updatedAt: now},
       };
     });
   }

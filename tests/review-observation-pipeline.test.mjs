@@ -42,6 +42,19 @@ test('partial recording recovers without duplicating the successful child',async
  assert.equal(state.observations.length,1);assert.deepEqual((await f.store.requireTask('parent')).reviewObservation.children.map(x=>x.status),['duplicate','recorded']);
 });
 
+test('capacity withdrawal is not recorded as a duplicate review observation',async t=>{
+ const f=await fixture(t),existing=new D1ModelPolicies(f.db);
+ const pipeline=createReviewObservationPipeline(f.store,{policyMethods:{
+  read:profile=>existing.read(profile),
+  observe:async({profile})=>({recorded:false,reason:profile.family==='delegation_codex'?'critical_regression_evidence_capacity':'duplicate_execution'}),
+ }});
+ await pipeline.process('parent');
+ const rows=(await f.store.requireTask('parent')).reviewObservation.children;
+ assert.deepEqual(rows.map(x=>x.status),['not_attributable','duplicate']);
+ assert.equal(rows[0].reason,'critical_regression_evidence_capacity');
+ assert.deepEqual(await pipeline.drain(),{checked:0,failed:0});
+});
+
 test('task scoped observation diagnostics are available only through authenticated GET',async t=>{
  const f=await fixture(t,{policy:false});await f.pipeline.process('parent');const worker=createWorker(),env={DB:f.db,ACCESS_TOKEN:'test-secret-01234567890123456789'};
  const url='https://inno.example/api/tasks/parent/review-observations';

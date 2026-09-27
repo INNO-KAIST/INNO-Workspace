@@ -20,8 +20,8 @@ const errorCode=error=>{
 
 // Parent completion is authoritative. The marker is a small projection of its two
 // frozen assignments; no source text, client verdict or global queue is persisted.
-export function createReviewObservationPipeline(store){
- const policies=new D1ModelPolicies(store.db,{
+export function createReviewObservationPipeline(store,{policyMethods}={}){
+ const policies=policyMethods??new D1ModelPolicies(store.db,{
   now:()=>Date.parse(store.now()),
   verifyObservation:async(ref,state)=>{
    const result=await verifyReviewObservation(store,ref,state);
@@ -60,7 +60,7 @@ export function createReviewObservationPipeline(store){
     const checked=await verifyReviewObservation(store,ref,state);
     if(checked.status!=='verified')return terminal('not_attributable',checked.reason);
     const result=await policies.observe({profile,evidenceRef:ref,expectedStateVersion:state.stateVersion});
-    return terminal(result.recorded?'recorded':'duplicate',result.reason);
+    return terminal(result.recorded?'recorded':result.reason==='duplicate_execution'?'duplicate':'not_attributable',result.reason);
    }catch(error){
     const code=error.reason?'not_attributable':errorCode(error);
     if(code==='policy_conflict'&&attempt<2)continue;

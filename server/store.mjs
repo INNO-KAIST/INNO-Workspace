@@ -161,7 +161,7 @@ export class SqliteTaskStore {
         version: current.version + 1,
         updatedAt: now,
         decision: {...decision, createdAt: now},
-        checkpoint: {...current.checkpoint, status: 'waiting_user', usageHistory:usageHistory(current.checkpoint,input.usage,now), content: decision.prompt, updatedAt: now},
+        checkpoint: {...current.checkpoint, status: 'waiting_user', usageHistory:usageHistory(current.checkpoint,input.usage,now,{task:current,transition:'decision'}), content: decision.prompt, updatedAt: now},
       };
     });
   }
@@ -280,7 +280,7 @@ export class SqliteTaskStore {
         checkpoint: {
           ...task.checkpoint,
           resultArtifactIds: [...task.artifacts.filter(a => a.executionId === input.executionId && a.generation === input.generation), ...artifacts].map(a => a.id),
-          usage: executionUsage(task.checkpoint,input.usage,now), usageHistory: usageHistory(task.checkpoint,input.usage,now),
+          usage: executionUsage(task.checkpoint,input.usage,now), usageHistory: usageHistory(task.checkpoint,input.usage,now,{task,transition:'completion'}),
           status: 'completed',
           failure: undefined,
           content: input.checkpoint ?? 'Execution completed.',
@@ -330,7 +330,7 @@ export class SqliteTaskStore {
           ...task.checkpoint,
           status,
           failure,
-          usageHistory:usageHistory(task.checkpoint,input.usage,now),
+          usageHistory:usageHistory(task.checkpoint,input.usage,now,{task,transition:'failure'}),
           updatedAt: now,
         },
       };
