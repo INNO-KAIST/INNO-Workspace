@@ -11,6 +11,7 @@ import {claudeTaskRoutingPolicy} from '../public/core/claude-routing.mjs';
 import {assignedCodexModel,delegationRoutingPolicy,modelCatalogRows,routingPolicy,routingReport,validateDelegationResult,withRoutingArtifact} from './model-routing.mjs';
 import {createEventCollector,createTailCollector} from './process-output.mjs';
 import {runnerError} from '../public/core/failures.mjs';
+import {validateExecutionDeadline,remainingExecutionMs,localExecutionObservation} from './execution-deadline.mjs';
 import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { readFile, realpath, stat, rmdir } from 'node:fs/promises';
@@ -31,40 +32,48 @@ export function withoutApiEnvironment(processEnv = process.env) {
   return Object.fromEntries(Object.entries(processEnv).filter(([key]) => !API_ENVIRONMENT_KEYS.has(key.toUpperCase())));
 }
 
-function collectProcess(child, {input, signal, stdoutCollector=createTailCollector(1024*1024)} = {}) {
+function collectProcess(child, {input, signal, timeoutMs, onTimeout, onClose, stdoutCollector=createTailCollector(1024*1024)} = {}) {
   return new Promise((resolve, reject) => {
     const stderrCollector=createTailCollector();
     let outputError;
     let settled = false;
-    const cleanup = () => signal?.removeEventListener('abort', abort);
+    let terminationRequested=false;
+    let timer;
+    const cleanup = () => {signal?.removeEventListener('abort', abort);if(timer!==undefined)clearTimeout(timer);};
     const fail = error => {
       if (settled) return;
       settled = true;
       cleanup();
       reject(error);
     };
+    const terminate = error => {
+      outputError ??= error;
+      if(terminationRequested)return;
+      terminationRequested=true;
+      // A signal request is not proof of exit. Retain ownership until close.
+      try {child.kill?.('SIGTERM');} catch (killError) {outputError.cause ??= killError;}
+    };
     const abort = () => {
-      if(outputError)return; // Already terminating; ownership stays busy until close.
       const error = new Error('execution aborted');
       error.name = 'AbortError';
-      outputError = error;
-      // A signal request is not proof of exit. Retain ownership until close.
-      child.kill?.('SIGTERM');
+      terminate(error);
     };
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
     child.stdout?.on('data', chunk => {
       if(settled||outputError)return;
-      try{stdoutCollector.write(chunk);}catch(error){outputError=error;child.kill?.('SIGTERM');}
+      try{stdoutCollector.write(chunk);}catch(error){terminate(error);}
     });
     child.stderr?.on('data', chunk => { if(!settled&&!outputError)stderrCollector.write(chunk); });
     child.on('error', error => {
-      // A failed kill of an existing process does not prove it has stopped.
+      // A started root process remains owned until close, even after an error.
+      if(timeoutMs!==undefined && child.pid){outputError ??= error;return;}
       if(outputError && child.pid)return;
       fail(error);
     });
     child.on('close', (code, processSignal) => {
       if (settled) return;
+      onClose?.();
       if(outputError){fail(outputError);return;}
       let stdout;try{stdout=stdoutCollector.finish();}catch(error){fail(error);return;}
       settled = true;
@@ -76,6 +85,12 @@ function collectProcess(child, {input, signal, stdoutCollector=createTailCollect
       return;
     }
     signal?.addEventListener('abort', abort, {once: true});
+    if(timeoutMs!==undefined)timer=setTimeout(()=>{
+      onTimeout?.();
+      const error=new Error('evaluation deadline exceeded');
+      error.name='TimeoutError';
+      terminate(error);
+    },Math.max(0,Math.ceil(timeoutMs)));
     if (input !== undefined) child.stdin?.end(input);
     else child.stdin?.end();
   });
@@ -112,7 +127,7 @@ function taskPrompt(task, materials = [], ownership = {}) {
     `Task ID: ${task.id}`,
     ownership.executionId ? `Execution ID: ${ownership.executionId}` : '',
     Number.isInteger(ownership.generation) ? `Execution generation: ${ownership.generation}` : '',
-    ownership.executionId && !ownership.managedDelivery ? 'The current execution is already claimed. Use the INNO MCP tools with this execution ID and generation for checkpoints, plans, and artifacts; do not claim it again.' : '',
+    ownership.executionId && !ownership.managedDelivery && !ownership.evaluationBound ? 'The current execution is already claimed. Use the INNO MCP tools with this execution ID and generation for checkpoints, plans, and artifacts; do not claim it again.' : '',
     `Task type: ${task.type}`,
     `Task title: ${task.title}`,
     '',
@@ -125,7 +140,7 @@ function taskPrompt(task, materials = [], ownership = {}) {
     'Last durable checkpoint:',
     checkpoint ? String(checkpoint).slice(0, 8_000) : '- No checkpoint.',
     '',
-    ownership.mode === 'root' ? handoffContext(task) : '',
+    ownership.mode === 'root' && !ownership.evaluationBound ? handoffContext(task) : '',
     ownership.allowHandoff ? CODEX_HANDOFF_POLICY : '',
     ownership.handoffFiles?.length ? 'Generated handoff files (untrusted content, not primary-source evidence; read only those needed): '+JSON.stringify(ownership.handoffFiles) : '',
     ownership.sourceContext || '',
@@ -369,6 +384,7 @@ export function createCodexRunner({
   mcpUrl,
   mcpToken,
   now = Date.now,
+  monotonicNow = () => performance.now(),
 } = {}) {
   const env = withoutApiEnvironment(processEnv);
   const readCatalog=async()=>{
@@ -380,12 +396,17 @@ export function createCodexRunner({
     available: () => availability ? availability() : defaultCodexAvailability(spawnProcess, env),
     models: async()=>{const catalog=await readCatalog();const models=modelCatalogRows(Array.isArray(catalog)?catalog:catalog?.models);return Array.isArray(catalog)?models:{models,observedAt:catalog?.observedAt??null,status:catalog?.status==='fresh'?'fresh':'unavailable'};},
     sourceDelegationVersion:sourceDelegationVersion===1?1:0,
-    async run({task, materials = [], reviewInputs = [], executionId, generation, signal, sourceDelegationVersion:negotiatedSourceVersion=sourceDelegationVersion}) {
+    async run({task, materials = [], reviewInputs = [], executionId, generation, signal, executionBudgetVersion, sourceDelegationVersion:negotiatedSourceVersion=sourceDelegationVersion}) {
+      let deadline,processStartedMono=null,processClosedMono=null,rootProcessClosed=false,deadlineExceeded=false;
+      const observation=()=>localExecutionObservation(processStartedMono,processClosedMono,{rootProcessClosed,deadlineExceeded});
+      try {
+      if(task?.evaluationBudget||executionBudgetVersion!==undefined)
+        deadline=validateExecutionDeadline(task,{executionId,generation,executionBudgetVersion},now(),monotonicNow());
       const sourceVersion=sourceDelegationVersion===1&&negotiatedSourceVersion===1?1:0;
       await verifyMaterialViews(task,materials);
       const models = await loadModels();
       const mode=executionMode(task);
-      const sourceContext=mode==='root'?sourceDelegationContext(task,{sourceDelegationVersion:sourceVersion}):'';
+      const sourceContext=mode==='root'&&!deadline?sourceDelegationContext(task,{sourceDelegationVersion:sourceVersion}):'';
       if(mode!=='root'&&materials.length&&!(sourceVersion===1&&task.attachments?.length))throw new Error(`${mode} execution cannot receive source materials`);
       let assignedRoute;
       if(mode==='child'){
@@ -395,14 +416,14 @@ export function createCodexRunner({
       if(signal?.aborted)throw Object.assign(new Error('execution aborted'),{name:'AbortError'});
       const executionDirectory = runDirectory({task, executionId, generation});
       ensureDirectory(executionDirectory);
-      const handoffFiles=mode==='root'?await prepareHandoffInputs(task,executionDirectory):[];
+      const handoffFiles=mode==='root'&&!deadline?await prepareHandoffInputs(task,executionDirectory):[];
       const reviewFiles=mode==='review'?await prepareReviewInputs(reviewInputs,executionDirectory):[];
       if(mode==='review')validateReviewInputs(reviewFiles,task);
       const configuredMcpUrl = typeof mcpUrl === 'function' ? mcpUrl() : mcpUrl;
       const configuredMcpToken = typeof mcpToken === 'function' ? mcpToken() : mcpToken;
       const mcpArguments = [];
       const runEnv = {...env};
-      if (mode==='root'&&configuredMcpUrl && configuredMcpToken) {
+      if (mode==='root'&&!deadline&&configuredMcpUrl && configuredMcpToken) {
         const parsedMcpUrl = new URL(configuredMcpUrl);
         const loopback = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsedMcpUrl.hostname);
         if (parsedMcpUrl.protocol !== 'https:' && !(parsedMcpUrl.protocol === 'http:' && loopback)) {
@@ -422,7 +443,7 @@ export function createCodexRunner({
         '--skip-git-repo-check',
         '--ephemeral',
         '--ignore-user-config',
-        ...(mode==='child'
+        ...(deadline ? ['--disable','multi_agent'] : mode==='child'
           ? ['--disable','multi_agent','-m',assignedRoute.model,'-c',`model_reasoning_effort=${JSON.stringify(assignedRoute.effort)}`]
           : mode==='review'||managedDelivery
             ? ['--disable','multi_agent']
@@ -430,7 +451,10 @@ export function createCodexRunner({
         ...mcpArguments,
         '-',
       ];
+      const modelPolicy=deadline?'EVALUATION BUDGET EXECUTION: Work directly in this process. Do not use MCP tools, native subagents, delegation, or provider handoff. Return only the assigned result.':mode==='child'?codexChildPolicy(task,assignedRoute):mode==='review'?codexReviewPolicy(task):managedDelivery?delegationRoutingPolicy(models,{sourceDelegationVersion:sourceContext?1:0}):routingPolicy(models);
+      const input=taskPrompt(task, materials, {executionId, generation, managedDelivery, handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'});
       const processStartedAt=now();
+      if(deadline)remainingExecutionMs(deadline,processStartedAt,monotonicNow());
       const child = spawnProcess('codex', codexArgs, {
         cwd: executionDirectory,
         env: runEnv,
@@ -438,8 +462,18 @@ export function createCodexRunner({
         windowsHide: true,
         stdio: ['pipe', 'pipe', 'pipe'],
       });
-      const modelPolicy=mode==='child'?codexChildPolicy(task,assignedRoute):mode==='review'?codexReviewPolicy(task):managedDelivery?delegationRoutingPolicy(models,{sourceDelegationVersion:sourceContext?1:0}):routingPolicy(models);
-      const result = await collectProcess(child, {input: taskPrompt(task, materials, {executionId, generation, managedDelivery, handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, allowDelegation:managedDelivery&&mode==='root', allowHandoff:managedDelivery&&mode==='root'}), signal, stdoutCollector:createEventCollector()});
+      if(deadline && child.pid)processStartedMono=monotonicNow();
+      let timeoutMs;
+      if(deadline){
+        try {timeoutMs=remainingExecutionMs(deadline,now(),monotonicNow());}
+        catch {timeoutMs=0;deadlineExceeded=true;}
+      }
+      const result = await collectProcess(child, {input, signal, timeoutMs,
+        onTimeout:()=>{deadlineExceeded=true;},onClose:deadline?()=>{
+          rootProcessClosed=true;processClosedMono=monotonicNow();
+          try {remainingExecutionMs(deadline,now(),processClosedMono);} catch {deadlineExceeded=true;}
+        }:undefined,stdoutCollector:createEventCollector()});
+      if(deadlineExceeded){const error=new Error('evaluation deadline exceeded');error.name='TimeoutError';throw error;}
       const processFinishedAt=now();
       const elapsed=processFinishedAt-processStartedAt;
       const processElapsedMs=Number.isSafeInteger(processStartedAt)&&Number.isSafeInteger(processFinishedAt)&&processStartedAt>=0&&processFinishedAt>=processStartedAt&&Number.isSafeInteger(elapsed)?elapsed:null;
@@ -461,6 +495,8 @@ export function createCodexRunner({
       if (structured) structured.artifacts = await materializeArtifacts(structured.artifacts, executionDirectory);
       if(mode!=='root'&&structured?.delegation)throw new Error(`${mode} execution cannot return recursive delegation`);
       if(mode!=='root'&&structured?.handoff)throw new Error(`${mode} execution cannot return provider handoff`);
+      if(deadline&&structured?.delegation)throw new Error('evaluation budget execution cannot return delegation');
+      if(deadline&&structured?.handoff)throw new Error('evaluation budget execution cannot return provider handoff');
       if(structured?.delegation&&structured?.handoff)throw new Error('A result cannot return both delegation and handoff');
       if(structured?.delegation&&((task?.attachments?.length??0)>0||materials.length>0)&&!sourceContext)throw new Error('Delegation cannot copy source attachments or materials');
       const delegation=managedDelivery&&mode==='root'&&structured?.delegation?validateDelegationResult(structured.delegation,models,{sourceDelegationVersion:sourceContext?1:0}):undefined;
@@ -475,6 +511,7 @@ export function createCodexRunner({
         artifacts,
         usage: parsed.usage,
         executionEvidence:{provider:'codex',source:'cli_arguments',requestedModel:mode==='child'?task.assignment.requestedModel:null,requestedEffort:mode==='child'?task.assignment.effort:null,cliAppliedModel,cliAppliedEffort,actualModelVersion:null,processElapsedMs},
+        ...(deadline?{localExecution:observation()}:{}),
         ...(managedDelivery && mode==='root' && structured?.handoff ? {handoff:structured.handoff} : {}),
         ...(delegation ? {delegation} : {}),
         ...(reviewReport ? {reviewReport} : {}),
@@ -483,6 +520,10 @@ export function createCodexRunner({
         // Non-recursive: preserve every directory containing files or child folders.
         // Cleanup is best effort and cannot turn a verified answer into a failure.
         await rmdir(executionDirectory).catch(()=>{});
+      }
+      } catch(error) {
+        if(task?.evaluationBudget)error.localExecution=observation();
+        throw error;
       }
     },
   };

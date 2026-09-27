@@ -386,3 +386,16 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 독립 리뷰에서 위조 자식 snapshot으로 표식 삭제되는 RED를 실제 재현한 후 수정 및 동일 재현의 거절/보존 확인. 미해결 P0/P1 발견 없음. 전용23/23, 독립 관련113/113, 메인 최종 전체 Node621/621·Worker dry-run·diff check 통과. 로그 .inno/tmp/evaluation-claim-tests.log 및 evaluation-claim-dry-run.log. SQLite 파일 재시작 확인; D1은 TestD1이며 실제 클라우드 DB 검증 아님.
 - 검증 절차 이탈: 구현자가 테스트 작성 전에 구현 코드를 작성했다. 전체 작업을 사전 RED→GREEN으로 주장하지 않는다. 종료 미확인 재실행 방어는 구현 후 GREEN 검증이며, 위조 위임 자식 방어만 독립 리뷰에서 수정 전 실제 RED→수정 후 GREEN을 확인했다. 첫 전용 실행의 옵션/동기 assertion fixture와 재시작 lease 조건도 보정했다.
 - 새 언어/런타임/의존성·실제 구독 AI 실행·추가 API 비용·운영 배포 없음. 비교의 실시간 한도 강제/완료 정산, 실제 모델 버전 귀속과 자동 승격, baseline 중대 회귀, M5 실제 코드/desktop 갱신 및 배포는 남아 있다.
+
+### 2026-09-27 MOD06 Codex 실행 기한 연결 착수
+- 직전 목표 턴은 d7308b6 및621개 검증으로 progress. clean 작업 트리 확인.
+- 승인된 Task4 실행기 기한 검사/시간 초과 중단/본체 종료 관측을 구현자에 위임하고 별도 리뷰한다. Node 본체 close는 Windows 전체 process tree 및 원격 추론 취소 증거가 아니므로 capability/정산 활성화와 구분한다. 상위 전체 목표와 나머지 MOD06은 계속 진행 중.
+
+### 2026-09-27 MOD06 Codex 실행 기한·로컬 종료 관측 하위 단계 완료
+- 현재 상태: Task4 내부 runner 연결 완료. 다음은 공개 비교 실행에 필요한 실행 격리/중첩 CLI 우회 제한과 신뢰할 종료 계약을 확정하고 durable receipt→task/ledger 원자 정산→bridge 능력 협상을 연결하는 단계. 전용 비교 job/동일 입력·평가 기준/UI 및 나머지 모델 최신화/원래 플랫폼 목표는 진행 중.
+- server/execution-deadline.mjs와 Codex runner가 예산 v1·작업/실행 소유권·job/phase/24시간 상한·claimedAt/deadline 일치를 검증한다. root 비교만 허용. 준비 전/후 및 prompt 생성 후 spawn 직전 기한 검사, 서버 시각과 단조 시계 중 보수적인 잔여시간을 사용. 기한 만료나 유효하지 않은 시계는 실행 거절.
+- 타이머/abort/출력 오류의 중단 요청은 종료 증거가 아니므로 본체 close까지 기다린다. kill throw/실패 및 live-pid error도 비교 실행의 종료로 간주하지 않음. 선행 process error가 타이머 kill을 누락하던 결함은 실제 RED 재현 후 수정. 정상 실행의 기존 즉시 process-error 처리는 유지하며 회귀 테스트로 확인.
+- 결과/오류의 localExecution은 started/rootProcessClosed/elapsedMs/deadlineExceeded만 runner 관측으로 생성, 모델 보고값 불신. elapsed 미확인은 null. 본체 close의 경과시간이며 전체 서버 예약시간·자식 전체 종료·원격 추론 취소·토큰 과금 종료의 증거가 아니다. 외부 전송/자동 정산에 아직 사용하지 않는다.
+- 비교 실행에서 configured MCP/native multi_agent/일반 위임·handoff 지시 및 반환 우회를 차단. CLI 도구 설정은 shell에서 별도 CLI를 호출하는 것까지 OS 수준으로 봉쇄하지 않으므로 중첩 실행과 Windows process tree 감독은 공개 capability 전 필수 검증 사항이다. 현재 runner/bridge는 비교 capability를 광고하지 않으며 운영 비교는 계속 비활성.
+- 테스트 선행 RED 최초8/8 예상 실패, process-error kill 및 일반 오류 처리 추가 RED 후 수정. 최종 구현자 관련29/29, 독립32/32, 메인 전체 Node632/632·Worker dry-run·diff check 통과. 실제 무해한 Node 자식 프로세스의 시간 초과→kill→close 확인, 실제 Codex/Claude AI 호출 없음. 로그 .inno/tmp/evaluation-deadline-tests.log 및 evaluation-deadline-dry-run.log. dry-run은 Worker 기존 패키징 비회귀이며 Node 실행기 검증은 Node 테스트 결과에 근거한다.
+- 신규 언어/런타임/의존성·유료API·운영 배포 없음. Windows 강한 process containment에 새 구성요소가 필요하면 CHANGE_REQUESTS와 PRD 위험 항목을 통해 별도 처리한다. 이 단계만으로 엄격한 전체 실행시간/과금 상한을 보장한다고 표시하지 않는다.

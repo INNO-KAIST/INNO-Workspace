@@ -55,3 +55,12 @@ Files: worker/store.mjs, server/store.mjs, public/core/evaluation-claim.mjs (공
 - [x] 마지막1회에 두 작업 경합, task/ledger 각각 중간 변경, SQL 실패, 재시작, 같은 요청재전송/구버전 충돌을 검사해 단독 차감/단독실행권이 없음을 입증.
 - [x] 비교 작업의 기존 일반2-child 위임은 거절한다. 마커 없는 자식의 구독 실행으로 예산을 우회하지 않는다. 같은 task의 재개는 표식을 유지하고 다음 claim에서 이전 종료 정산을 요구한다. 일반 handoff는 전용 비교 전환 구현 전 거절한다. 전용 비교 workflow를 대체하지 않는다.
 - [x] 대상 테스트·독립검토·전체 회귀·dry-run 후 기록. 실제 runner/세션 종료 검증 및 capability handshake 이전에는 외부 API/UI에서 비교 작업을 시작하지 않는다.
+
+## Task 4: Codex 실행 기한과 로컬 종료 관측 (내부 실행기 완료)
+승인 MOD06의 실제 실행기 연결을 위한 필수 작업. 로컬 프로세스 close는 하위 프로세스 전체 또는 원격 추론 중단 증거가 아니므로 capability 광고/정산 근거로 승격하지 않는다.
+- [x] server/runners.mjs와 필요 시 server/execution-deadline.mjs에 서버 claim checkpoint의 job/phase/owner/maxDuration/deadline를 검증하는 내부 기한 처리 연결. bound 실행은 명시적 내부 budget version1 요청만 허용. 기한이 지났거나 일관성 없는 claim은 spawn 전에 거절.
+- [x] 준비 작업 중 소모된 시간도 계산하고 spawn 직전 재검사. monotonic 경과시간과 서버 deadline 잔여시간을 이용해 실행 제한, 타이머/abort listener 정리. 타이머 발화는 종료 증거 아님; close까지 Promise/desktop busy 유지. kill 실패/throw는 close를 대신하지 않는다.
+- [x] 결과나 오류에 로컬 관측만 엄격히 제한해 첨부(시작 여부, 본체 close 여부, 경과시간, deadline 초과 등). 모델 출력에서 종료 근거를 읽지 않는다. unknown elapsed를 0으로 만들지 않는다. 이 관측만으로 ledger 정산하지 않는다.
+- [x] 예산 bound 실행에서 multi_agent/MCP/일반 delegation/handoff를 비활성하고 반환 우회 거절. 일반 실행 동작 유지. runner capability 광고·HTTP/MCP claim 허용·자동 정산은 전체 process containment 계약 검증 전 활성화하지 않는다.
+- [x] 테스트 먼저 실패 관측: pre-spawn expired/mismatch, 준비 중 만료, timeout close 지연과 kill 실패, abort/normal close cleanup, process error, 결과 위조, 일반 실행 비회귀. synthetic child와 실제 Node 비AI fixture로 로컬 timeout/close 검증; 실제 Codex 호출 금지.
+- [x] 독립 리뷰 후 전체 Node/dry-run/기록. 이후 Windows process containment 및 durable trusted receipt→atomic settlement→전용 comparison job/UI 순서로 연결한다. 새 언어/런타임 추가가 필요하면 CHANGE_REQUESTS 절차를 따른다.
