@@ -165,3 +165,15 @@ CR-003은 모델 출시 자동 감지뿐 아니라 계정 가용성, 작업 종�
 작업 시작 clean/HEAD2e1bdc1 확인, origin/main fetch 후 기준 ec191bd와 트리 차이 없음. 앱 worktree 도구는 이 채팅의 저장소에서 origin/main을 찾지 못해 실패했다. 새 폴더를 중복 생성하지 않고 완료된 기존 격리 폴더를 재사용: 원래 codex/source-views(2e1bdc1)를 보존하고 codex/source-release를 origin/main(d989175)에서 생성했다. ec191bd..2e1bdc1 binary tree patch 적용 후 git diff 2e1bdc1 출력없음으로 동일 트리를 확인했다. 이력 강제병합/force push 없음.
 
 릴리스 트리 재검증: Node427/427(.inno/release-tests.log), Python4/4, 기존 Wrangler4.131.1 dry-run 통과. 원격 D1 조회 결과 미적용 마이그레이션 없음. 실제 CI 파일은 .github/workflows/test.yml이며 PRD의 verify.yml 표기만 정정(승인 검증명령 변경 없음). 운영 read-only 조회: revision74, completed10/cancelled1/paused1, 실행중없음. 새 scoped callback 호환성을 위해 GitHub helper 반영 후 Worker 배포 순서를 유지한다. 최종 독립 통합 리뷰 진행 중; 실제 원격 코드/운영 배포 전 상태다. source gate는 아직0.
+
+### 2026-09-27 릴리스 게시 및 운영 배포
+
+독립 통합 리뷰: 확인된 배포 차단 결함 없음. main 정상 push는 처음 GH007(개인 이메일 공개 방지)로 거절되었고, 미게시 커밋에 GitHub 계정 noreply 주소를 적용하여 해결했다. 계정 공개설정 변경/force push 없음. main 커밋8207bbb, GitHub Verify run36312254246 success. 기존 사용자 배포 승인으로 Worker version8e9161d7-47a8-4861-a8f4-76b81d8eae5c 배포 완료. 원본 협업 gate0 유지.
+
+배포 전 Claude Routine 편집 화면에서 이전 innokaist/INNO-Workspace 경로와 capability 없는 구 안내를 확인했다. 이미 연결 가능한 동일 이관 저장소 INNO-KAIST/INNO-Workspace로 교체하고 실행별 capability/renew_execution/고정배정·reviewReport 계약으로 지침을 갱신해 저장 상태 확인. 기존 환경·구독모델·연결권한은 유지했다. 화면 증거 .inno/routine-release-connection.png. 배포 후 인증 없는 state401, 정적 주요자산200, 인증state sourceDelegationVersion0 확인.
+
+실제 Claude callback 시험 한 건을 시작: task1c797d64-1726-4d0f-9ef5-016e82e21101, execution d79b3903-c1c7-41e8-ae4c-dd771d766e59, session https://claude.ai/code/cse_01HNgd8YVTU787T1bHYherus. 마지막 조회 running/version3, artifact아직없음. 재시작하지 않고 동일 실행을 관찰한다. 아직 callback 성공/첨부 협업 출시 완료를 주장하지 않는다. Pages 수동 workflow도 최신 main으로 요청했다.
+
+### 2026-09-27 배포 후 실제 Claude callback 통과
+
+동일 시험 task1c797d64-1726-4d0f-9ef5-016e82e21101이 completed/version7로 종료했고 callback-check.txt 내용 INNO_CALLBACK_20260927_OK가 일치했다. 실제 Claude 구독→새 helper/executionCapability→운영 artifact 저장→완료 callback 경계를 1회 실행으로 확인했다(.inno/release-callback-result.json). Pages run36312501954 success, 실제 source-execution.mjs HTTP200. 인증 거절401 및 sourceGate0 유지도 확인했다. 전체 혼합 제공자/원본 첨부 협업 활성화는 여전히 다음 단계이며 이번 callback 성공을 그 증거로 대체하지 않는다.
