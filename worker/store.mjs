@@ -6,6 +6,8 @@ import {handoffTask,isHandoffReplay} from '../public/core/provider-handoff.mjs';
 import {executionUsage,usageHistory} from '../public/core/execution-usage.mjs';
 import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execution-evidence.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
+import {assertEvaluationAttachable,assertEvaluationBindingPreserved,evaluationBinding,reserveClaimBudget} from '../public/core/evaluation-claim.mjs';
+import {encodeStoredEvaluationBudget,parseStoredEvaluationBudget} from './evaluation-budgets.mjs';
 import {
   ConflictError,
   ValidationError,
@@ -18,6 +20,8 @@ import {
 
 // Not exported: generic updates cannot authorize uncertainty recovery.
 const REMOTE_RECOVERY = Symbol('remote recovery');
+const EVALUATION_ATTACH = Symbol('evaluation attach');
+const BUDGET_COMMIT = Symbol('budget commit');
 
 export const D1_SCHEMA = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -101,32 +105,54 @@ export class D1TaskStore {
     if (current.version !== expectedVersion) {
       throw new ConflictError(`version conflict: expected ${expectedVersion}, current ${current.version}`, current.version);
     }
-    const next = updater(structuredClone(current));
+    const next = await updater(structuredClone(current));
     if (!next || next.id !== current.id || next.version !== current.version + 1) {
       throw new Error('task updater must increment version exactly once');
     }
+    assertEvaluationBindingPreserved(current,next,authorization===EVALUATION_ATTACH);
     if(current.checkpoint?.confirmationRequired&&authorization!==REMOTE_RECOVERY&&(['ready','queued','queued_for_review','running'].includes(next.status)||JSON.stringify(next.checkpoint?.confirmationRequired)!==JSON.stringify(current.checkpoint.confirmationRequired)))throw new ConflictError('Confirm the previous remote execution through dedicated recovery',current.version);
     if(current.parentTaskId && next.status==='queued' && current.status!=='queued')throw new ConflictError('Child retry requires the delegation coordinator',current.version);
     const guard = current.parentTaskId ? ` AND EXISTS (SELECT 1 FROM tasks p WHERE p.id = ?6 AND json_extract(p.body,'$.status') = 'waiting_children' AND json_extract(p.body,'$.delegation.state') = 'waiting_children' AND json_extract(p.body,'$.delegation.batchId') = ?7 AND json_extract(p.body,'$.delegation.epoch') = ?8)` : '';
     if(current.parentTaskId && TERMINAL_STATUSES.includes(current.status))throw new ConflictError('Completed children are immutable',current.version);
     const bindings=[next.version,next.updatedAt,JSON.stringify(next),id,expectedVersion];
     if(current.parentTaskId)bindings.push(current.parentTaskId,current.batchId,current.parentEpoch);
-    const results = await this.db.batch([
-      this.db.prepare('UPDATE tasks SET version = ?1, updated_at = ?2, body = ?3 WHERE id = ?4 AND version = ?5' + guard)
-        .bind(...bindings),
-      this.db.prepare("UPDATE metadata SET value = value + 1 WHERE key = 'revision' AND changes() = 1"),
-    ]);
+    const budget=authorization?.[BUDGET_COMMIT];
+    const budgetGuard=budget?' AND EXISTS (SELECT 1 FROM metadata m WHERE m.key = ?'+(bindings.length+1)+' AND m.value = ?'+(bindings.length+2)+')':'';
+    if(budget)bindings.push(budget.key,budget.raw);
+    const statements=[this.db.prepare('UPDATE tasks SET version = ?1, updated_at = ?2, body = ?3 WHERE id = ?4 AND version = ?5' + guard + budgetGuard).bind(...bindings)];
+    if(budget)statements.push(this.db.prepare(`UPDATE metadata SET value=?1 WHERE key=?2 AND value=?3 AND changes()=1 AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=?4 AND t.version=?5 AND json_extract(t.body,'$.checkpoint.executionId')=?6 AND json_extract(t.body,'$.checkpoint.generation')=?7)`).bind(budget.nextRaw,budget.key,budget.raw,id,next.version,next.checkpoint.executionId,next.checkpoint.generation));
+    statements.push(this.db.prepare("UPDATE metadata SET value = value + 1 WHERE key = 'revision' AND changes() = 1"));
+    if(budget)statements.push(this.db.prepare("INSERT INTO metadata (key,value) SELECT 'revision',0 WHERE changes()!=1"));
+    const results = await this.db.batch(statements);
     if (Number(results[0]?.meta?.changes ?? 0) !== 1) {
       const latest = await this.requireTask(id);
       throw new ConflictError('task changed during update', latest.version);
     }
+    if(budget&&Number(results[1]?.meta?.changes??0)!==1)throw new Error('evaluation budget transaction invariant failed');
     return next;
+  }
+
+  async attachEvaluationBudget(taskId,input){
+    const raw=(await this.db.prepare('SELECT value FROM metadata WHERE key=?1').bind('evaluation_budget:'+input?.jobId).first())?.value;
+    const state=parseStoredEvaluationBudget(raw,input?.jobId);
+    const binding=evaluationBinding(input,state);
+    return this.replaceTask(taskId,input.expectedVersion,current=>{
+      assertEvaluationAttachable(current);
+      return {...current,evaluationBudget:binding,version:current.version+1,updatedAt:this.now()};
+    },EVALUATION_ATTACH);
   }
 
 
   // The parent CAS checks every child snapshot before any row changes. Every
   // subsequent statement is gated by the unique operation token installed by it.
   async replaceDelegation(current,next,records=[],metadataGuards=[]){
+    const authoritative=await this.requireTask(current.id);
+    if(authoritative.evaluationBudget||current.evaluationBudget||next.evaluationBudget||records.some(record=>record.current?.evaluationBudget||record.next?.evaluationBudget))
+      throw new ConflictError('Evaluation budget task cannot use ordinary delegation',current.version);
+    for(const record of records){
+      if(record.current&&(await this.requireTask(record.current.id)).evaluationBudget)
+        throw new ConflictError('Evaluation budget task cannot use ordinary delegation',current.version);
+    }
     next.delegation={...next.delegation,operationId:this.id()};
     const values=[next.version,next.updatedAt,JSON.stringify(next),current.id,current.version];
     let guard='';
@@ -199,12 +225,22 @@ export class D1TaskStore {
     });
   }
 
-  claimExecution(id, {provider, expectedVersion, leaseMs = 15 * 60_000, sourceBound = false}) {
+  async claimExecution(id, input) {
+    const {provider, expectedVersion, leaseMs = 15 * 60_000, sourceBound = false, executionBudgetVersion} = input;
     if(typeof sourceBound!=='boolean')throw new ValidationError('sourceBound must be boolean');
     if (!['codex', 'claude'].includes(provider)) throw new ValidationError('provider must be codex or claude');
     if (!Number.isFinite(leaseMs) || leaseMs < 1_000 || leaseMs > 60 * 60_000) throw new ValidationError('invalid execution lease');
+    if(Object.keys(input).some(key=>key!=='executionBudgetVersion'&&(/budget|grant|reservation/i.test(key)||['jobId','phase','maxDurationMs','deadlineAtMs'].includes(key))))throw new ValidationError('unsupported execution budget option');
+    const authorization={};
     let claim;
-    return this.replaceTask(id, expectedVersion, current => {
+    return this.replaceTask(id, expectedVersion, async current => {
+      let budget;
+      if(current.evaluationBudget){
+        if(executionBudgetVersion!==1||provider!=='codex')throw new ValidationError('evaluation execution requires Codex budget capability version 1');
+        const key='evaluation_budget:'+current.evaluationBudget.jobId;
+        const raw=(await this.db.prepare('SELECT value FROM metadata WHERE key=?1').bind(key).first())?.value;
+        budget={key,raw,state:parseStoredEvaluationBudget(raw,current.evaluationBudget.jobId)};
+      }else if(executionBudgetVersion!==undefined)throw new ValidationError('unsupported execution budget option');
       if(current.checkpoint?.confirmationRequired)throw new ConflictError('Confirm the previous remote execution before claiming',current.version);
       if(current.delegation && current.delegation.state!=='superseded' && (current.status!=='queued_for_review'||current.delegation.state!=='queued_for_review'))throw new ConflictError('Master can only claim the queued review phase',current.version);
       if(current.status==='running'&&current.checkpoint?.provider==='claude')throw new ConflictError('Remote execution is still owned; confirm its outcome before reclaiming',current.version);
@@ -224,15 +260,18 @@ export class D1TaskStore {
         executionId: this.id(),
         generation: Number.isInteger(previous.generation) ? previous.generation + 1 : 1,
       };
+      const reserved=budget?reserveClaimBudget(current,input,claim,budget.state,nowMs):null;
+      if(reserved)authorization[BUDGET_COMMIT]={key:budget.key,raw:budget.raw,nextRaw:encodeStoredEvaluationBudget(reserved.state)};
       return {
         ...current, status: 'running', version: current.version + 1, updatedAt: now,
         ...(current.delegation?.state==='queued_for_review'?{delegation:{...current.delegation,state:'reviewing'}}:{}),
         checkpoint: {
           ...previous, ...(previous.handoff?{handoff:{...previous.handoff,dispatched:true}}:{}), failure: undefined, executionEvidence: undefined, wallElapsedMs: undefined, completedAt: undefined, ...claim, provider, sourceBound, status: 'running', claimedAt: now,
+          ...(reserved?{evaluationBudget:reserved.checkpoint}:{}),
           expiresAt: new Date(nowMs + leaseMs).toISOString(), updatedAt: now,
         },
       };
-    }).then(task => ({...claim, task}));
+    },authorization).then(task => ({...claim, task}));
   }
 
   assertExecution(task, input) {
@@ -245,6 +284,7 @@ export class D1TaskStore {
 
   async handoffExecution(id,input){
     const snapshot=await this.requireTask(id);
+    if(snapshot.evaluationBudget)throw new ValidationError('Evaluation budget task cannot use ordinary handoff');
     if(snapshot.parentTaskId)throw new ValidationError('A child cannot perform nested handoff');
     if(snapshot.delegation&&snapshot.delegation.state!=='superseded')throw new ValidationError('Active delegation master cannot hand off review');
     for(let attempt=0;attempt<3;attempt++){

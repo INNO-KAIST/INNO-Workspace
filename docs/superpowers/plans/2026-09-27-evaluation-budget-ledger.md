@@ -46,3 +46,12 @@ Files: worker/evaluation-budgets.mjs, server/evaluation-budgets.mjs, tests/evalu
 ## Verification
 승인 명령 node --test --test-isolation=none tests/evaluation-budget.test.mjs tests/evaluation-budgets.test.mjs, 그 뒤 전체 tests/*.test.mjs 및 기존 Wrangler dry-run. TEMP/TMP=.inno/tmp. 메인 통합과 별도 리뷰, 실제 AI 없이 fixture. 확인 후 PROGRESS 기록 및 개발 브랜치 커밋.
 
+
+## Task 3: 실행권과 예산의 단일 원자 결합 (내부 기반 완료)
+Files: worker/store.mjs, server/store.mjs, public/core/evaluation-claim.mjs (공통 계약), public/core/delegation.mjs 좁은 우회 방지, 전용 atomic-claim 테스트.
+- [x] internal attachEvaluationBudget(taskId,{jobId,phase,maxDurationMs,expectedVersion})는 신선한 ready 작업을 기존 원장에 결합한다. task→불변 job 한 개, job→여러 phase 작업 가능. 일반 create/import는 표식 위조 불가.
+- [x] claimExecution의 기존 소유권/제공자/부모 검사를 유지한다. 묶인 작업은 Codex와 executionBudgetVersion=1이 필요하며 현재 운영 실행 경로는 해당 능력을 아직 보고하지 않는다. provider/시간예산 면제 입력을 허용하지 않는다.
+- [x] 실제 생성 executionId/generation으로 reserveEvaluation을 계산하고 checkpoint에 서버 생성 jobId/phase/maxDurationMs/deadlineAtMs 보존. ledger와 task의 읽은 상태를 모두 CAS 검사. D1 단일 batch, SQLite BEGIN IMMEDIATE transaction으로 task owner·ledger·revision을 저장.
+- [x] 마지막1회에 두 작업 경합, task/ledger 각각 중간 변경, SQL 실패, 재시작, 같은 요청재전송/구버전 충돌을 검사해 단독 차감/단독실행권이 없음을 입증.
+- [x] 비교 작업의 기존 일반2-child 위임은 거절한다. 마커 없는 자식의 구독 실행으로 예산을 우회하지 않는다. 같은 task의 재개는 표식을 유지하고 다음 claim에서 이전 종료 정산을 요구한다. 일반 handoff는 전용 비교 전환 구현 전 거절한다. 전용 비교 workflow를 대체하지 않는다.
+- [x] 대상 테스트·독립검토·전체 회귀·dry-run 후 기록. 실제 runner/세션 종료 검증 및 capability handshake 이전에는 외부 API/UI에서 비교 작업을 시작하지 않는다.

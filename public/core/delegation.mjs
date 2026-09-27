@@ -4,6 +4,7 @@ import {ConflictError,ValidationError,createTask} from './tasks.mjs';
 const bounded=(value,label,max)=>{if(typeof value!=='string'||!value.trim()||value.length>max)throw new ValidationError(`Invalid delegation ${label}`);return value.trim();};
 export function validateAssignments(parent,input,options={}){
  if(!input||typeof input!=='object'||Array.isArray(input))throw new ValidationError('Delegation input is required');
+ if(parent.evaluationBudget)throw new ValidationError('Evaluation budget task cannot use ordinary delegation');
  const sourceUrl=value=>typeof value==='string'&&/(?:https?:\/\/|www\.)\S+/i.test(value);
  if(sourceUrl(parent.prompt)||(parent.messages??[]).some(m=>m.role==='user'&&sourceUrl(m.content)))throw new ValidationError('Source URL references are not supported in this delegation release');
  if(parent.parentTaskId)throw new ValidationError('A child cannot perform nested delegation');

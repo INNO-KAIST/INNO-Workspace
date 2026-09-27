@@ -14,6 +14,7 @@ export function parseBundle(text) {
   const ids=new Set();
   for(const t of b.tasks){
     if(!t||typeof t.id!=='string'||typeof t.title!=='string'||!Number.isInteger(t.version)||!Array.isArray(t.messages)||!Array.isArray(t.plan)||!Array.isArray(t.artifacts)||!Array.isArray(t.attachments)||ids.has(t.id)) throw new Error('작업 기록이 손상되었습니다.');
+    if(t.evaluationBudget!==undefined||t.checkpoint?.evaluationBudget!==undefined)throw new Error('Server-owned evaluation budget cannot be imported');
     ids.add(t.id);
   }
   return exportBundle(b);

@@ -30,6 +30,9 @@ function parse(raw, jobId) {
   if (state.jobId !== jobId) throw new TypeError('invalid stored budget identity');
   return state;
 }
+
+export function parseStoredEvaluationBudget(raw, jobId) { return parse(raw, jobId); }
+export function encodeStoredEvaluationBudget(state) { return textFor(state); }
 function boundEvidence(evidence, state, reservation) {
   shape(evidence, ['jobId', 'executionId', 'generation', 'phase', 'confirmed', 'elapsedMs'], 'completion evidence');
   if (evidence.confirmed !== true || evidence.jobId !== state.jobId ||

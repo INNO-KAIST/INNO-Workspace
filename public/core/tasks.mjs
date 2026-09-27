@@ -181,6 +181,10 @@ export function createTask(input, overrides = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new ValidationError('task input must be an object');
   }
+  if (input.evaluationBudget !== undefined || input.executionBudgetVersion !== undefined ||
+      input.checkpoint?.evaluationBudget !== undefined) {
+    throw new ValidationError('evaluation budget fields are server owned');
+  }
   const deps = dependencies(overrides);
   const now = deps.now();
   const prompt = text(input.prompt, 'prompt');

@@ -370,3 +370,19 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 독립 검토 보완: SQL LIKE 밑줄 와일드카드로 다른 metadata가 상한에 포함되지 않도록 정확한 GLOB 접두어 사용, 정책 metadata sentinel·세대/phase 충돌·큰 상태 거절 검증 추가. 독립24/24, 메인 전체 Node598/598와 Worker dry-run 통과. 로그 .inno/tmp/evaluation-budget-ledger-tests.log 및 evaluation-budget-ledger-dry-run.log.
 - SQLite 실제 파일 close/reopen 뒤 미정산 예약 보존 확인. D1은 TestD1 시뮬레이션이며 실제 클라우드DB 검증 아님. 원장 모듈은 현재 실행 경로에서 호출하지 않는 내부 기반이다. Worker dry-run은 기존 패키지 비회귀를 확인하며 새 예산이 실제 실행을 제한한다는 근거가 아니다. 실AI/새 스택/추가 비용/운영 배포 없음.
 - 필수 다음 단계: 전용 비교job 생성·동일입력/평가기준 보존 및 actual claim+budget을 하나의 원자 작업으로 결합, Codex 종료 타이머·검증기·capability 협상, 시간 종료를 확인할 수 없는 Claude 경로 보류, 사용자가 설정하는 예산·예약/소모/보류 UI. 이 연결 전 MOD06 또는 전체 최신화 완료를 주장하지 않는다. 다른 원래 플랫폼 목표도 유지.
+
+### 2026-09-27 MOD06 실행권·예산 원자 결합 착수
+- 직전 턴은 예산 기록 기반 구현·598개 검증·커밋2cdd4c5로 진행. clean 상태 확인 후 재사용.
+- 다음 WBS는 D1TaskStore/SqliteTaskStore의 실제 claimExecution에서 비교용 작업의 실행 소유권과 예산 예약을 한 번에 저장. 작업 또는 원장 상태 경합/SQL 실패 시 한쪽만 기록되지 않아야 한다. 기본0·종료미확인·초과 한도는 실행권 생성 전에 거절.
+- 내부 attachEvaluationBudget는 신선한 준비 작업과 기존 검증된 원장만 결합하고 HTTP/MCP에는 노출하지 않는다. 일반 create/import 입력의 비교 표식을 신뢰하지 않는다. 현재 비교 실행은 Codex+지원 executionBudgetVersion=1이 명시된 내부 호출에서만 가능하게 구성하며 기존 실행기는 아직 그 능력을 보고하지 않으므로 운영 비교는 보류 상태로 유지.
+- 시간 제한을 지원하지 않는 Claude/레거시 실행기는 예산 없는 실행으로 우회하지 않고 거절. 원래 2-child 일반 위임이 예산 없는 자식을 만들지 못하도록 비교 작업에서 해당 경로를 거절한다. 전용 비교 orchestration과 동일입력/평가기준 연결은 다음 필수 단계다.
+- 구현자와 별도 리뷰어에 위임. 신규 의존성/언어 없음. 대상 회귀→전체검증→기록 순서를 유지한다. 외부에서 쓸 수 있는 비교 기능 완성을 뜻하지 않는다.
+
+### 2026-09-27 MOD06 실행권·예산 원자 결합 하위 단계 완료
+- 현재 상태: 내부 claim 연결 완료, 실제 비교 실행은 미활성. 다음 WBS는 Codex 시간 제한·프로세스 종료 확인·신뢰 정산·실행기 capability 협상이며 이후 전용 비교 job/동일 입력·평가 기준/UI 연결이 필요하다. MOD06 및 전체 목표는 진행 중.
+- D1TaskStore/SqliteTaskStore에서 task owner·실제 executionId/generation의 예약·revision을 한 트랜잭션으로 저장. task/ledger CAS와 D1 마지막 무결성 assertion으로 경합·SQL 오류·원장 UPDATE 0건의 부분 저장을 막는다. 일반 claim에는 추가 task 조회를 넣지 않았다.
+- 내부 attach는 ready/version1/비수입 root만 허용, task별 불변 job과 job별 여러 phase 작업을 지원. Codex+executionBudgetVersion=1만 허용하고 해당 capability는 현재 HTTP/MCP/실행기 경로에 노출하지 않는다. 시간 제어 미지원 Claude/레거시 경로는 보류한다.
+- 이전 lease 만료나 pause/resume만으로 종료를 추정하지 않는다. 동일 작업의 이전 예약은 신뢰 정산 전 재실행 거절, 새 실행ID 충돌 거절. 생성/import 표식 위조와 변경/삭제, 일반 위임 및 handoff 우회를 거절한다. D1 위임은 부모/기존 자식의 DB 저장 표식까지 조회해 호출자 snapshot 위조를 거절한다.
+- 독립 리뷰에서 위조 자식 snapshot으로 표식 삭제되는 RED를 실제 재현한 후 수정 및 동일 재현의 거절/보존 확인. 미해결 P0/P1 발견 없음. 전용23/23, 독립 관련113/113, 메인 최종 전체 Node621/621·Worker dry-run·diff check 통과. 로그 .inno/tmp/evaluation-claim-tests.log 및 evaluation-claim-dry-run.log. SQLite 파일 재시작 확인; D1은 TestD1이며 실제 클라우드 DB 검증 아님.
+- 검증 절차 이탈: 구현자가 테스트 작성 전에 구현 코드를 작성했다. 전체 작업을 사전 RED→GREEN으로 주장하지 않는다. 종료 미확인 재실행 방어는 구현 후 GREEN 검증이며, 위조 위임 자식 방어만 독립 리뷰에서 수정 전 실제 RED→수정 후 GREEN을 확인했다. 첫 전용 실행의 옵션/동기 assertion fixture와 재시작 lease 조건도 보정했다.
+- 새 언어/런타임/의존성·실제 구독 AI 실행·추가 API 비용·운영 배포 없음. 비교의 실시간 한도 강제/완료 정산, 실제 모델 버전 귀속과 자동 승격, baseline 중대 회귀, M5 실제 코드/desktop 갱신 및 배포는 남아 있다.

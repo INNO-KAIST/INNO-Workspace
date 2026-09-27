@@ -7,6 +7,8 @@ const array=(v,label,max)=>{if(!Array.isArray(v)||v.length>max)throw new Validat
 const statuses=new Set(['ready','queued','claimed','running','paused','waiting_user','waiting_quota','waiting_connection','failed','completed','cancelled']);
 export async function prepareImport(raw){
  if(!raw||typeof raw!=='object')throw new ValidationError('Invalid task');
+ if(raw.evaluationBudget!==undefined||raw.checkpoint?.evaluationBudget!==undefined||raw.executionBudgetVersion!==undefined)
+   throw new ValidationError('Server-owned evaluation budget cannot be imported');
  const id=text(raw.id,'task id',200);if(!id||!Number.isInteger(raw.version)||raw.version<1||!statuses.has(raw.status))throw new ValidationError('Invalid task identity or status');
  const createdAt=date(raw.createdAt),updatedAt=date(raw.updatedAt,createdAt);
  const status=['running','queued','claimed','ready'].includes(raw.status)?'paused':raw.status;

@@ -5,6 +5,8 @@ import {sanitizeArtifactChecks} from '../public/core/artifact-checks.mjs';
 import {executionUsage,usageHistory} from '../public/core/execution-usage.mjs';
 import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execution-evidence.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
+import {assertEvaluationAttachable,assertEvaluationBindingPreserved,evaluationBinding,reserveClaimBudget} from '../public/core/evaluation-claim.mjs';
+import {encodeStoredEvaluationBudget,parseStoredEvaluationBudget} from '../worker/evaluation-budgets.mjs';
 import { DatabaseSync } from 'node:sqlite';
 
 import {
@@ -31,6 +33,9 @@ export class ExecutionConflictError extends ConflictError {
     this.name = 'ExecutionConflictError';
   }
 }
+
+const EVALUATION_ATTACH=Symbol('evaluation attach');
+const BUDGET_COMMIT=Symbol('budget commit');
 
 export class SqliteTaskStore {
   constructor(filename = ':memory:', options = {}) {
@@ -119,7 +124,7 @@ export class SqliteTaskStore {
     };
   }
 
-  replaceTask(id, expectedVersion, updater) {
+  replaceTask(id, expectedVersion, updater, authorization) {
     return this.transaction(() => {
       const current = this.requireTask(id);
       if (!Number.isInteger(expectedVersion)) throw new ValidationError('expectedVersion is required');
@@ -130,11 +135,27 @@ export class SqliteTaskStore {
       if (!next || next.id !== current.id || next.version !== current.version + 1) {
         throw new Error('task updater must return the same task with version incremented once');
       }
+      assertEvaluationBindingPreserved(current,next,authorization===EVALUATION_ATTACH);
       const result = this.updateTaskStatement.run(next.version, next.updatedAt, JSON.stringify(next), id, expectedVersion);
       if (result.changes !== 1) throw new ConflictError('task changed during update', this.requireTask(id).version);
+      const budget=authorization?.[BUDGET_COMMIT];
+      if(budget){
+        const saved=this.db.prepare('UPDATE metadata SET value=? WHERE key=? AND value=?').run(budget.nextRaw,budget.key,budget.raw);
+        if(saved.changes!==1)throw new ConflictError('stale evaluation budget state conflict',current.version);
+      }
       this.incrementRevision.run();
       return next;
     });
+  }
+
+  attachEvaluationBudget(taskId,input){
+    const raw=this.db.prepare('SELECT value FROM metadata WHERE key=?').get('evaluation_budget:'+input?.jobId)?.value;
+    const state=parseStoredEvaluationBudget(raw,input?.jobId);
+    const binding=evaluationBinding(input,state);
+    return this.replaceTask(taskId,input.expectedVersion,current=>{
+      assertEvaluationAttachable(current);
+      return {...current,evaluationBudget:binding,version:current.version+1,updatedAt:this.now()};
+    },EVALUATION_ATTACH);
   }
 
   applyAction(id, input) {
@@ -187,13 +208,23 @@ export class SqliteTaskStore {
     });
   }
 
-  claimExecution(id, {provider, expectedVersion, leaseMs = 15 * 60_000}) {
+  claimExecution(id, input) {
+    const {provider, expectedVersion, leaseMs = 15 * 60_000, executionBudgetVersion} = input;
     if (!['codex', 'claude'].includes(provider)) throw new ValidationError('provider must be codex or claude');
     if (!Number.isFinite(leaseMs) || leaseMs < 1_000 || leaseMs > 60 * 60_000) {
       throw new ValidationError('leaseMs must be between 1000 and 3600000');
     }
+    if(Object.keys(input).some(key=>key!=='executionBudgetVersion'&&(/budget|grant|reservation/i.test(key)||['jobId','phase','maxDurationMs','deadlineAtMs'].includes(key))))throw new ValidationError('unsupported execution budget option');
+    const authorization={};
     let claim;
     const task = this.replaceTask(id, expectedVersion, current => {
+      let budget;
+      if(current.evaluationBudget){
+        if(executionBudgetVersion!==1||provider!=='codex')throw new ValidationError('evaluation execution requires Codex budget capability version 1');
+        const key='evaluation_budget:'+current.evaluationBudget.jobId;
+        const raw=this.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
+        budget={key,raw,state:parseStoredEvaluationBudget(raw,current.evaluationBudget.jobId)};
+      }else if(executionBudgetVersion!==undefined)throw new ValidationError('unsupported execution budget option');
       if (TERMINAL_STATUSES.includes(current.status) || current.status === 'paused') {
         throw new ExecutionConflictError(`task cannot run from ${current.status}`, current.version);
       }
@@ -207,6 +238,8 @@ export class SqliteTaskStore {
       const generation = Number.isInteger(previous.generation) ? previous.generation + 1 : 1;
       const executionId = this.id();
       claim = {executionId, generation};
+      const reserved=budget?reserveClaimBudget(current,input,claim,budget.state,nowMs):null;
+      if(reserved)authorization[BUDGET_COMMIT]={key:budget.key,raw:budget.raw,nextRaw:encodeStoredEvaluationBudget(reserved.state)};
       return {
         ...current,
         status: 'running',
@@ -220,10 +253,11 @@ export class SqliteTaskStore {
           status: 'running',
           claimedAt: now,
           expiresAt: new Date(nowMs + leaseMs).toISOString(),
+          ...(reserved?{evaluationBudget:reserved.checkpoint}:{}),
           updatedAt: now,
         },
       };
-    });
+    },authorization);
     return {...claim, task};
   }
 
