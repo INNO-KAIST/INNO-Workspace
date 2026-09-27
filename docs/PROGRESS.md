@@ -242,3 +242,20 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 독립 리뷰에서 발견한 레거시 재갱신/동시성 문제 수정 후 검증. 최초 전체 회귀449개 중9개 실패는 구형 배열을 쓰던 정상 HTTP fixture 때문; 실제 관측 계약으로 갱신하고 구형 거절 회귀 추가, 전체450개 통과. 검증 단언을 완화하지 않음.
 - 다음 M2: 작업별 평가 기준·증거/가용성·정책 버전·선택 이유 저장, 후보 승격/중대 회귀 철회, 실행 중 배정 고정. 이어 M3 실측·예산·기록 정리, M4 UI, M5 릴리스. 승인된 PRD 내 진행하므로 단계별 재승인 불필요.
 - 릴리스 조건: 새 Worker가 레거시 보고 배정을 거절하므로 데스크톱 코드 갱신/브리지 재시작 및 실제 observedAt 보고를 확인해야 한다. 현재 운영 Worker/브리지는 이전 검증 버전 그대로 유지.
+
+### 2026-09-27 M2 착수 및 통합 결정
+- 직전 턴은 M1 구현·검증 완료로 진행. M1은 로컬 codex/source-release 커밋 4d5c158에 보존, 원격/운영 미반영.
+- M2 순수 정책 코어를 Sol 구현자에 위임(public/core/model-selection.mjs 및 전용 테스트). 별도 읽기 전용 감사로 실제 배정과 관측 저장의 연결 지점을 확인했다.
+- 구현 순서: 순수 정책 전이 검증 → D1/SQLite 정책 저장 계약 및 CAS → cloud allocate에서 서버 선택을 부모/자식에 원자 저장 → 소유권 검증된 완료/검토 근거 수집 → 재시도·정책 철회 시 기존 배정 불변 검증. UI는 M4에서 연결.
+- 선택 기록은 provider/model/effort/policyVersion/evidenceIds/reason. 공개 후보와 실행자의 품질 자기 보고는 자동 승격 근거가 아니다. 독립 검토도 실제 모델 귀속이 미확인이면 해당 신모델의 증거로 삼지 않는다.
+- 작업 프로필은 작업군/요구·평가 버전/완료 기준/필요 능력/문맥 범위를 포함한다. 같은 평가 기준의 비교 가능한 독립 표본 최소3쌍을 기본 gate로 삼되, 통계적·전 작업 동일 품질 보장을 의미하지 않는다. 모르는 사용량은 null.
+- Codex CLI의 실제 모델 관측은 현재 별도 저장되지 않고 Claude Routine 하위 실제 모델은 미확인. 현재 요청 모델을 실제 버전으로 위장하지 않는다. 가용성·품질 근거 부족 시 기존 경로 또는 확인 대기와 이유를 보존한다.
+- 기존 SQLite 단독 경로에는 cloud와 동일한 관리형 위임 조정기가 없다. 정책/관측 JSON 계약은 공유하되 로컬 단독 경로의 미구현 위임을 완료로 표시하지 않는다.
+
+### 2026-09-27 M2 코어·영속 저장 하위 단계 검증
+- 새 public/core/model-selection.mjs: 프로필/가용성/실제 버전/독립 관측을 확인하는 순수 정책 API. createSelectionState/registerCandidate/recordObservation/promoteCandidate/withdrawCandidate/selectAssignment. 선택 결과는 모델·effort·정책 버전·근거·이유 포함. 자동 실제 실행 연결 전이다.
+- 독립 리뷰에서 성공 표본만 선별한 승격, 1000건 상한에서 critical 철회 차단, 만료 근거 ID 재사용에 의한 오복구를 재현하고 같은 수정 라운드에서 수정. 전체 cohort 실패/검증불가 veto, 비고정 기록 축출, 실행·세대·모델 버전 근거 참조 검증. 독립 정책 테스트14/14 통과.
+- worker/model-policies.mjs 및 server/model-policies.mjs: metadata 기반 D1/SQLite 비동기 동일 API(create/read/register/observe/promote/withdraw/select), 상태 버전 CAS, 32프로필/프로필2MB 상한. 관측 검증 콜백은 필수이며 요청의 품질 출처를 자동 신뢰하지 않음. 실제 관측 시각 보존; 수신 시각으로 근거 최신화 금지. 실제 디스크 SQLite 닫기/재열기 포함9/9.
+- 메인 독립 통합 실행: 정책/저장23/23, 전체 Node473/473 통과. 로그 .inno/tmp/model-policy-m2-targeted.log 및 model-policy-m2-tests.log. diff check 통과. 새 도구·유료 API·실제 AI 실행 없음.
+- M2 전체는 진행 중: 저장 클래스와 순수 코어가 아직 API/마스터 배정 경로에 연결되지 않음. 프로덕션 자동 모델 교체·절감 효과를 주장하지 않는다. 운영 미배포.
+- 다음 작업: worker/index의 delegate → worker/delegations.allocate 원자 배정에 선택기 연결, 부모/자식 양쪽 selection snapshot 보존 및 replay 불변. 서버에서 소유권·배치·실제 모델·독립 검토를 확인한 관측만 policy.observe에 전달. D1/SQLite 지원 범위 차이를 유지. 기존 master가 내놓은 임의 policy/evidence 필드는 신뢰하지 않음. 프로필/가용성/실제 모델 근거 없으면 기존 경로와 evidence-insufficient 사유를 기록하고 자동 승격 보류.

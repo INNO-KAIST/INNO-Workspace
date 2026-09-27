@@ -1,0 +1,140 @@
+// Pure policy core. The caller must authenticate independent_review provenance before ingestion.
+const DAY=86_400_000, EVIDENCE_MS=90*DAY, AVAILABILITY_MS=2*60*60_000, MAX_OBSERVATIONS=1000, MAX_CANDIDATES=32;
+const IDENTIFIER=/^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
+const EFFORTS=new Set(['none','minimal','low','medium','high','xhigh','max','ultra']);
+const fail=message=>{throw new TypeError(`Invalid model selection ${message}`);};
+function id(value,label){if(typeof value!=='string'||!IDENTIFIER.test(value))fail(label);return value;}
+function instant(value,label){if(!Number.isSafeInteger(value)||value<0)fail(label);return value;}
+function profileOf(value){
+ if(!value||typeof value!=='object'||Array.isArray(value))fail('profile');
+ const family=id(value.family,'profile family'),requirementsVersion=id(value.requirementsVersion,'requirements version'),evaluationVersion=id(value.evaluationVersion,'evaluation version'),contextClass=id(value.contextClass,'context class');
+ const criteria=value.criteria,requiredCapabilities=value.requiredCapabilities;
+ if(!Array.isArray(criteria)||criteria.length<1||criteria.length>8||new Set(criteria).size!==criteria.length)fail('criteria');
+ if(!Array.isArray(requiredCapabilities)||requiredCapabilities.length<1||requiredCapabilities.length>16||new Set(requiredCapabilities).size!==requiredCapabilities.length)fail('capabilities');
+ return {family,requirementsVersion,evaluationVersion,criteria:criteria.map(x=>id(x,'criterion')),requiredCapabilities:requiredCapabilities.map(x=>id(x,'capability')),contextClass};
+}
+function route(value){
+ if(!value||typeof value!=='object'||Array.isArray(value))fail('route');
+ const provider=value.provider;if(!['codex','claude'].includes(provider))fail('provider');
+ const modelVersion=value.modelVersion===null?null:id(value.modelVersion,'model version');
+ const effort=value.effort;if(!EFFORTS.has(effort))fail('effort');
+ return {id:id(value.id,'route id'),provider,model:id(value.model,'model'),modelVersion,effort};
+}
+function matchingProfile(expected,actual){return !!actual&&expected.family===actual.family&&expected.requirementsVersion===actual.requirementsVersion&&expected.evaluationVersion===actual.evaluationVersion&&expected.contextClass===actual.contextClass&&Array.isArray(actual.criteria)&&actual.criteria.length===expected.criteria.length&&expected.criteria.every((x,i)=>actual.criteria[i]===x)&&Array.isArray(actual.requiredCapabilities)&&actual.requiredCapabilities.length===expected.requiredCapabilities.length&&expected.requiredCapabilities.every((x,i)=>actual.requiredCapabilities[i]===x);}
+function available(route,profile,rows,now){
+ if(!Array.isArray(rows)||rows.length>100)return false;
+ return rows.some(row=>row&&row.source==='account_catalog'&&row.provider===route.provider&&row.model===route.model&&row.modelVersion===route.modelVersion&&Number.isSafeInteger(row.observedAt)&&Number.isSafeInteger(row.expiresAt)&&row.observedAt<=now&&row.expiresAt>now&&row.expiresAt-row.observedAt<=AVAILABILITY_MS&&Array.isArray(row.efforts)&&row.efforts.includes(route.effort)&&Array.isArray(row.capabilities)&&profile.requiredCapabilities.every(x=>row.capabilities.includes(x))&&Array.isArray(row.contextClasses)&&row.contextClasses.includes(profile.contextClass));
+}
+function liveObservations(state,now){return state.observations.filter(x=>x.observedAt<=now&&x.observedAt>now-EVIDENCE_MS);}
+function routeById(state,id){return state.candidates.find(x=>x.id===id);}
+function validUsage(value){
+ if(value===undefined)return null;
+ if(!value||!['executor_report','server_metered'].includes(value.source))fail('usage provenance');
+ const result={source:value.source};
+ for(const key of ['inputTokens','outputTokens','latencyMs']){const v=value[key]??null;if(v!==null&&(!Number.isSafeInteger(v)||v<0))fail(key);result[key]=v;}
+ return result;
+}
+function validQuality(value,profile){
+ if(value===undefined)return null;
+ if(!value||!['independent_review','executor_self_report'].includes(value.source)||typeof value.critical!=='boolean'||!Array.isArray(value.criteria)||value.criteria.length!==profile.criteria.length)fail('quality provenance');
+ const seen=new Set();const criteria=value.criteria.map(x=>{if(!x||!profile.criteria.includes(x.id)||seen.has(x.id)||!['pass','fail','unverifiable'].includes(x.status))fail('quality criterion');seen.add(x.id);return {id:x.id,status:x.status};});
+ return {source:value.source,critical:value.critical,criteria};
+}
+function validObservation(state,value,now){
+ if(!value||typeof value!=='object'||Array.isArray(value))fail('observation');
+ const candidate=routeById(state,id(value.candidateId,'candidate id'));
+ if(!candidate)fail('candidate');
+ if(value.provider!==candidate.provider)fail('provider');
+ if(value.modelVersion!==undefined&&value.modelVersion!==candidate.modelVersion)fail('model version');
+ if(!matchingProfile(state.profile,value.profile))fail('profile');
+ const observedAt=instant(value.observedAt,'observation time');if(observedAt>now||observedAt<=now-EVIDENCE_MS)fail('observation time');
+ const generation=value.generation;if(!Number.isSafeInteger(generation)||generation<1||generation>1_000_000)fail('generation');
+ if(value.source!=='normal_execution'&&value.source!=='bounded_evaluation')fail('observation source');
+ return {id:id(value.id,'observation id'),provider:value.provider,executionId:id(value.executionId,'execution id'),generation,candidateId:candidate.id,modelVersion:value.modelVersion??null,comparisonId:id(value.comparisonId,'comparison id'),profile:{family:state.profile.family,requirementsVersion:state.profile.requirementsVersion,evaluationVersion:state.profile.evaluationVersion,contextClass:state.profile.contextClass,criteria:[...state.profile.criteria],requiredCapabilities:[...state.profile.requiredCapabilities]},observedAt,source:value.source,quality:validQuality(value.quality,state.profile),usage:validUsage(value.usage)};
+}
+function allPass(record,profile){return record.quality?.source==='independent_review'&&!record.quality.critical&&profile.criteria.every(id=>record.quality.criteria.some(c=>c.id===id&&c.status==='pass'));}
+function measured(record){const u=record.usage;return u&&u.inputTokens!==null&&u.outputTokens!==null&&u.latencyMs!==null;}
+function qualifiedPairs(state,candidateId,now){
+ const observations=liveObservations(state,now),baseline=new Map(),candidates=new Map();
+ const baseRoute=routeById(state,state.baselineId),candidateRoute=routeById(state,candidateId);
+ for(const x of observations)if(x.candidateId===state.baselineId&&x.modelVersion!==null&&x.modelVersion===baseRoute.modelVersion&&allPass(x,state.profile)&&!baseline.has(x.comparisonId))baseline.set(x.comparisonId,x);
+ for(const x of observations)if(x.candidateId===candidateId&&x.modelVersion!==null&&x.modelVersion===candidateRoute.modelVersion&&allPass(x,state.profile)&&!candidates.has(x.comparisonId))candidates.set(x.comparisonId,x);
+ const pairs=[];
+ for(const [comparisonId,x] of candidates)if(baseline.has(comparisonId))pairs.push([baseline.get(comparisonId),x]);
+ return pairs;
+}
+const evidenceIdentity=x=>({id:x.id,provider:x.provider,executionId:x.executionId,generation:x.generation,candidateId:x.candidateId,modelVersion:x.modelVersion});
+const sameEvidence=(a,b)=>a.id===b.id&&a.provider===b.provider&&a.executionId===b.executionId&&a.generation===b.generation&&a.candidateId===b.candidateId&&a.modelVersion===b.modelVersion;
+function evidenceCurrent(state,candidate,now){
+ const refs=candidate.evidenceRefs;
+ if(!Array.isArray(refs)||refs.length<state.minSamples*2)return false;
+ const matched=qualifiedPairs(state,candidate.id,now).flat();
+ return refs.every(ref=>matched.some(row=>sameEvidence(ref,row)&&matchingProfile(state.profile,row.profile)&&allPass(row,state.profile)&&measured(row)));
+}
+function choice(state,route,status,confidence,evidenceIds,reason){return {status,provider:route.provider,model:route.model,modelVersion:route.modelVersion,effort:route.effort,policyVersion:state.policyVersion,evidenceIds,confidence,reason};}
+export function createSelectionState({profile,baseline,minSamples=3}){
+ const p=profileOf(profile),b=route(baseline);
+ if(!Number.isSafeInteger(minSamples)||minSamples<3||minSamples>20)fail('minimum samples');
+ return {schemaVersion:1,stateVersion:1,policyVersion:1,profile:p,baselineId:b.id,activeId:b.id,previousId:null,minSamples,candidates:[{...b,status:'active'}],observations:[],activeEvidenceIds:[]};
+}
+export function registerCandidate(state,value){
+ const candidate=route(value);
+ if(state.candidates.length>=MAX_CANDIDATES)fail('candidate limit');
+ if(state.candidates.some(x=>x.id===candidate.id||x.provider===candidate.provider&&x.model===candidate.model&&x.modelVersion===candidate.modelVersion&&x.effort===candidate.effort))fail('duplicate candidate');
+ return {...state,stateVersion:state.stateVersion+1,candidates:[...state.candidates,{...candidate,status:'candidate'}]};
+}
+export function recordObservation(state,value,{now,availability=[]}={}){
+ instant(now,'now');const observation=validObservation(state,value,now);
+ const existing=state.observations.find(x=>x.provider===observation.provider&&x.executionId===observation.executionId&&x.generation===observation.generation);
+ if(existing)return {state,recorded:false,reason:'duplicate_execution'};
+ if(state.observations.some(x=>x.id===observation.id))fail('duplicate observation id');
+ const critical=observation.candidateId===state.activeId&&state.activeId!==state.baselineId&&observation.quality?.source==='independent_review'&&observation.quality.critical;
+ // Withdraw first so critical evidence can be recorded even when the old active policy pinned every slot.
+ const current=critical?withdrawCandidate(state,state.activeId,{now,availability}).state:state;
+ const pinned=new Set(current.activeEvidenceIds);
+ const retained=current.observations.filter(x=>x.observedAt<=now&&(x.observedAt>now-EVIDENCE_MS||pinned.has(x.id)));
+ while(retained.length>=MAX_OBSERVATIONS){
+  let victim=-1;
+  for(let i=0;i<retained.length;i++)if(!pinned.has(retained[i].id)&&(victim<0||retained[i].observedAt<retained[victim].observedAt))victim=i;
+  if(victim<0)fail('observation capacity: all evidence pinned');
+  retained.splice(victim,1);
+ }
+ const next={...current,stateVersion:current.stateVersion+1,observations:[...retained,observation],candidates:current.candidates.map(x=>x.id===observation.candidateId&&x.status==='candidate'?{...x,status:'testing'}:x)};
+ return {state:next,recorded:true,reason:critical?'critical_regression':'recorded'};
+}
+export function promoteCandidate(state,candidateId,{now,availability=[]}={}){
+ instant(now,'now');const candidate=routeById(state,id(candidateId,'candidate id'));if(!candidate)fail('candidate');
+ if(candidate.status==='active')return {state,promoted:false,reason:'already_active'};
+ if(candidate.status==='withdrawn')return {state,promoted:false,reason:'withdrawn'};
+ if(candidate.modelVersion===null)return {state,promoted:false,reason:'unobserved_model_version'};
+ if(!available(candidate,state.profile,availability,now))return {state,promoted:false,reason:'candidate_unavailable'};
+ const cohort=liveObservations(state,now).filter(x=>x.candidateId===candidateId&&x.modelVersion===candidate.modelVersion&&matchingProfile(state.profile,x.profile));
+ if(cohort.some(x=>x.quality?.source==='independent_review'&&!allPass(x,state.profile)))return {state,promoted:false,reason:'candidate_quality_regression'};
+ const pairs=qualifiedPairs(state,candidateId,now);
+ if(pairs.length<state.minSamples)return {state,promoted:false,reason:'insufficient_comparable_evidence'};
+ if(pairs.some(([base,next])=>!measured(base)||!measured(next)))return {state,promoted:false,reason:'missing_measured_efficiency'};
+ const total=(rows,index,key)=>rows.reduce((sum,pair)=>sum+BigInt(pair[index].usage[key]),0n);
+ const baseTokens=total(pairs,0,'inputTokens')+total(pairs,0,'outputTokens'),newTokens=total(pairs,1,'inputTokens')+total(pairs,1,'outputTokens');
+ if(newTokens>=baseTokens||total(pairs,1,'latencyMs')>total(pairs,0,'latencyMs'))return {state,promoted:false,reason:'no_measured_efficiency_gain'};
+ const evidenceIds=pairs.flatMap(pair=>pair.map(x=>x.id));
+ const evidenceRefs=pairs.flatMap(pair=>pair.map(evidenceIdentity));
+ const candidates=state.candidates.map(x=>({...x,status:x.id===candidateId?'active':x.id===state.activeId?'testing':x.status,...(x.id===candidateId?{evidenceIds,evidenceRefs}: {})}));
+ return {state:{...state,stateVersion:state.stateVersion+1,policyVersion:state.policyVersion+1,previousId:state.activeId,activeId:candidateId,activeEvidenceIds:evidenceIds,candidates},promoted:true,reason:'profile_scoped_evidence'};
+}
+export function withdrawCandidate(state,candidateId,{now,availability=[]}={}){
+ instant(now,'now');const candidate=routeById(state,id(candidateId,'candidate id'));if(!candidate)fail('candidate');
+ if(candidate.id===state.baselineId)fail('baseline withdrawal');
+ if(candidate.status==='withdrawn')return {state,withdrawn:false,reason:'already_withdrawn'};
+ const active=state.activeId===candidateId,prior=active?routeById(state,state.previousId):null;
+ const priorProven=prior?.id===state.baselineId||prior&&evidenceCurrent(state,prior,now);
+ const restored=prior&&prior.status!=='withdrawn'&&priorProven&&available(prior,state.profile,availability,now)?prior:null;
+ const candidates=state.candidates.map(x=>({...x,status:x.id===candidateId?'withdrawn':restored&&x.id===restored.id?'active':x.status}));
+ return {state:{...state,stateVersion:state.stateVersion+1,policyVersion:state.policyVersion+(active?1:0),activeId:active?(restored?.id??null):state.activeId,previousId:active?null:state.previousId,activeEvidenceIds:active?(restored?.evidenceIds??[]):state.activeEvidenceIds,candidates},withdrawn:true,reason:active?(restored?'restored_previous':'safe_fallback_required'):'withdrawn'};
+}
+export function selectAssignment(state,{profile,availability=[],now}={}){
+ instant(now,'now');if(!matchingProfile(state.profile,profile)||!Array.isArray(profile.criteria)||profile.criteria.length!==state.profile.criteria.length||!state.profile.criteria.every((x,i)=>profile.criteria[i]===x))return {status:'wait',policyVersion:state.policyVersion,evidenceIds:[],reason:'profile_mismatch'};
+ const active=routeById(state,state.activeId),base=routeById(state,state.baselineId);
+ if(active&&active.id!==state.baselineId&&available(active,state.profile,availability,now)&&evidenceCurrent(state,active,now)&&state.activeEvidenceIds.length===active.evidenceRefs.length&&state.activeEvidenceIds.every((id,i)=>id===active.evidenceRefs[i].id))return choice(state,active,'selected','profile_scoped_observation',[...state.activeEvidenceIds],'matched_quality_and_measured_efficiency');
+ if(base&&available(base,state.profile,availability,now))return choice(state,base,'fallback','unvalidated_fallback',[],'existing_route_pending_evidence');
+ return {status:'wait',policyVersion:state.policyVersion,evidenceIds:[],reason:'no_fresh_eligible_route'};
+}
