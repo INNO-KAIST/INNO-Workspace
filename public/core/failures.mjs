@@ -1,5 +1,6 @@
 // Persist only bounded categories and server timing hints, never raw provider diagnostics.
 const descriptions = Object.freeze({
+ context: ['문맥 추가 조회 필요', '필수 작업 이력을 안전하게 구성하지 못해 실행을 시작하지 않았습니다. 문맥 조회 또는 분할 후 이어서 진행하세요.'],
  resource: ['실행 출력 처리 상한 도달', '저장된 결과 파일을 확인하고 출력 범위를 줄인 뒤 이어서 실행하세요.'],
  unavailable: ['실행기 또는 원본 연결 필요', '실행기 설정과 필요한 원본 연결을 확인한 뒤 이어서 실행하세요.'],
  quota: ['사용 또는 요청 한도 대기', '공식 사용량 화면에서 한도를 확인한 뒤 이어서 실행하세요.'],
@@ -8,7 +9,7 @@ const descriptions = Object.freeze({
  interrupted: ['실행 연결 중단', '데스크톱을 다시 연결하면 보관된 결과부터 전달합니다. 새 실행 전 기존 작업 상태를 확인하세요.'],
  unknown: ['실행 중단', '기존 실행과 생성된 결과를 확인한 뒤 이어서 실행하세요.'],
 });
-const codes = {OUTPUT_LIMIT:'resource',QUOTA_EXCEEDED:'quota',AUTH_REQUIRED:'authentication',CONNECTION_FAILED:'connection'};
+const codes = {CONTEXT_RETRIEVAL_REQUIRED:'context',OUTPUT_LIMIT:'resource',QUOTA_EXCEEDED:'quota',AUTH_REQUIRED:'authentication',CONNECTION_FAILED:'connection'};
 export function retryHint(value, now=Date.now()) {
  if(typeof value!=='string'||!value.trim())return null;
  const n=/^\d+(?:\.\d+)?$/.test(value.trim())?now+Number(value)*1000:Date.parse(value);

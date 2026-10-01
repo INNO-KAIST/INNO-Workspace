@@ -3,7 +3,7 @@
 - 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
 - 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP, Task3h 복구 UI·client·local proxy 연결 및 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
-- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. Task3l 복구 서비스 루프·스크립트 배선 검증 완료(기본0). Task3m 해시 확인 명시 전달 HTTP 검증 완료. Task3n 로컬 복구 UI 구현·독립 리뷰·실제 브라우저 검증 완료. 전체1010건 중1009통과/0실패/기존symlink1skip. 이후 legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
+- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. Task3l 복구 서비스 루프·스크립트 배선 검증 완료(기본0). Task3m 해시 확인 명시 전달 HTTP 검증 완료. Task3n 로컬 복구 UI 구현·독립 리뷰·실제 브라우저 검증 완료. 전체1010건 중1009통과/0실패/기존symlink1skip. 이후 legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화는 2026-10-01 승인·PRD 반영 완료. CONTEXT-EFFICIENCY-IMPLEMENTATION.md Stage1 공통 조립/제공자 연결 검증 완료. 다음 Stage2 범위 제한 원문 조회·명시 재개 상태 연결.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -689,3 +689,16 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 전체1010건 중1009통과/0실패/기존Windows symlink권한1skip(.inno/tmp/task3n-full.log), renderer/script node --check 및 git diff --check 통과. 운영 AI/DB 호출 없음.
 - 미리보기 프로세스27376 종료, 탭 닫기·viewport reset, 자체 fixture폴더/스크립트 정리 완료. 위 이전 기록의 session86794/포트54169는 더 이상 실행 중이 아니다.
 - 다음: 영속 claim journal/unknown owner 및 legacy 결과 명시 복구 계약·구현·실제 재시작 검증 후 활성화. protocol0 유지, 배포 없음. CR004/005 승인 대기; 전체 목표 미완료.
+
+### 2026-10-01 CR-005 승인 및 우선순위
+- 사용자 “토큰 최적화 관련 초안 승인할게”를 반영해 CTX-01~06/4단계 계획을 PRD에 편입했다. CR004는 별도 승인 대기다. 현재 문맥조립 첫 단계 우선 구현; SRC 재시작 복구는 보류가 아닌 후속 잔여 작업으로 유지.
+- journal 읽기전용 설계 감사: 고정8KiB intent/owner+tmp, 기존 file-outbox atomic writer 재사용, read는 bounded 검증 필요. null poll만 intent정리; 검증된 saved pending/ACK와 binding/task/execution/generation이 맞는 owner만 결과전송·ACK·outbox삭제 전에 정리. unknown/mismatch자동해제 금지. 아직 제품코드 변경 없음.
+
+### 2026-10-01 CR-005 Stage1 공통 문맥 조립·실행 경로 연결
+- public/core/task-context.mjs는 최초 await 전 task/version/messages/role/content를 스냅샷하고 원요청·전체이력·checkpoint를 길이로 자르지 않는다. 선두 원요청 echo만 제외하고 이후 동일지시의 순서를 유지한다. 같은 role의 반복본문만 더 짧은 명시 참조로 대체한다.
+- 순서·원본id/index·SHA256·task/version/mode manifest와 바이트metrics는 sidecar로 두고 모델본문에 반복 출력하지 않는다. SHA 계산은 packet내 동일본문만 재사용하며 전역/영속캐시 없다. 미관측 input/output/cached tokens는 null이다.
+- Codex/로컬Claude/WorkerClaude 3경로가 같은 async 조립기를 사용한다. 요청+대화+checkpoint 96000UTF8byte 예산 초과면 원문보존+completefalse이며 branded ContextRetrievalRequiredError로 AI spawn/fire 전에 중단한다. 모델·자료·임대·callback 지침 보존. 첨부/모델지침을 포함한 전체prompt 예산, Stage2선택조회 및 관측 UI는 아직 미완료.
+- 오류는 문맥 추가 조회 필요로 기록하고 자동재시도하지 않는다. Worker는 실제 내부 클래스인 경우만 원격 미실행으로 확정한다. 같은 code를 가진 외부오류는 기존 uncertain_fire 보존.
+- 의미 RED→GREEN: packet7/7, adapter34/34(author), failures+dispatch18/18(author), 독립 packet/runner/dispatch/failures33/33. 전체 최초1026중1024pass/1fail/1skip에서 기존 deadline test의 setImmediate 1회 준비 가정이 비동기SHA 준비와 충돌했다. 실제 spawn 신호 대기로 수정 후 전체1026중1025pass/0fail/기존Windows symlink1skip(.inno/tmp/ctx-stage1-final.log). 이후 독립리뷰가 지적한 동일 abort테스트 경쟁도 같은 방식으로 수정하고 관련11/11 재검증. 마지막 변경은 테스트만이며 제품코드 변화 없음.
+- Wrangler 기존캐시 dry-run 성공(실제배포아님), 구문/diff검증통과. 합성중복 fixture의 packet범위7726→3992byte(3734감소); 실제토큰/캐시/일반사용절감률 주장이 아니다. 짧은 메시지에서는 표시비용 때문에 savedBytes 음수도 보존한다.
+- 다음 Stage2에서 예산초과를 안전한 선택조회/명시상태로 해소해야 장기작업을 자연스럽게 이어가는 사용자요구 충족. 현재는 누락실행 차단 단계이며 전체 CR005 완료 아님. 실제AI/운영DB/배포 없음. journal/unknownowner/legacy복구 및 CR004 미완료 범위 유지.

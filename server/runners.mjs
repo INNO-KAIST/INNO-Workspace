@@ -1,3 +1,5 @@
+import {buildTaskContext} from '../public/core/task-context.mjs';
+import {ContextRetrievalRequiredError} from '../public/core/context-errors.mjs';
 import {sourceDelegationContext,delegationAttachments} from '../public/core/delegation-sources.mjs';
 import {fileURLToPath} from 'node:url';
 import {usageCounts} from '../public/core/execution-usage.mjs';
@@ -96,7 +98,9 @@ function collectProcess(child, {input, signal, timeoutMs, onTimeout, onClose, st
   });
 }
 
-function taskPrompt(task, materials = [], ownership = {}) {
+async function taskPrompt(task, materials = [], ownership = {}) {
+  const context=await buildTaskContext(task,{mode:ownership.mode??executionMode(task)});
+  if(!context.complete)throw new ContextRetrievalRequiredError();
   const plan = Array.isArray(task.plan)
     ? task.plan.map(item => `- ${item.role}: ${item.label} — ${item.instructions}`).join('\n')
     : '';
@@ -107,22 +111,6 @@ function taskPrompt(task, materials = [], ownership = {}) {
       material.text,
       '</source>',
     ].join('\n')).join('\n\n');
-  const noAdditionalMessages = '- No additional messages.';
-  const soleOriginal = Array.isArray(task.messages) && task.messages.length === 1
-    && task.messages[0]?.role === 'user'
-    && typeof task.messages[0].content === 'string'
-    && task.messages[0].content === task.prompt;
-  const conversation = soleOriginal && `user: ${task.prompt.slice(0, 8_000)}`.length > noAdditionalMessages.length
-    ? noAdditionalMessages
-    : Array.isArray(task.messages)
-    ? task.messages.slice(-20).map(message => {
-      const role = ['user', 'assistant', 'system'].includes(message?.role) ? message.role : 'system';
-      return `${role}: ${String(message?.content ?? '').slice(0, 8_000)}`;
-    }).join('\n\n').slice(-80_000)
-    : '';
-  const checkpoint = typeof task.checkpoint === 'string'
-    ? task.checkpoint
-    : task.checkpoint?.content;
   const childAssignment = ownership.mode === 'child' ? task.assignment : null;
   const reviewFiles = ownership.mode === 'review' ? ownership.reviewFiles : null;
   return [
@@ -139,13 +127,13 @@ function taskPrompt(task, materials = [], ownership = {}) {
     `Task title: ${task.title}`,
     '',
     'User request:',
-    task.prompt,
+    context.request,
     '',
     'Recent durable conversation (newer messages can revise the original request):',
-    conversation || noAdditionalMessages,
+    context.conversation || '- No additional messages.',
     '',
     'Last durable checkpoint:',
-    checkpoint ? String(checkpoint).slice(0, 8_000) : '- No checkpoint.',
+    context.checkpoint || '- No checkpoint.',
     '',
     ownership.mode === 'root' && !ownership.evaluationBound ? handoffContext(task) : '',
     ownership.allowHandoff ? CODEX_HANDOFF_POLICY : '',
@@ -459,7 +447,7 @@ export function createCodexRunner({
         '-',
       ];
       const modelPolicy=deadline?'EVALUATION BUDGET EXECUTION: Work directly in this process. Do not use MCP tools, native subagents, delegation, or provider handoff. Return only the assigned result.':mode==='child'?codexChildPolicy(task,assignedRoute):mode==='review'?codexReviewPolicy(task):managedDelivery?delegationRoutingPolicy(models,{sourceDelegationVersion:sourceContext?1:0}):routingPolicy(models);
-      const input=taskPrompt(task, materials, {executionId, generation, managedDelivery, handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'});
+      const input=await taskPrompt(task, materials, {executionId, generation, managedDelivery, handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'});
       const processStartedAt=now();
       if(deadline)remainingExecutionMs(deadline,processStartedAt,monotonicNow());
       const child = spawnProcess('codex', codexArgs, {
@@ -568,7 +556,7 @@ export function createClaudeRoutineRunner({url, token, fetchFn = fetch,sourceDel
           'anthropic-version': '2023-06-01',
           'content-type': 'application/json',
         },
-        body: JSON.stringify({text: taskPrompt(task, materials, {executionId, generation, modelPolicy:claudeTaskRoutingPolicy(task), claude:true, mode})}),
+        body: JSON.stringify({text: await taskPrompt(task, materials, {executionId, generation, modelPolicy:claudeTaskRoutingPolicy(task), claude:true, mode})}),
       });
       let body;
       try {

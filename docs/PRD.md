@@ -113,3 +113,6 @@ Claude와 ChatGPT/Codex에서 새 모델과 성능 변화가 생겨도, 마스�
 - https://learn.chatgpt.com/docs/app-server — model/list 계정·클라이언트별 가용 모델과 기능.
 - https://code.claude.com/docs/en/model-config — 별칭, 모델 설정, 권한 및 환경에 따른 차이.
 - 기존 코드: worker/model-catalog.mjs, server/model-routing.mjs, public/core/claude-routing.mjs, public/core/execution-usage.mjs.
+
+## 10. 승인된 CR-005 장기 문맥·토큰 최적화 (2026-10-01)
+사용자 '토큰 최적화 관련 초안 승인할게'로 docs/CONTEXT-EFFICIENCY-PROPOSAL.md 전체를 승인했다. 해당 문서의 CTX-01~06 요구사항·완료 기준·4단계 WBS·위험 및 가정을 본 PRD에 편입한다. 추가 언어/빌드 도구/런타임 없음. 기존 Node/Cloudflare 검증 명령과 구현자/별도 검증자 운영을 유지한다. 의미상 완전 무손실 또는 미관측 캐시 적중을 보장하지 않는다. 기존 SRC/REL 미완료 요구사항은 유지한다.

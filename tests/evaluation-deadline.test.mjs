@@ -128,10 +128,11 @@ test('kill throw and process error do not settle a started process before close'
 });
 
 test('abort waits for close and ordinary execution retains its existing path',async()=>{
-  let child,settled=false;const controller=new AbortController();
-  const bound=runner(()=>child=syntheticChild({onKill:()=>true}));
+  let child,signalSpawned,settled=false;const controller=new AbortController();
+  const spawned=new Promise(resolve=>{signalSpawned=resolve;});
+  const bound=runner(()=>{child=syntheticChild({onKill:()=>true});signalSpawned();return child;});
   const promise=bound.run(owned(task(),{signal:controller.signal})).finally(()=>{settled=true;});
-  await new Promise(resolve=>setImmediate(resolve));controller.abort();
+  await spawned;controller.abort();
   await new Promise(resolve=>setImmediate(resolve));assert.equal(settled,false);
   child.emit('close',null,'SIGTERM');
   await assert.rejects(promise,error=>{assert.equal(error.name,'AbortError');assert.equal(error.localExecution.rootProcessClosed,true);return true;});
@@ -153,10 +154,11 @@ test('normal close removes abort listener and deadline timer',async()=>{
 });
 
 test('ordinary process error retains immediate failure behavior without waiting for close',async()=>{
-  let child;
-  const run=runner(()=>child=syntheticChild());
+  let child,signalSpawned;
+  const spawned=new Promise(resolve=>{signalSpawned=resolve;});
+  const run=runner(()=>{child=syntheticChild();signalSpawned();return child;});
   const promise=run.run({task:{id:'ordinary-error',prompt:'Work'}});
-  await new Promise(resolve=>setImmediate(resolve));
+  await spawned;
   child.emit('error',Error('ordinary process error'));
   await Promise.race([assert.rejects(promise,/ordinary process error/),
     new Promise((_,reject)=>setTimeout(()=>reject(Error('ordinary process error did not settle')),50))]);

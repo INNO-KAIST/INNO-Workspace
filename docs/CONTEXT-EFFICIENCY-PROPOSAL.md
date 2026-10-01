@@ -1,5 +1,5 @@
 # CR-005: 장기 작업 문맥·토큰 최적화 제안
-작성: 2026-10-01. 상태: 승인 대기. 기존 PRD는 승인 전 개정하지 않는다.
+작성: 2026-10-01. 상태: 승인됨 — 2026-10-01 사용자 “토큰 최적화 관련 초안 승인할게”.
 
 ## 목표와 확인된 문제
 사용자 요구는 모든 작업과 Codex/Claude 양쪽에서 문맥 비용을 줄이면서 목표·제약·결정·미완료 작업·근거를 재개 시 이어받는 것이다.
@@ -40,5 +40,5 @@
 - OpenAI compaction: https://developers.openai.com/api/docs/guides/compaction — 압축된 컨텍스트로 이어가는 API 계약. 이 플랫폼에 API를 추가한다는 의미가 아니다.
 - Claude context windows: https://platform.claude.com/docs/en/build-with-claude/context-windows — 캐시 읽기/쓰기 입력도 문맥 크기에 포함됨. 캐시와 문맥 길이를 별도 관리한다.
 
-## 승인 요청
-CR-005를 위 범위로 지금 반영하면 docs/PRD.md에 CTX-01~06과 순차 마일스톤을 편입한다. 승인 전 CR-005 제품 코드는 변경하지 않는다. 기존 승인된 결과 전달 복구 작업은 별도로 계속한다.
+## 승인
+2026-10-01 승인됨. docs/PRD.md에 CTX-01~06과 순차 마일스톤을 편입한다. 기존 결과 전달 복구의 미완료 범위는 유지한다.

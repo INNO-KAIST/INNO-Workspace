@@ -6,6 +6,7 @@ import {createCodexRunner,createClaudeRoutineRunner} from '../server/runners.mjs
 
 function fakeSpawn(capture){
  return ()=>{
+  capture.calls=(capture.calls??0)+1;
   const child=new EventEmitter();
   child.stdout=new PassThrough();child.stderr=new PassThrough();child.stdin=new PassThrough();
   child.stdin.on('data',chunk=>{capture.text=(capture.text??'')+chunk;});
@@ -16,13 +17,13 @@ function fakeSpawn(capture){
   return child;
  };
 }
-async function promptFor(provider,task){
- const capture={};
+async function promptFor(provider,task,capture={}){
  if(provider==='codex'){
   const runner=createCodexRunner({spawnProcess:fakeSpawn(capture),ensureDirectory:()=>{},runDirectory:()=>process.cwd(),modelCatalog:async()=>[]});
   await runner.run({task});
  }else{
   const runner=createClaudeRoutineRunner({url:'https://api.anthropic.com/fire',token:'fake',fetchFn:async(_url,options)=>{
+   capture.calls=(capture.calls??0)+1;
    capture.text=JSON.parse(options.body).text;
    return {ok:true,json:async()=>({claude_code_session_url:'https://example.test/session',claude_code_session_id:'fake'})};
   }});
@@ -45,28 +46,42 @@ for(const provider of ['codex','claude']){
   assert.equal((text.match(/original-end/g)||[]).length,1);
  });
 
- test(`${provider} retains changed, follow-up, non-user, and short-message conversation behavior`,async()=>{
+ test(`${provider} preserves revised instructions and removes only the initial request echo`,async()=>{
   const request='Original request with detail worth preserving.';
   const cases=[
-   {messages:[{role:'user',content:request},{role:'user',content:request}],expected:`user: ${request}\n\nuser: ${request}`},
-   {messages:[{role:'user',content:request},{role:'user',content:'Please revise the output.'}],expected:`user: ${request}\n\nuser: Please revise the output.`},
-   {messages:[{role:'user',content:'Different content.'}],expected:'user: Different content.'},
-   {messages:[{role:'assistant',content:request}],expected:`assistant: ${request}`},
+   {messages:[{role:'user',content:request},{role:'user',content:request}],expected:`[Message #2] user: ${request}`},
+   {messages:[{role:'user',content:request},{role:'user',content:'Please revise the output.'}],expected:'[Message #2] user: Please revise the output.'},
+   {messages:[{role:'user',content:'Different content.'}],expected:'[Message #1] user: Different content.'},
+   {messages:[{role:'assistant',content:request}],expected:`[Message #1] assistant: ${request}`},
   ];
   for(const {messages,expected} of cases){
    const text=await promptFor(provider,task(request,messages));
    assert.equal(original(text),request);assert.equal(conversation(text),expected);
   }
-  const short='Hi';
-  assert.equal(conversation(await promptFor(provider,task(short,[{role:'user',content:short}]))),'user: Hi');
-  const shortUnicode='안녕';
-  assert.equal(conversation(await promptFor(provider,task(shortUnicode,[{role:'user',content:shortUnicode}]))),'user: 안녕');
+  for(const short of ['Hi','안녕'])assert.equal(conversation(await promptFor(provider,task(short,[{role:'user',content:short}]))),'- No additional messages.');
+ });
+
+ test(`${provider} delivers old decisions and full message and checkpoint tails`,async()=>{
+  const request='Keep the original objective.';
   const changed='changed-start '+ 'y'.repeat(8_500)+' changed-end';
-  assert.equal(conversation(await promptFor(provider,task(request,[{role:'user',content:changed}]))),`user: ${changed.slice(0,8_000)}`);
-  const history=Array.from({length:21},(_,index)=>({role:'user',content:`message-${String(index).padStart(2,'0')}:`+'z'.repeat(4_500)}));
-  const bounded=conversation(await promptFor(provider,task(request,history)));
-  assert.equal(bounded.length,80_000);
-  assert.doesNotMatch(bounded,/message-00:/);
-  assert.match(bounded,/message-20:/);
+  const checkpoint='checkpoint-start '+'c'.repeat(8_500)+' checkpoint-end';
+  const messages=[{role:'user',content:request},{role:'user',content:'old-decision: do not publish'},...Array.from({length:21},(_,index)=>({role:'assistant',content:`progress-${index}`})),{role:'user',content:changed}];
+  const text=await promptFor(provider,{...task(request,messages),checkpoint:{content:checkpoint}});
+  assert.equal(original(text),request);
+  assert.equal(text.split(request).length-1,1);
+  assert.ok(conversation(text).includes('old-decision: do not publish'));
+  assert.ok(conversation(text).includes(changed));
+  assert.ok(text.includes(checkpoint));
+ });
+
+ test(`${provider} blocks oversized mandatory context before any provider execution`,async()=>{
+  const capture={};
+  const oversized=task('private-original',[{role:'user',content:'private-history '+'x'.repeat(100_000)}]);
+  await assert.rejects(()=>promptFor(provider,oversized,capture),error=>{
+   assert.equal(error.code,'CONTEXT_RETRIEVAL_REQUIRED');
+   assert.doesNotMatch(error.message,/private-original|private-history|xxxxxxxx/);
+   return true;
+  });
+  assert.equal(capture.calls??0,0);
  });
 }

@@ -18,13 +18,14 @@ test('definitive provider authentication rejection retains its distinct failure 
 function routinePromptHarness(t){
  const db=new TestD1();t.after(()=>db.close());const store=new D1TaskStore(db);
  const env={DB:db,ACCESS_TOKEN:'test-secret-01234567890123456789',CLAUDE_ROUTINE_URL:'https://api.anthropic.com/v1/fire',CLAUDE_ROUTINE_TOKEN:'mock'};
- let sent='';const worker=createWorker({fetchFn:async(_url,options)=>{sent=JSON.parse(options.body).text;return Response.json({claude_code_session_id:'fake',claude_code_session_url:'https://example.test/session'});}});
- return async(prompt,messages)=>{
+ let sent='',fires=0;const worker=createWorker({fetchFn:async(_url,options)=>{fires++;sent=JSON.parse(options.body).text;return Response.json({claude_code_session_id:'fake',claude_code_session_url:'https://example.test/session'});}});
+ return async(prompt,messages,checkpoint,inspect=false)=>{
+  sent='';const before=fires;
   let task=await store.createTask({prompt});
-  if(messages)task=await store.replaceTask(task.id,task.version,current=>({...current,version:current.version+1,messages:messages.map((message,index)=>({id:`message-${index}`,createdAt:'2026-09-28T00:00:00.000Z',...message}))}));
+  if(messages||checkpoint)task=await store.replaceTask(task.id,task.version,current=>({...current,version:current.version+1,...(checkpoint?{checkpoint:{content:checkpoint}}:{}),messages:(messages??current.messages).map((message,index)=>({id:`message-${index}`,createdAt:'2026-09-28T00:00:00.000Z',...message}))}));
   const pending=[];const response=await worker.fetch(new Request(`https://inno.test/api/tasks/${task.id}/run`,{method:'POST',headers:{authorization:`Bearer ${env.ACCESS_TOKEN}`,'content-type':'application/json'},body:JSON.stringify({provider:'claude',expectedVersion:task.version})}),env,{waitUntil:promise=>pending.push(promise)});
   await Promise.all(pending);assert.equal(response.status,202);
-  return sent;
+  return inspect?{sent,fires:fires-before,task:await store.requireTask(task.id)}:sent;
  };
 }
 const routineRequest=text=>text.split('Request: ')[1]?.split('\nRecent durable conversation')[0];
@@ -39,19 +40,59 @@ test('Worker Routine HTTP keeps a long sole original request in full and omits i
  assert.equal((sent.match(/original-end/g)||[]).length,1);
 });
 
-test('Worker Routine HTTP preserves changed, non-user, repeated, short and bounded history',async t=>{
+test('Worker Routine HTTP preserves revised instructions and removes only the initial request echo',async t=>{
  const promptFor=routinePromptHarness(t),request='Original request with detail worth preserving.';
  for(const [messages,expected] of [
-  [[{role:'user',content:request},{role:'user',content:request}],`user: ${request}\n\nuser: ${request}`],
-  [[{role:'user',content:'Different content.'}],'user: Different content.'],
-  [[{role:'assistant',content:request}],`assistant: ${request}`],
+  [[{role:'user',content:request},{role:'user',content:request}],`[Message #2] user: ${request}`],
+  [[{role:'user',content:'Different content.'}],'[Message #1] user: Different content.'],
+  [[{role:'assistant',content:request}],`[Message #1] assistant: ${request}`],
  ]){
   const sent=await promptFor(request,messages);assert.equal(routineRequest(sent),request);assert.equal(routineConversation(sent),expected);
  }
- for(const short of ['Hi','안녕'])assert.equal(routineConversation(await promptFor(short)),`user: ${short}`);
- const changed='changed-start '+ 'y'.repeat(8_500)+' changed-end';
- assert.equal(routineConversation(await promptFor(request,[{role:'user',content:changed}])),`user: ${changed.slice(0,8_000)}`);
- const history=Array.from({length:21},(_,index)=>({role:'user',content:`message-${String(index).padStart(2,'0')}:`+'z'.repeat(4_500)}));
- const bounded=routineConversation(await promptFor(request,history));
- assert.equal(bounded.length,80_000);assert.doesNotMatch(bounded,/message-00:/);assert.match(bounded,/message-20:/);
+ for(const short of ['Hi','안녕'])assert.equal(routineConversation(await promptFor(short)),'- No additional messages.');
+});
+
+test('Worker Routine HTTP delivers old decisions and complete message and checkpoint tails',async t=>{
+ const promptFor=routinePromptHarness(t),request='Keep the original objective.';
+ const changed='changed-start '+'y'.repeat(8_500)+' changed-end';
+ const checkpoint='checkpoint-start '+'c'.repeat(8_500)+' checkpoint-end';
+ const messages=[{role:'user',content:request},{role:'user',content:'old-decision: do not publish'},...Array.from({length:21},(_,index)=>({role:'assistant',content:`progress-${index}`})),{role:'user',content:changed}];
+ const sent=await promptFor(request,messages,checkpoint);
+ assert.equal(routineRequest(sent),request);
+ assert.equal(sent.split(request).length-1,1);
+ assert.ok(routineConversation(sent).includes('old-decision: do not publish'));
+ assert.ok(routineConversation(sent).includes(changed));
+ assert.ok(sent.includes(checkpoint));
+});
+
+test('Worker Routine HTTP blocks oversized required history before firing Claude',async t=>{
+ const promptFor=routinePromptHarness(t);
+ const result=await promptFor('private-original',[{role:'user',content:'private-history '+'x'.repeat(100_000)}],undefined,true);
+ assert.equal(result.fires,0);
+ assert.equal(result.sent,'');
+ assert.notEqual(result.task.status,'running');
+});
+
+test('branded local context preflight failure records definitive failure without automatic replay',async t=>{
+ const {ContextRetrievalRequiredError}=await import('../public/core/context-errors.mjs');
+ const {store,task}=await realFixture(t);let attempts=0;
+ const args={store,taskId:task.id,hasRoutine:true,fire:async()=>{attempts++;throw new ContextRetrievalRequiredError('PRIVATE context');}};
+ await dispatchClaude(args);await dispatchClaude(args);
+ const current=await store.requireTask(task.id);
+ assert.equal(attempts,1);assert.equal(current.status,'failed');
+ assert.equal(current.checkpoint.failure.kind,'context');
+ assert.equal(current.checkpoint.failure.automaticRetry,false);
+ assert.equal(current.checkpoint.confirmationRequired,undefined);
+ assert.equal(JSON.stringify(current).includes('PRIVATE'),false);
+});
+
+test('remote context-looking error code stays uncertain and cannot automatically replay',async t=>{
+ const {store,task}=await realFixture(t);let attempts=0;
+ const args={store,taskId:task.id,hasRoutine:true,fire:async()=>{attempts++;throw Object.assign(Error('PRIVATE context'),{code:'CONTEXT_RETRIEVAL_REQUIRED'});}};
+ await dispatchClaude(args);await dispatchClaude(args);
+ const current=await store.requireTask(task.id);
+ assert.equal(attempts,1);assert.equal(current.status,'waiting_connection');
+ assert.equal(current.checkpoint.confirmationRequired.reason,'uncertain_fire');
+ await assert.rejects(()=>store.applyAction(task.id,{expectedVersion:current.version,action:'resume'}),/confirm/i);
+ assert.equal(JSON.stringify(current).includes('PRIVATE'),false);
 });

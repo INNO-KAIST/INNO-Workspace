@@ -7,3 +7,22 @@ test('unknown diagnostics remain private and no category automatically replays e
 test('native network error codes remain connection failures at delivery boundary',()=>{assert.equal(failureInput(Object.assign(Error('PRIVATE'),{code:'ECONNRESET'})).failure.kind,'connection');});
 
 test('output limit has actionable resource guidance without storing diagnostics',()=>{const input=failureInput(Object.assign(Error('PRIVATE'),{code:'OUTPUT_LIMIT'}));assert.equal(input.failure.kind,'resource');const failure=failureRecord(input,new Date().toISOString());const guide=failureGuidance({status:input.status,checkpoint:{failure}});assert.ok(guide.detail.includes('출력'));assert.equal(JSON.stringify(failure).includes('PRIVATE'),false);});
+
+test('context preflight failure is fixed, actionable and never automatically retried',async()=>{
+ const {ContextRetrievalRequiredError}=await import('../public/core/context-errors.mjs');
+ const error=new ContextRetrievalRequiredError('PRIVATE context',{diagnostics:'PRIVATE diagnostics'});
+ assert.ok(error instanceof Error);
+ assert.equal(error.code,'CONTEXT_RETRIEVAL_REQUIRED');
+ assert.equal(JSON.stringify(error).includes('PRIVATE'),false);
+ assert.equal(error.message.includes('PRIVATE'),false);
+ for(const candidate of [error,runnerError(error)]){
+  const input=failureInput(candidate);
+  assert.equal(input.status,'failed');assert.equal(input.failure.kind,'context');
+  const failure=failureRecord(input,'2026-10-01T00:00:00.000Z');
+  assert.equal(failure.automaticRetry,false);assert.equal(failure.retryNotBefore,null);
+  assert.deepEqual(failureGuidance({status:input.status,checkpoint:{failure}}),{
+   title:'문맥 추가 조회 필요',detail:'필수 작업 이력을 안전하게 구성하지 못해 실행을 시작하지 않았습니다. 문맥 조회 또는 분할 후 이어서 진행하세요.',retryNotBefore:null,
+  });
+  assert.equal(JSON.stringify({input,failure}).includes('PRIVATE'),false);
+ }
+});

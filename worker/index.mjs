@@ -1,3 +1,5 @@
+import {buildTaskContext} from '../public/core/task-context.mjs';
+import {ContextRetrievalRequiredError} from '../public/core/context-errors.mjs';
 import {sourceDelegationContext} from '../public/core/delegation-sources.mjs';
 import {sourceDelegationVersionFromEnvironment} from '../public/core/source-delegation-gate.mjs';
 import {deliveryPolicy} from '../public/core/delivery.mjs';
@@ -70,22 +72,14 @@ function routineConfigured(env) {
   }
 }
 
-function routineText(task, materials, ownership, catalog, capability, sourceDelegationVersion=0) {
+async function routineText(task, materials, ownership, catalog, capability, sourceDelegationVersion=0) {
+  const mode=task.delegation?.state==='reviewing'?'review':task.parentTaskId||task.assignment?'child':'root';
+  const context=await buildTaskContext(task,{mode});
+  if(!context.complete)throw new ContextRetrievalRequiredError();
   const sourceContext=!task.parentTaskId&&!task.delegation?.review?sourceDelegationContext(task,{sourceDelegationVersion}):'';
   const excerpts = materials.length
     ? materials.map((item, index) => `<source index="${index + 1}" name=${JSON.stringify(item.name)}>\n${item.text}\n</source>`).join('\n\n')
     : 'No source excerpts were supplied.';
-  const noAdditionalMessages = '- No additional messages.';
-  const soleOriginal = Array.isArray(task.messages) && task.messages.length === 1
-    && task.messages[0]?.role === 'user'
-    && typeof task.messages[0].content === 'string'
-    && task.messages[0].content === task.prompt;
-  const conversation = soleOriginal && `user: ${task.prompt.slice(0, 8_000)}`.length > noAdditionalMessages.length
-    ? noAdditionalMessages
-    : Array.isArray(task.messages)
-    ? task.messages.slice(-20).map(message => `${message.role}: ${String(message.content ?? '').slice(0, 8_000)}`).join('\n\n').slice(-80_000)
-    : '';
-  const checkpoint = typeof task.checkpoint === 'string' ? task.checkpoint : task.checkpoint?.content;
   const plan = Array.isArray(task.plan)
     ? task.plan.map(item => `- ${item.role}: ${item.label} — ${item.instructions}`).join('\n')
     : '';
@@ -102,11 +96,11 @@ function routineText(task, materials, ownership, catalog, capability, sourceDele
     `Task ID: ${task.id}`,
     `Execution ID: ${ownership.executionId}`,
     `Execution generation: ${ownership.generation}`,
-    `Request: ${task.prompt}`,
+    `Request: ${context.request}`,
     'Recent durable conversation (newer messages can revise the original request):',
-    conversation || noAdditionalMessages,
+    context.conversation || '- No additional messages.',
     'Last durable checkpoint:',
-    checkpoint ? String(checkpoint).slice(0, 8_000) : '- No checkpoint.',
+    context.checkpoint || '- No checkpoint.',
     handoffContext(task),
     'Role plan:',
     plan || '- Use a single executor role.',
@@ -128,7 +122,7 @@ async function fireRoutine(fetchFn, env, task, materials, ownership, signal, cat
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
     },
-    body: JSON.stringify({text: routineText(task, materials, ownership, catalog, capability, sourceDelegationVersion)}),
+    body: JSON.stringify({text: await routineText(task, materials, ownership, catalog, capability, sourceDelegationVersion)}),
   });
   const result = await response.json().catch(() => null);
   if (!response.ok) {

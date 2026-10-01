@@ -1,3 +1,4 @@
+import {ContextRetrievalRequiredError} from '../public/core/context-errors.mjs';
 import {ConflictError} from '../public/core/tasks.mjs';
 import {failureInput,runnerError} from '../public/core/failures.mjs';
 const queued=t=>['queued','queued_for_review'].includes(t.status)&&t.checkpoint?.provider==='claude';
@@ -25,7 +26,7 @@ export async function runClaudeClaim({store,claim,fire}){
    if(typeof fired?.claude_code_session_url!=='string'||!fired.claude_code_session_url)throw Error('Unconfirmed routine response');
   }catch(error){
    const failure=failureInput(error?.code?error:runnerError(error));
-   const definitive=['quota','authentication'].includes(failure.failure.kind);
+   const definitive=error instanceof ContextRetrievalRequiredError||['quota','authentication'].includes(failure.failure.kind);
    for(let attempt=0;attempt<3;attempt++){
     const current=await store.requireTask(task.id);
     if(!owns(current,claim))return;
