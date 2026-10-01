@@ -117,6 +117,8 @@
 
 ### H1. 최초 과대 문맥 처리 및 재개 연속성 (CTX-01~04,06 / 높음)
 
+> 2026-10-01 갱신: 사용자 결정으로 WU5에서 96KB 초과~384KB는 전문 전달(예산 초과 표시), 384KB 초과만 차단으로 변경했다. 아래 bootstrap 설계는 채택하지 않았으며 이력으로 남긴다. 최신 상태는 PROGRESS.md 재개 지점 참조.
+
 **현상:** 유효 state가 없거나 필수 request/user/system/checkpoint/pending만으로 96KB를 넘으면 실행 전 `CONTEXT_RETRIEVAL_REQUIRED`로 멈춘다. reader가 있다고 무조건 실행하도록 바꾼 것은 아니다.
 
 **남은 구현:** 필수 원문을 나눠 조회하는 bootstrap/재개 프로토콜. 최소 `{taskId,executionId,generation,section,index,digest,byte ranges}`에 결합한 실제 원문 제공 범위와 미처리 목록이 필요하다. manifest/basis를 읽은 것만으로 본문을 읽었다고 인정하면 안 된다. 로컬 registry는 요청/바이트 수만 추적하며 coverage가 없고, Worker reader는 요청 간 coverage를 저장하지 않는다.

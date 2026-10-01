@@ -67,7 +67,7 @@ test('Worker Routine HTTP delivers old decisions and complete message and checkp
 
 test('Worker Routine HTTP blocks oversized required history before firing Claude',async t=>{
  const promptFor=routinePromptHarness(t);
- const result=await promptFor('private-original',[{role:'user',content:'private-history '+'x'.repeat(100_000)}],undefined,true);
+ const result=await promptFor('private-original',[{role:'user',content:'private-history '+'x'.repeat(400_000)}],undefined,true);
  assert.equal(result.fires,0);
  assert.equal(result.sent,'');
  assert.notEqual(result.task.status,'running');

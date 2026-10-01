@@ -76,7 +76,7 @@ for(const provider of ['codex','claude']){
 
  test(`${provider} blocks oversized mandatory context before any provider execution`,async()=>{
   const capture={};
-  const oversized=task('private-original',[{role:'user',content:'private-history '+'x'.repeat(100_000)}]);
+  const oversized=task('private-original',[{role:'user',content:'private-history '+'x'.repeat(400_000)}]);
   await assert.rejects(()=>promptFor(provider,oversized,capture),error=>{
    assert.equal(error.code,'CONTEXT_RETRIEVAL_REQUIRED');
    assert.doesNotMatch(error.message,/private-original|private-history|xxxxxxxx/);

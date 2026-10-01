@@ -46,16 +46,18 @@ test('no reader, stale state, invalid state and mismatched execution mode preser
 test('strictly smaller candidate must fit including derived state and lookup guidance',async()=>{
   const task=await fixture(),selected=await buildTaskContext(task,options);
   assert.equal((await buildTaskContext(task,{...options,maxBytes:selected.metrics.inputBytes})).readiness,'selected_ready');
-  const blocked=await buildTaskContext(task,{...options,maxBytes:selected.metrics.inputBytes-1});
-  assert.equal(blocked.readiness,'blocked');assert.equal(blocked.manifest.selection.applied,'full');assert.equal(blocked.manifest.selection.reason,'budget_exceeded');assert.equal(blocked.complete,false);
+  const over=await buildTaskContext(task,{...options,maxBytes:selected.metrics.inputBytes-1});
+  assert.equal(over.readiness,'full_over_budget');assert.equal(over.manifest.selection.applied,'full');assert.equal(over.manifest.selection.reason,'budget_exceeded');assert.equal(over.complete,true);
+  const blocked=await buildTaskContext(task,{...options,maxBytes:selected.metrics.inputBytes-1,hardMaxBytes:selected.metrics.inputBytes-1});
+  assert.equal(blocked.readiness,'blocked');assert.equal(blocked.manifest.selection.applied,'full');assert.equal(blocked.complete,false);
   const short={id:'short',version:1,prompt:'goal',messages:[{role:'assistant',content:'x'.repeat(500)}]};
   const basis=await createContextBasis(short);short.checkpoint={resumeState:{version:1,...basis,items:[{kind:'evidence',text:'derived',references:[{section:'message',messageIndex:0,digest:hash(short.messages[0].content)}]}]}};
   assert.equal((await buildTaskContext(short,options)).manifest.selection.applied,'full');
   const long=await fixture();long.messages[1].content='a'.repeat(100000);
   Object.assign(long.checkpoint.resumeState,await createContextBasis(long,{messageCount:7}));
   long.checkpoint.resumeState.items[0].references[0].digest=hash(long.messages[1].content);
-  assert.equal((await buildTaskContext(long)).readiness,'blocked');
-  const rescued=await buildTaskContext(long,options);assert.equal(rescued.readiness,'selected_ready');assert.ok(rescued.metrics.inputBytes<=96000);assert.equal(rescued.complete,false);
+  const unselected=await buildTaskContext(long);assert.equal(unselected.readiness,'full_over_budget');assert.equal(unselected.complete,true);
+  const rescued=await buildTaskContext(long,options);assert.ok(rescued.metrics.inputBytes<unselected.metrics.inputBytes);assert.equal(rescued.readiness,'selected_ready');assert.ok(rescued.metrics.inputBytes<=96000);assert.equal(rescued.complete,false);
 });
 
 test('dedup references never point to a selected-out original',async()=>{
@@ -75,7 +77,7 @@ test('selection snapshots sources and state before await without reading raw att
 });
 
 test('reader availability alone never bootstraps oversized history',async()=>{
-  const task={id:'large',version:1,prompt:'ORIGINAL',messages:[{role:'assistant',content:'x'.repeat(100000)}]};
+  const task={id:'large',version:1,prompt:'ORIGINAL',messages:[{role:'assistant',content:'x'.repeat(400000)}]};
   const packet=await buildTaskContext(task,options);assert.equal(packet.readiness,'blocked');assert.equal(packet.complete,false);assert.ok(packet.conversation.includes(task.messages[0].content));
   await assert.rejects(()=>buildTaskContext(task,{selection:'other'}),/selection/i);
   await assert.rejects(()=>buildTaskContext(task,{readerAvailable:'yes'}),/reader/i);

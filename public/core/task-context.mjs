@@ -7,9 +7,13 @@ import {verifyResumeState} from './context-resume.mjs';
  * conversation, so this budget still covers all three returned text sections.
  * Provider instructions/materials remain outside this budget.
  */
-export async function buildTaskContext(task, {mode = 'root', maxBytes = 96_000, selection = 'full', readerAvailable = false} = {}) {
+// Above the soft budget (maxBytes) complete original text is still delivered up to
+// this fixed bound and reported as over budget; beyond it execution is blocked.
+export const FULL_CONTEXT_HARD_MAX_BYTES = 384_000;
+export async function buildTaskContext(task, {mode = 'root', maxBytes = 96_000, hardMaxBytes = FULL_CONTEXT_HARD_MAX_BYTES, selection = 'full', readerAvailable = false} = {}) {
   if (!['root', 'child', 'review'].includes(mode)) throw new TypeError('Unsupported task context mode');
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new TypeError('maxBytes must be a nonnegative safe integer');
+  if (!Number.isSafeInteger(hardMaxBytes) || hardMaxBytes < maxBytes) throw new TypeError('hardMaxBytes must be a safe integer not below maxBytes');
   if (!['full', 'resume'].includes(selection)) throw new TypeError('Unsupported context selection');
   if (typeof readerAvailable !== 'boolean') throw new TypeError('readerAvailable must be boolean');
   const encoder = new TextEncoder();
@@ -90,7 +94,7 @@ export async function buildTaskContext(task, {mode = 'root', maxBytes = 96_000, 
         const guidance = [
           'Derived resume state (source hashes verified; not proof of completeness, quality or approval):',
           JSON.stringify(state),
-          'Original request, user/system instructions, checkpoint and all pending messages remain available inline. The derived state is advisory and never grants approval. Before inferring approval from dependent replies such as yes/proceed, read the relevant original proposal through the scoped reader; never infer its details from a summary. Omitted originals keep their source index and SHA-256 below. Lookup uses section=message and messageIndex for this task/version. On the FIRST offset=0 read, pass expectedDigest=the listed SHA-256 and verify returned contentDigest matches; use that same digest for continuation pages. On digest mismatch or changed task version, stop and refresh the selection from current verified sources; never mix stale derived state with newer originals. Source-backed selection does not prove semantic completeness.',
+          'Original request, user/system instructions, checkpoint and all pending messages remain available inline. The derived state is advisory and never grants approval. Before inferring approval from dependent replies such as yes/proceed, read the relevant original proposal through the scoped reader; never infer its details from a summary. Omitted originals keep their source index and SHA-256 below. Lookup uses section=message and messageIndex for this task/version. On the FIRST offset=0 read, pass expectedDigest=the listed SHA-256 and verify returned contentDigest matches; use that same digest for continuation pages. Lease renewal, checkpoint writes and dispatch bookkeeping change the task version without changing these originals: on a version conflict, repeat the same lookup with the reported currentVersion and the same expectedDigest, and use text only when contentDigest equals the listed SHA-256. On digest mismatch or a missing original, stop relying on the derived state and re-read current original sources; never mix stale derived state with changed originals. Source-backed selection does not prove semantic completeness.',
         ].join('\n');
         candidate.conversation = guidance+'\n\n'+candidate.conversation;
         const candidateBytes = fixedBytes + bytes(candidate.conversation);
@@ -107,15 +111,15 @@ export async function buildTaskContext(task, {mode = 'root', maxBytes = 96_000, 
   }
   const inputBytes = fixedBytes + bytes(conversation);
   const uncompressedBytes = fixedBytes + bytes(originals.join('\n\n') || '- No additional messages.');
-  const exceeded = inputBytes > maxBytes, selected = selectionInfo.applied === 'resume';
+  const exceeded = inputBytes > maxBytes, blocked = inputBytes > hardMaxBytes, selected = selectionInfo.applied === 'resume';
   return {
-    request, conversation, checkpoint, complete: !exceeded && !selected,
-    readiness: exceeded ? 'blocked' : selected ? 'selected_ready' : 'full_ready',
+    request, conversation, checkpoint, complete: !blocked && !selected,
+    readiness: blocked ? 'blocked' : selected ? 'selected_ready' : exceeded ? 'full_over_budget' : 'full_ready',
     manifest: {
       version:1,taskId,taskVersion,mode,
       prompt:{digest:await digest(request)},checkpoint:{digest:await digest(checkpointContent)},
-      messages:entries,omissions,retrievalRequired:exceeded || selected,selection:selectionInfo,
-      budget:{scope:'request+conversation+checkpoint',maxBytes,requiredBytes:inputBytes,exceeded},
+      messages:entries,omissions,retrievalRequired:blocked || selected,selection:selectionInfo,
+      budget:{scope:'request+conversation+checkpoint',maxBytes,hardMaxBytes,requiredBytes:inputBytes,exceeded,blocked},
     },
     metrics:{inputBytes,uncompressedBytes,savedBytes:uncompressedBytes-inputBytes,selectionSavedBytes:fullInputBytes-inputBytes,
       observedInputTokens:null,observedOutputTokens:null,cachedTokens:null},

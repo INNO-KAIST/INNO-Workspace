@@ -57,6 +57,9 @@ export class ValidationError extends Error {
   }
 }
 
+// Shared by the cloud desktop claim/renewal and the desktop heartbeat tolerance.
+export const DESKTOP_EXECUTION_LEASE_MS = 120_000;
+
 export class ConflictError extends Error {
   constructor(message, currentVersion) {
     super(message);

@@ -1,4 +1,4 @@
-import {checkedContextUrl} from './context-access.mjs';
+import {checkedContextUrl,SNAPSHOT_UNAVAILABLE} from './context-access.mjs';
 import {buildTaskContext} from '../public/core/task-context.mjs';
 import {sanitizeResumeState} from '../public/core/context-resume.mjs';
 import {ContextRetrievalRequiredError} from '../public/core/context-errors.mjs';
@@ -106,7 +106,7 @@ function localContextGuidance(task){
     'Context helper executable: '+JSON.stringify(process.execPath),
     'Context helper arguments: '+JSON.stringify([fileURLToPath(new URL('../scripts/read-local-context.mjs',import.meta.url))]),
     'Context read arguments: '+JSON.stringify({taskId:task.id,expectedVersion:task.version,section:'manifest'}),
-    'Use only this taskId and snapshot expectedVersion. Sections: manifest (offset is a zero-based message index; at most 20 references), request, message (requires zero-based messageIndex), checkpoint, basis, resume. Text offsets are UTF-8 bytes; maxBytes is 4..16000 and continuation requires expectedDigest from the full-source contentDigest. Prompt Message # labels are one-based. Source attachments and artifacts are not served. A version or digest mismatch invalidates selected context: stop and request a refreshed snapshot instead of mixing revisions. An expired capability, changed scope or exhausted read budget requires stopping and reporting the unavailable evidence; do not read arbitrary files or use another task to bypass it.',
+    'Use only this taskId and snapshot expectedVersion. Sections: manifest (offset is a zero-based message index; at most 20 references), request, message (requires zero-based messageIndex), checkpoint, basis, resume. Text offsets are UTF-8 bytes; maxBytes is 4..16000 and continuation requires expectedDigest from the full-source contentDigest. Prompt Message # labels are one-based. Source attachments and artifacts are not served. The snapshot version is fixed for this run; a version conflict means a wrong expectedVersion, so retry with the reported currentVersion. A digest mismatch invalidates selected context: stop and request a refreshed snapshot instead of mixing revisions. An expired capability, changed scope or exhausted read budget requires stopping and reporting the unavailable evidence; do not read arbitrary files or use another task to bypass it.',
     'For optional resumeState in the normal final JSON, first read original request/messages and basis with messageCount equal to the contiguous prefix actually inspected. Copy only taskId, mode and basis from that response, not wrapper section/taskVersion. Reading basis is not proof of reading history. Never invent hashes or include the future final answer in covered history. Original request references use basis.requestDigest; message references use manifest digest or full-source contentDigest. Derived resume state marked source_matched proves source hashes only, never semantic completeness, quality or approval authority. Inspect pending original messages; invalid/stale state is unusable.',
     'Optional resumeState shape: {version:1,taskId,mode,basis,items:[{kind:goal|constraint|decision|completed|pending|evidence,text,references:[{section:request,digest}|{section:message,messageIndex,digest}]}]}. At most 32768 UTF-8 bytes total, 1..48 items, text at most 2000 characters, 1..8 references each. Decisions require explicit original user/request evidence, not assistant statements. Omit resumeState when unsupported; null explicitly clears. Include it only with a normal completion, never a handoff, delegation or non-passing review. Do not copy credentials, attachment originals or whole history into it. Preserve required instructions and pending content; use the scoped reader for selected historical originals. No separate AI summarization call or oversized-context bypass is authorized.',
   ].join('\n');
@@ -478,9 +478,18 @@ export function createCodexRunner({
         '-',
       ];
       const modelPolicy=deadline?'EVALUATION BUDGET EXECUTION: Work directly in this process. Do not use MCP tools, native subagents, delegation, or provider handoff. Return only the assigned result.':mode==='child'?codexChildPolicy(task,assignedRoute):mode==='review'?codexReviewPolicy(task):managedDelivery?delegationRoutingPolicy(models,{sourceDelegationVersion:sourceContext?1:0}):routingPolicy(models);
-      const input=await taskPrompt(task, materials, {executionId, generation, managedDelivery, contextGuidance, contextReaderAvailable:Boolean(localContextUrl), handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'});
+      const promptOptions={executionId, generation, managedDelivery, contextGuidance, contextReaderAvailable:Boolean(localContextUrl), handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'};
+      let input=await taskPrompt(task, materials, promptOptions);
       if(localContextUrl){
-        contextLease=contextAccess.open(task,signal);
+        try{contextLease=contextAccess.open(task,signal);}
+        catch(error){
+          if(error?.code!==SNAPSHOT_UNAVAILABLE)throw error;
+          // No snapshot: rebuild as complete full text, or stop before spawn.
+          localContextUrl=undefined;
+          input=await taskPrompt(task, materials, {...promptOptions, contextGuidance:'', contextReaderAvailable:false});
+        }
+      }
+      if(localContextUrl){
         runEnv.INNO_CONTEXT_URL=localContextUrl;
         runEnv.INNO_CONTEXT_TOKEN=contextLease.token;
       }

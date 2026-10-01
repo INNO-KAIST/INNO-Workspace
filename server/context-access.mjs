@@ -5,7 +5,9 @@ import {sanitizeResumeState} from '../public/core/context-resume.mjs';
 // Fixed production ceilings: one active snapshot, one read at a time. 32 MiB
 // allows a complete 4 MiB snapshot read even with worst-case JSON escaping.
 export const CONTEXT_ACCESS_LIMITS = Object.freeze({maxSnapshotBytes:4*1024*1024,maxRequestBytes:4096,maxResponseBytes:128*1024,maxTotalBytes:32*1024*1024,maxRequests:1024});
-const reject = (statusCode,message) => {throw Object.assign(new Error(message),{statusCode});};
+const reject = (statusCode,message,code) => {throw Object.assign(new Error(message),{statusCode},code?{code}:{});};
+// This task cannot be represented as a bounded snapshot; callers may run without a reader.
+export const SNAPSHOT_UNAVAILABLE = 'CONTEXT_SNAPSHOT_UNAVAILABLE';
 export function checkedContextUrl(value) {
   if(typeof value!=='string'||!/^http:\/\/127\.0\.0\.1:([1-9]\d{0,4})\/api\/desktop\/context$/.test(value))reject(400,'Invalid local context endpoint');
   const port=Number(value.match(/^http:\/\/127\.0\.0\.1:(\d+)\//)[1]);
@@ -48,8 +50,8 @@ export function createContextAccess(overrides={}) {
       if(closed||signal?.aborted)reject(401,'Local context access is unavailable');
       if(active)reject(409,'Local context access is already active');
       let json;
-      try{json=JSON.stringify(sourceSnapshot(task));}catch(error){if(error.statusCode)throw error;reject(400,'Invalid local context task');}
-      if(Buffer.byteLength(json)>limits.maxSnapshotBytes)reject(413,'Local context snapshot exceeds the supported byte limit');
+      try{json=JSON.stringify(sourceSnapshot(task));}catch(error){reject(error.statusCode??400,error.statusCode?error.message:'Invalid local context task',SNAPSHOT_UNAVAILABLE);}
+      if(Buffer.byteLength(json)>limits.maxSnapshotBytes)reject(413,'Local context snapshot exceeds the supported byte limit',SNAPSHOT_UNAVAILABLE);
       const record={token:randomBytes(32).toString('base64url'),source:JSON.parse(json),requests:0,bytes:0,busy:false,revoked:false};
       const revoke=()=>{record.revoked=true;record.source=null;if(active===record)active=null;signal?.removeEventListener('abort',revoke);};
       record.revoke=revoke;active=record;signal?.addEventListener('abort',revoke,{once:true});

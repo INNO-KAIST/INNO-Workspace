@@ -5,7 +5,7 @@ import {LocalRecords} from '../server/local-records.mjs';
 import {spawn} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
 import {createDesktopServer} from '../server/desktop-http.mjs';
-import {acquireBridgeLock,startupPortMessage} from '../server/bridge-runtime.mjs';
+import {acquireBridgeLock,startupPortMessage,deliveryStopMessage} from '../server/bridge-runtime.mjs';
 import {readFileSync,writeFileSync,existsSync,mkdirSync,readdirSync,statSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -19,6 +19,7 @@ import {sourceDelegationVersionFromEnvironment} from '../public/core/source-dele
 import {createFileOutbox} from '../server/file-outbox.mjs';
 import {createCloudRequest,normalizedCloudOrigin} from '../server/delivery-binding.mjs';
 const deliveryReceiptVersion=0;
+const stopMessageOptions={pendingPath:'.inno/desktop-pending.json',versioned:deliveryReceiptVersion===1};
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const privateDir=path.join(root,'.inno');mkdirSync(privateDir,{recursive:true});
 const endpoint=normalizedCloudOrigin(process.env.INNO_CLOUD_URL||'https://inno-workspace-api.innokaist.workers.dev');
@@ -39,7 +40,7 @@ const contextAccess=createContextAccess();
 const runner=createCodexRunner({contextAccess,contextUrl:'http://127.0.0.1:4175/api/desktop/context',spawnProcess:spawnCodex,modelCatalog:createModelCatalog({spawnProcess:spawnCodex,env:withoutApiEnvironment(),cwd:root}),cwd:path.join(privateDir,'desktop-runs'),managedDelivery:true,sourceDelegationVersion:sourceDelegationVersionFromEnvironment(process.env)});
 let lock;try{lock=await acquireBridgeLock();}catch(error){const message=startupPortMessage(error);if(!message)throw error;console.error(message);process.exit(1);}
 const readDeliveryBinding=async()=>({origin:endpoint,workspaceId:(await request('/api/desktop/identity')).workspaceId});
-const bridge=createDesktopBridge({deliveryReceiptVersion,request,runner,outbox,readDeliveryBinding,beforeClaim:createDesktopReadiness({runner,runRoot:path.join(privateDir,'desktop-runs')}),onError:()=>console.error('INNO execution interrupted; saved results are retained.')});
+const bridge=createDesktopBridge({deliveryReceiptVersion,request,runner,outbox,readDeliveryBinding,beforeClaim:createDesktopReadiness({runner,runRoot:path.join(privateDir,'desktop-runs')}),onError:error=>console.error(deliveryStopMessage(error,stopMessageOptions))});
 const outboxRecovery=createOutboxRecovery(pendingPath,{withExclusive:work=>bridge.recoveryMaintenance(work)});
 const localTokenPath=path.join(privateDir,'desktop-access-token.txt');
 if(!existsSync(localTokenPath))writeFileSync(localTokenPath,randomBytes(32).toString('base64url'),{mode:0o600});
@@ -54,7 +55,7 @@ console.log('INNO desktop bridge connected. One task at a time; Ctrl+C to stop.'
 try{
  await runDesktopService({bridge,deliveryReceiptVersion,signal:shutdown.signal,
   onDelivered:()=>console.log('INNO result delivered.'),
-  onError:()=>console.error('INNO delivery interrupted; saved results are retained. Review local desktop status.')
+  onError:error=>console.error(deliveryStopMessage(error,stopMessageOptions))
  });
 }finally{
  shutdown.abort();contextAccess.close();bridge.stop();

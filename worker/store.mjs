@@ -29,6 +29,12 @@ const REMOTE_RECOVERY = Symbol('remote recovery');
 const EVALUATION_ATTACH = Symbol('evaluation attach');
 const BUDGET_COMMIT = Symbol('budget commit');
 const CLAIM_RESERVATION = Symbol('desktop claim reservation');
+// The owner whose automatic lease-expiry pause is still the latest task change.
+const leaseInterruptedOwner = (task, input) => task.status === 'paused'
+  && task.checkpoint?.interruptedBy === 'lease_expiry'
+  && task.checkpoint?.interruptedVersion === task.version
+  && task.checkpoint?.executionId === input.executionId
+  && task.checkpoint?.generation === input.generation;
 
 export const D1_SCHEMA = `
 CREATE TABLE IF NOT EXISTS tasks (
@@ -398,12 +404,7 @@ export class D1TaskStore {
   async finishExecution(id, input, {recoverInterrupted = false, allowDesktopEvidence = false, deliveryReceipt} = {}) {
     const snapshot = await this.requireTask(id);
     return this.replaceTask(id, snapshot.version, current => {
-      const sameInterruptedOwner = recoverInterrupted
-        && current.status === 'paused'
-        && current.checkpoint?.interruptedBy === 'lease_expiry'
-        && current.checkpoint?.interruptedVersion === current.version
-        && current.checkpoint?.executionId === input.executionId
-        && current.checkpoint?.generation === input.generation;
+      const sameInterruptedOwner = recoverInterrupted && leaseInterruptedOwner(current, input);
       if (!sameInterruptedOwner) this.assertExecution(current, input);
       const reviewReport=current.delegation&&current.delegation.state!=='superseded'?validateReviewReport(sameInterruptedOwner?{...current,status:'running'}:current,input):undefined;
       const checkpoint={...current.checkpoint};
@@ -461,10 +462,10 @@ export class D1TaskStore {
     });
   }
 
-  async failExecution(id, input, {deliveryReceipt} = {}) {
+  async failExecution(id, input, {deliveryReceipt, recoverInterrupted = false} = {}) {
     const snapshot = await this.requireTask(id);
     return this.replaceTask(id, snapshot.version, current => {
-      this.assertExecution(current, input);
+      if (!(recoverInterrupted && leaseInterruptedOwner(current, input))) this.assertExecution(current, input);
       const now = this.now();
       const failure = failureRecord(input, now);
       const status = failure.kind === 'quota' ? 'waiting_quota' : failure.kind === 'authentication' ? 'waiting_connection' : 'failed';

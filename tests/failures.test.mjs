@@ -21,7 +21,7 @@ test('context preflight failure is fixed, actionable and never automatically ret
   const failure=failureRecord(input,'2026-10-01T00:00:00.000Z');
   assert.equal(failure.automaticRetry,false);assert.equal(failure.retryNotBefore,null);
   assert.deepEqual(failureGuidance({status:input.status,checkpoint:{failure}}),{
-   title:'문맥 추가 조회 필요',detail:'필수 작업 이력을 안전하게 구성하지 못해 실행을 시작하지 않았습니다. 문맥 조회 또는 분할 후 이어서 진행하세요.',retryNotBefore:null,
+   title:'작업 이력 전달 상한 초과',detail:'필수 작업 이력(요청·사용자 지시·체크포인트 포함)이 한 번에 전달할 수 있는 상한(384KB)을 넘어 실행을 시작하지 않았습니다. 내용을 잘라 보내지 않았습니다. 필요한 요청과 자료만 담아 새 작업으로 나누어 진행하세요.',retryNotBefore:null,
   });
   assert.equal(JSON.stringify({input,failure}).includes('PRIVATE'),false);
  }

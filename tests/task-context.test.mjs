@@ -60,7 +60,7 @@ test('stable manifests hash complete UTF8 content and distinguish changed state'
 test('budget overflow requires retrieval without silently trimming any component', async () => {
   const task = {prompt:'한글 요청',checkpoint:'checkpoint',messages:[{role:'user',content:'MUST KEEP END'}]};
   const full = await buildTaskContext(task);
-  const blocked = await buildTaskContext(task,{maxBytes:full.metrics.inputBytes-1});
+  const blocked = await buildTaskContext(task,{maxBytes:full.metrics.inputBytes-1,hardMaxBytes:full.metrics.inputBytes-1});
   assert.equal(blocked.complete,false);
   assert.equal(blocked.manifest.retrievalRequired,true);
   assert.equal(blocked.manifest.budget.exceeded,true);
@@ -75,7 +75,10 @@ test('invalid context controls fail closed and building never mutates the suppli
   for (const mode of ['root','child','review']) assert.equal((await buildTaskContext(task,{mode})).manifest.mode,mode);
   await assert.rejects(()=>buildTaskContext(task,{mode:'unknown'}),/Unsupported task context mode/);
   for (const maxBytes of [-1,NaN,Infinity,0.5]) await assert.rejects(()=>buildTaskContext(task,{maxBytes}),/maxBytes/);
-  assert.equal((await buildTaskContext(task,{maxBytes:0})).complete,false);
+  assert.equal((await buildTaskContext(task,{maxBytes:0,hardMaxBytes:0})).complete,false);
+  for (const hardMaxBytes of [-1,NaN,Infinity,0.5]) await assert.rejects(()=>buildTaskContext(task,{maxBytes:0,hardMaxBytes}),/hardMaxBytes/);
+  const over = await buildTaskContext(task,{maxBytes:0});
+  assert.equal(over.complete,true);assert.equal(over.readiness,'full_over_budget');assert.equal(over.manifest.budget.exceeded,true);assert.equal(over.manifest.budget.blocked,false);
 });
 
 test('captures metadata and message values before asynchronous hashing and normalizes unknown roles', async () => {

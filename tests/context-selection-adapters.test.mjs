@@ -12,10 +12,10 @@ import {TestD1} from './helpers/d1.mjs';
 import {callTool} from '../scripts/inno-mcp.mjs';
 
 const oldText='OMIT_OLD_ASSISTANT_BEGIN '+'x'.repeat(12000)+' OMIT_OLD_ASSISTANT_END';
-async function sourceTask(){
+async function sourceTask(old=oldText){
  const task={id:'selection-case',version:3,type:'general',title:'Selection case',prompt:'KEEP_REQUEST',plan:[],attachments:[],messages:[
   {id:'m0',role:'user',content:'KEEP_REQUEST'},
-  {id:'m1',role:'assistant',content:oldText},
+  {id:'m1',role:'assistant',content:old},
   {id:'m2',role:'assistant',content:'KEEP_ASSISTANT_BEFORE_USER'},
   {id:'m3',role:'system',content:'KEEP_SYSTEM'},
   {id:'m4',role:'user',content:'KEEP_USER_CHANGE'},
@@ -23,12 +23,12 @@ async function sourceTask(){
   {id:'m6',role:'assistant',content:'KEEP_PENDING_ASSISTANT'},
  ],checkpoint:{content:'KEEP_CHECKPOINT'}};
  const context=await createContextBasis(task,{messageCount:5});
- task.checkpoint.resumeState={version:1,...context,items:[{kind:'completed',text:'Earlier draft prepared.',references:[{section:'message',messageIndex:1,digest:createHash('sha256').update(oldText).digest('hex')}]}]};
+ task.checkpoint.resumeState={version:1,...context,items:[{kind:'completed',text:'Earlier draft prepared.',references:[{section:'message',messageIndex:1,digest:createHash('sha256').update(old).digest('hex')}]}]};
  return task;
 }
-async function codex(task,{configured=true,failOpen=false,evaluation=false}={}){
+async function codex(task,{configured=true,failOpen=false,evaluation=false,snapshotLimit}={}){
  if(evaluation){const binding={jobId:'selection-evaluation',phase:'candidate',maxDurationMs:100,provider:'codex'};task={...task,status:'running',evaluationBudget:binding,checkpoint:{...task.checkpoint,provider:'codex',executionId:'execution',generation:1,claimedAt:new Date(1000).toISOString(),evaluationBudget:{...binding,deadlineAtMs:1100}}};}
- const registry=createContextAccess(),capture={spawns:0,opens:0};
+ const registry=createContextAccess(snapshotLimit?{maxSnapshotBytes:snapshotLimit}:{}),capture={spawns:0,opens:0};
  const access={open(...args){capture.opens++;if(failOpen)throw Error('reader unavailable');return registry.open(...args);}};
  const runner=createCodexRunner({managedDelivery:true,...(evaluation?{now:()=>1010,monotonicNow:()=>0}:{}),...(configured?{contextAccess:access,contextUrl:'http://127.0.0.1:4175/api/desktop/context'}:{}),ensureDirectory:()=>{},runDirectory:()=>process.cwd(),spawnProcess:(_command,_args,options)=>{
   capture.spawns++;const child=new EventEmitter();child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();
@@ -109,8 +109,35 @@ test('selected execution cannot spawn if its actual snapshot reader fails to ope
 });
 
 test('oversized required original instructions remain blocked rather than bootstrapped through readers',async t=>{
- const task=await sourceTask();task.prompt='y'.repeat(97000);
+ const task=await sourceTask();task.prompt='가'.repeat(150000);
  task.checkpoint.resumeState.basis=(await createContextBasis(task,{messageCount:5})).basis;
  await assert.rejects(()=>codex(task),error=>error.code==='CONTEXT_RETRIEVAL_REQUIRED'&&error.capture.opens===0&&error.capture.spawns===0);
  const remote=await cloud(t,task);assert.equal(remote.fires,0);
+});
+
+test('local Codex reader guidance does not stop a selected run on a version-only conflict',async()=>{
+ const capture=await codex(await sourceTask());selected(capture);
+ assert.doesNotMatch(capture.prompt,/A version or digest mismatch invalidates selected context/);
+ assert.match(capture.prompt,/digest mismatch invalidates selected context/);
+});
+
+test('an unavailable local snapshot falls back to complete full text without reader access',async()=>{
+ const capture=await codex(await sourceTask(),{snapshotLimit:1000});
+ assert.equal(capture.spawns,1);assert.equal(capture.recovered,undefined);
+ assert.ok(capture.prompt.includes(oldText));assert.ok(!capture.prompt.includes('Selected durable conversation'));
+ assert.doesNotMatch(capture.prompt,/read-local-context\.mjs/);
+});
+
+test('an unavailable local snapshot never spawns when full text exceeds the budget',async()=>{
+ const big='BIG_OLD_ASSISTANT '+'z'.repeat(400000);
+ const reader=await codex(await sourceTask(big));
+ assert.equal(reader.spawns,1);assert.ok(reader.prompt.includes('Selected durable conversation'));assert.ok(!reader.prompt.includes(big));
+ await assert.rejects(()=>sourceTask(big).then(task=>codex(task,{snapshotLimit:1000})),error=>error.code==='CONTEXT_RETRIEVAL_REQUIRED'&&error.capture.spawns===0);
+});
+
+test('required context over the soft budget but within the hard cap runs with complete text on both adapters',async t=>{
+ const task=await sourceTask();task.prompt='OVER_BEGIN '+'y'.repeat(150000)+' OVER_END';
+ task.checkpoint.resumeState.basis=(await createContextBasis(task,{messageCount:5})).basis;
+ const local=await codex(task);assert.equal(local.spawns,1);assert.ok(local.prompt.includes(task.prompt));assert.ok(local.prompt.includes(oldText));
+ const remote=await cloud(t,task);assert.equal(remote.fires,1);assert.ok(remote.prompt.includes('OVER_END'));assert.ok(remote.prompt.includes(oldText));
 });

@@ -13,7 +13,7 @@ async function fixture(t,{oversized=false}={}){
  let prompt='',fires=0;
  const worker=createWorker({fetchFn:async(_url,input)=>{fires++;prompt=JSON.parse(input.body).text;return Response.json({claude_code_session_id:'fake',claude_code_session_url:'https://example.test/session'});}});
  let task=await store.createTask({prompt:'Prepare a report without publishing it.'});
- task=await store.replaceTask(task.id,task.version,current=>({...current,version:current.version+1,messages:[...current.messages,{id:'early',role:'user',content:'ORIGINAL_DECISION: do not publish'},...Array.from({length:21},(_,i)=>({id:`progress-${i}`,role:'assistant',content:`Progress ${i}`})),{id:'tail',role:'user',content:'long-start '+'x'.repeat(oversized?100000:8500)+' long-end'}]}));
+ task=await store.replaceTask(task.id,task.version,current=>({...current,version:current.version+1,messages:[...current.messages,{id:'early',role:'user',content:'ORIGINAL_DECISION: do not publish'},...Array.from({length:21},(_,i)=>({id:`progress-${i}`,role:'assistant',content:`Progress ${i}`})),{id:'tail',role:'user',content:'long-start '+'x'.repeat(oversized?400000:8500)+' long-end'}]}));
  const response=await worker.fetch(new Request(`https://inno.test/api/tasks/${task.id}/run`,{method:'POST',headers:{authorization:'Bearer '+env.ACCESS_TOKEN,'content-type':'application/json'},body:JSON.stringify({provider:'claude',expectedVersion:task.version})}),env);
  assert.equal(response.status,202);
  const transport=async request=>{

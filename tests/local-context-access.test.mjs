@@ -107,7 +107,7 @@ test('evaluation and oversized context never allocate local access or bypass the
   await runner.run({task:current,executionId:'exec',generation:1,executionBudgetVersion:1});assert.ok(Object.keys(capture.env).every(key=>!key.toUpperCase().startsWith('INNO_CONTEXT_')));assert.doesNotMatch(capture.prompt,/read-local-context\.mjs/);
   const registry=createContextAccess(),f=await serverFor(t,registry);let opens=0;
   const oversized=createCodexRunner({managedDelivery:true,contextAccess:{open:(...args)=>{opens++;return registry.open(...args);}},contextUrl:f.url,ensureDirectory:()=>{},runDirectory:()=>process.cwd(),spawnProcess:()=>assert.fail('oversized AI spawn forbidden')});
-  for(const tooLarge of [{...task(),attachments:[],prompt:'x'.repeat(97000)},{...task(),attachments:[],messages:Array.from({length:42},(_,index)=>({role:'user',content:index+':'+ 'x'.repeat(100000)}))}])
+  for(const tooLarge of [{...task(),attachments:[],prompt:'x'.repeat(400000)},{...task(),attachments:[],messages:Array.from({length:42},(_,index)=>({role:'user',content:index+':'+ 'x'.repeat(100000)}))}])
     await assert.rejects(()=>oversized.run({task:tooLarge,executionId:'exec',generation:1}),e=>e.code==='CONTEXT_RETRIEVAL_REQUIRED');
   assert.equal(opens,0);
 });

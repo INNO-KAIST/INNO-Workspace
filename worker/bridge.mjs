@@ -1,6 +1,16 @@
 import {sanitizeResumeState} from '../public/core/context-resume.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
-import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
+import {ConflictError,ValidationError,DESKTOP_EXECUTION_LEASE_MS} from '../public/core/tasks.mjs';
+
+// Retry only a concurrent task write (a newer version than the one read).
+// Owner, lease and receipt conflicts report the read version and stay definitive.
+async function concurrentRetry(store,id,write){
+  for(let attempt=0;;attempt++){
+    const t=await store.requireTask(id);
+    try{return await write(t);}
+    catch(e){if(!(e instanceof ConflictError)||e.currentVersion===t.version||attempt===2)throw e;}
+  }
+}
 
 export class CloudBridge {
   constructor(store,{sourceDelegationVersion=0}={}){this.store=store;this.sourceDelegationVersion=sourceDelegationVersion;}
@@ -14,7 +24,7 @@ export class CloudBridge {
     if(t.attachments.some(a=>a.source==='url'))throw new ValidationError('URL references are not source content. Connect the required document before direct execution.');
     const names=t.attachments.filter(a=>a.source!=='url').map(a=>a.path||a.name).sort();
     if(!Array.isArray(input.sourceNames)||input.sourceNames.length>20||input.sourceNames.some(n=>typeof n!=='string')||JSON.stringify([...input.sourceNames].sort())!==JSON.stringify(names))throw new ValidationError('Reconnect every required source on this desktop.');
-    const claim=await this.store.claimExecution(id,{provider:'codex',expectedVersion:input.expectedVersion,leaseMs:120000,sourceBound:input.sourceNames.length>0},claimOptions);
+    const claim=await this.store.claimExecution(id,{provider:'codex',expectedVersion:input.expectedVersion,leaseMs:DESKTOP_EXECUTION_LEASE_MS,sourceBound:input.sourceNames.length>0},claimOptions);
     await this.seen();return {...claim,sourceDelegationVersion:sourceVersion};
   }
   async enqueue(id,input){
@@ -34,7 +44,7 @@ export class CloudBridge {
     const t=JSON.parse(row.body);
     if(t.checkpoint?.provider!=='codex')return null;
     if(t.attachments.length)return null;
-    try{return await this.store.claimExecution(t.id,{provider:'codex',expectedVersion:t.version,leaseMs:120000},claimOptions);}catch(e){if(e instanceof ConflictError&&e.code!=='DESKTOP_DELIVERY_CAPACITY')return null;throw e;}
+    try{return await this.store.claimExecution(t.id,{provider:'codex',expectedVersion:t.version,leaseMs:DESKTOP_EXECUTION_LEASE_MS},claimOptions);}catch(e){if(e instanceof ConflictError&&e.code!=='DESKTOP_DELIVERY_CAPACITY')return null;throw e;}
   }
   async seen(){
     const now=Date.parse(this.store.now());
@@ -43,21 +53,21 @@ export class CloudBridge {
   async presence(){const row=await this.store.db.prepare("SELECT value FROM metadata WHERE key='desktop_seen'").first();return {lastSeen:row?.value??null,online:!!row&&Date.parse(this.store.now())-row.value<180000};}
   async renew(id,input){
     await this.seen();
-    const t=await this.store.requireTask(id);
-    return this.store.replaceTask(id,t.version,current=>{
+    return concurrentRetry(this.store,id,t=>this.store.replaceTask(id,t.version,current=>{
       this.store.assertExecution(current,input);
       if(Date.parse(current.checkpoint.expiresAt)<=Date.parse(this.store.now()))throw new ConflictError('Execution lease expired',current.version);
-      const now=this.store.now();return {...current,version:current.version+1,updatedAt:now,checkpoint:{...current.checkpoint,updatedAt:now,expiresAt:new Date(Date.parse(now)+120000).toISOString()}};
-    });
+      const now=this.store.now();return {...current,version:current.version+1,updatedAt:now,checkpoint:{...current.checkpoint,updatedAt:now,expiresAt:new Date(Date.parse(now)+DESKTOP_EXECUTION_LEASE_MS).toISOString()}};
+    }));
   }
   async fail(id,input,{deliveryReceipt}={}){
     if(deliveryReceipt===null)throw new ValidationError('Invalid desktop delivery receipt');
-    const t=await this.store.requireTask(id);
-    if(['failed','waiting_quota','waiting_connection'].includes(t.status)&&t.checkpoint?.executionId===input.executionId&&t.checkpoint?.generation===input.generation){
-      if(deliveryReceipt!==undefined||t.checkpoint?.deliveryReceiptVersion===1)throw new ConflictError('Delivery receipt replay requires stored verification',t.version);
-      return t;
-    }
-    return this.store.failExecution(id,input,{deliveryReceipt});
+    return concurrentRetry(this.store,id,t=>{
+      if(['failed','waiting_quota','waiting_connection'].includes(t.status)&&t.checkpoint?.executionId===input.executionId&&t.checkpoint?.generation===input.generation){
+        if(deliveryReceipt!==undefined||t.checkpoint?.deliveryReceiptVersion===1)throw new ConflictError('Delivery receipt replay requires stored verification',t.version);
+        return t;
+      }
+      return this.store.failExecution(id,input,{deliveryReceipt,recoverInterrupted:true});
+    });
   }
   async complete(id,input,{deliveryReceipt}={}){
     if(deliveryReceipt===null)throw new ValidationError('Invalid desktop delivery receipt');

@@ -89,9 +89,14 @@ test('async outbox writes and clear are awaited, and async rejection retains the
  }
 });
 test('renew failure persists runner output before error and blocks new AI while allowing pending drain',async()=>{
- const f=setup({hook:path=>{if(path.endsWith('/renew'))throw Error('renew failed');},run:({signal})=>new Promise(resolve=>signal.addEventListener('abort',()=>resolve({content:'finished before stop'})))}),bridge=f.make({heartbeatMs:2});
+ const f=setup({hook:path=>{if(path.endsWith('/renew'))throw Object.assign(Error('renew failed'),{status:409});},run:({signal})=>new Promise(resolve=>signal.addEventListener('abort',()=>resolve({content:'finished before stop'})))}),bridge=f.make({heartbeatMs:2});
  await assert.rejects(()=>bridge.tick(),/renew failed/);assert.equal(f.outbox.read().phase,'pending');assert.equal(f.outbox.read().input.content,'finished before stop');assert.equal(bridge.status().deliveryUnsafe,true);assert.equal(f.calls.filter(c=>c.path.endsWith('/complete')).length,0);
  await bridge.tick();await assert.rejects(()=>bridge.tick());assert.equal(f.runs(),1);assert.equal(f.calls.filter(c=>c.path.endsWith('/poll')).length,1);
+});
+test('unconfirmed lease after transient renew failures persists runner output and blocks new AI',async()=>{
+ const f=setup({hook:path=>{if(path.endsWith('/renew'))throw Error('network');},run:({signal})=>new Promise(resolve=>signal.addEventListener('abort',()=>resolve({content:'finished before stop'})))}),bridge=f.make({heartbeatMs:2,leaseMs:20});
+ await assert.rejects(()=>bridge.tick(),e=>e.code==='DESKTOP_LEASE_UNCONFIRMED');assert.equal(f.outbox.read().phase,'pending');assert.equal(f.outbox.read().input.content,'finished before stop');assert.equal(bridge.status().deliveryUnsafe,true);assert.equal(f.calls.filter(c=>c.path.endsWith('/complete')).length,0);
+ assert.equal(f.runs(),1);assert.equal(f.calls.filter(c=>c.path.endsWith('/poll')).length,1);
 });
 test('explicit stop preserves failed result, prohibits delivery in stopped instance and permits restart drain',async()=>{
  let started;const entered=new Promise(resolve=>{started=resolve;}),f=setup({run:({signal})=>{started();return new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(Error('stopped runner'))));}}),bridge=f.make();
