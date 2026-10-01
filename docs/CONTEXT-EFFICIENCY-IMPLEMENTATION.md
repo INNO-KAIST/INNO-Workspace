@@ -17,3 +17,12 @@
 |CTX1-C|independent reviewer + main|contract review, focused tests, full approved Node suite, Wrangler dry-run|verified|
 
 Remaining approved stages: explicit resumable state and scoped original-history retrieval; provenance-checked summary/state updates without standalone AI calls by default; observed usage/cache/UI and supported subscription integration verification. Journal/legacy recovery and CR004 remain separate unfinished requirements.
+
+## Stage 2A — bounded source-history retrieval, CTX-03/04
+- Pure readTaskContext(task,args) reads only request, checkpoint, a selected message, or a20-reference manifest page. Mandatory exact taskId and expectedVersion; text continuation also requires expectedDigest. Snapshot source fields before hashing.
+- Text pages use validated UTF-8 byte boundaries and at most16000 content bytes, with full-source SHA256, totalBytes, offset/nextOffset/done. Do not split Unicode, return attachment bodies/artifacts, or expose a whole task. Manifest pages use index offset and at most20 safe source references; no full content.
+- Expose read_task_context through existing MCP; use handlers.readTask so existing account/execution assignment scoping still applies. Worker authorizes it as a read, with the same readable task set and stale-owner checks as read_task. No scope expansion or arbitrary storage paths.
+- Verify real MCP calls, unauthorized parent/sibling reads, superseded ownership, task-version/digest mismatch, UTF8 continuation and long historical tails. This is a retrieval building block; oversized automatic prompt preparation stays blocked until explicit resume-state selection is implemented and verified. No premature claim that Stage2 is complete.
+- No new DB schema, dependency, API key, AI call, source archive, recurring poll or persistent cache.
+
+Stage2A verified: shared bounded reader + authenticated MCP integration, safe version-discovery conflicts. Independent13/13, full1039:1038pass/0fail/1existing Windows symlink skip; Wrangler dry-run passed. No deployment or AI calls. Next Stage2B must connect provenance-checked current resume state and actual provider access: managed Codex currently lacks remote MCP; Claude callback guidance must be tested. Initial oversized history without a valid resume state still needs safe bootstrap/splitting; do not silently treat read-tool availability as sufficient context.

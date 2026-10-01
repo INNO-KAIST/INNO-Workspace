@@ -21,7 +21,7 @@ export async function authorizeExecution(store,secret,message,now=Date.now()){
  if(!(task.status==='running'&&matches(owner))&&!replay)throw new ConflictError('Execution scope has been superseded',task.version);
  if(name==='claim_execution')throw new ValidationError('A Routine may only use its already assigned execution');
  const readable=new Set([task.id]);if(task.delegation?.state==='reviewing')for(const child of task.delegation.children)readable.add(child.taskId);
- if(name==='read_task'){if(!readable.has(args.taskId))throw new ValidationError('Read is outside this execution assignment');}
+ if(name==='read_task'||name==='read_task_context'){if(!readable.has(args.taskId))throw new ValidationError('Read is outside this execution assignment');}
  else if(name!=='list_tasks'){
   if(args.taskId!==scope.taskId||args.executionId!==scope.executionId||args.generation!==scope.generation)throw new ValidationError('Write is outside this execution assignment');
  }

@@ -3,7 +3,7 @@
 - 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
 - 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP, Task3h 복구 UI·client·local proxy 연결 및 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
-- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. Task3l 복구 서비스 루프·스크립트 배선 검증 완료(기본0). Task3m 해시 확인 명시 전달 HTTP 검증 완료. Task3n 로컬 복구 UI 구현·독립 리뷰·실제 브라우저 검증 완료. 전체1010건 중1009통과/0실패/기존symlink1skip. 이후 legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화는 2026-10-01 승인·PRD 반영 완료. CONTEXT-EFFICIENCY-IMPLEMENTATION.md Stage1 공통 조립/제공자 연결 검증 완료. 다음 Stage2 범위 제한 원문 조회·명시 재개 상태 연결.
+- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. Task3l 복구 서비스 루프·스크립트 배선 검증 완료(기본0). Task3m 해시 확인 명시 전달 HTTP 검증 완료. Task3n 로컬 복구 UI 구현·독립 리뷰·실제 브라우저 검증 완료. 전체1010건 중1009통과/0실패/기존symlink1skip. 이후 legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화는 2026-10-01 승인·PRD 반영 완료. CONTEXT-EFFICIENCY-IMPLEMENTATION.md Stage1 공통 조립/제공자 연결 검증 완료. Stage2A 범위 제한 원문 조회 검증 완료. 다음 Stage2B 명시 재개 상태·제공자별 조회 경로 연결.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -702,3 +702,11 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 의미 RED→GREEN: packet7/7, adapter34/34(author), failures+dispatch18/18(author), 독립 packet/runner/dispatch/failures33/33. 전체 최초1026중1024pass/1fail/1skip에서 기존 deadline test의 setImmediate 1회 준비 가정이 비동기SHA 준비와 충돌했다. 실제 spawn 신호 대기로 수정 후 전체1026중1025pass/0fail/기존Windows symlink1skip(.inno/tmp/ctx-stage1-final.log). 이후 독립리뷰가 지적한 동일 abort테스트 경쟁도 같은 방식으로 수정하고 관련11/11 재검증. 마지막 변경은 테스트만이며 제품코드 변화 없음.
 - Wrangler 기존캐시 dry-run 성공(실제배포아님), 구문/diff검증통과. 합성중복 fixture의 packet범위7726→3992byte(3734감소); 실제토큰/캐시/일반사용절감률 주장이 아니다. 짧은 메시지에서는 표시비용 때문에 savedBytes 음수도 보존한다.
 - 다음 Stage2에서 예산초과를 안전한 선택조회/명시상태로 해소해야 장기작업을 자연스럽게 이어가는 사용자요구 충족. 현재는 누락실행 차단 단계이며 전체 CR005 완료 아님. 실제AI/운영DB/배포 없음. journal/unknownowner/legacy복구 및 CR004 미완료 범위 유지.
+
+### 2026-10-01 CR-005 Stage2A 원문 구간 조회 및 MCP 권한 연결
+- readTaskContext는 request/checkpoint/선택 message의 UTF8 최대16000byte 조각 또는20개 manifest참조만 반환한다. taskId/version 선검증, text이어읽기 digest필수, 전체원문SHA256/offset/nextOffset/done, 첫await전snapshot을 적용했다. attachment/artifact/fulltask를 반환하지 않는다. UTF8코드포인트 경계·BOM 보존이며 grapheme단위 페이지 보장은 아니다.
+- read_task_context MCP는 기존 handlers.readTask/scopedRead와 readable set을 그대로 사용한다. 부모·형제·다른작업·supersededowner거절, reviewchild의batch/완료상태/기존checkpointfilter 유지. 추가권한·새DB·의존성없음.
+- 버전 충돌은 권한확인후 정확한 helper conflict만 currentVersion정수 metadata로 반환한다. 버전모를때0 manifest조회로현재버전을얻고다시조회할수있어 read_task전체원문재전송불필요. scope/digest오류를version오류로오인하지않음.
+- 검증: helper7/7, author통합32/32, 독립13/13. 최종전체1039중1038통과/0실패/기존Windows symlink1skip(.inno/tmp/ctx-stage2a-full.log). Wrangler기존캐시dry-run과diff통과. 실제AI/운영DB/배포없음.
+- 다음 Stage2B: checkpoint.resumeState 후보는 현재목표/제약/승인/완료/미완료/근거와원문id/index/digest coverage를가지고현재상태한개를교체한다. 실제원문digest로검증하며claim/renew가taskversion을바꾸는것과문맥변경을구분해야한다. 출처일치는의미보존증명이아니며모델이승인사실을만들면안된다.
+- 실제managed Codex는remote MCP를금지하고있어현재새MCPtool만으로큰문맥을읽을수없다. 실행범위로제한한로컬파일또는읽기전용연결이필요하다. Claude는callback helper안내/검증을연결해야한다. 유효resumeState가없는최초oversize도조회bootstrap 또는명시분할을설계·검증해야한다. 그전Stage1차단유지, CR005전체미완료.

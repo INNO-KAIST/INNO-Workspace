@@ -1,3 +1,4 @@
+import {readTaskContext} from '../public/core/task-context-read.mjs';
 const OBSERVED_USAGE={type:'object',description:'Only actual executor-reported counts. Omit when unavailable; never estimate.',additionalProperties:false,properties:{cachedInputTokens:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER,description:'Reported cached portion of total inputTokens; omit when unknown.'},inputTokens:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER},outputTokens:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER}}};
 const RENEW_TOOL={name:'renew_execution',description:'Extend the current live execution lease without restarting work. Use before five minutes pass during long work. Cannot revive expired, paused, or superseded ownership.',inputSchema:{type:'object',required:['taskId','executionId','generation'],additionalProperties:false,properties:{taskId:{type:'string'},executionId:{type:'string'},generation:{type:'integer'},leaseMs:{type:'integer',minimum:1000,maximum:3600000}}}};
 const MODELS_TOOL={name:'available_models',description:'Read the current desktop account model catalog and supported Claude role aliases before cross-provider allocation. Empty Codex catalog means reconnect the desktop; do not guess.',inputSchema:{type:'object',properties:{},additionalProperties:false}};
@@ -31,6 +32,22 @@ const TOOLS = Object.freeze([
     inputSchema: {
       type: 'object', required: ['taskId'], additionalProperties: false,
       properties: {taskId: {type: 'string'}},
+    },
+  },
+  {
+    name: 'read_task_context',
+    description: 'Read one bounded durable context section within the same task scope as read_task; never starts AI work. Supply the current task expectedVersion. If unknown, request manifest with expectedVersion:0; an authorized version conflict returns only conflict, taskId and currentVersion. Text offsets are UTF-8 bytes; pages default to at most 16000 bytes. Every text continuation (offset > 0) requires the previous contentDigest as expectedDigest. On version conflict, reread manifest using the returned currentVersion. On digest mismatch, reread manifest using the same expectedVersion. Restart text at offset 0; do not combine revisions. Manifest offsets are message indexes and return at most 20 metadata-only entries; maxBytes, messageIndex and expectedDigest are not valid for manifest. No source attachments or artifacts are returned.',
+    annotations: {readOnlyHint:true, destructiveHint:false},
+    inputSchema: {
+      type:'object', required:['taskId','expectedVersion','section'], additionalProperties:false,
+      properties: {
+        taskId:{type:'string'}, expectedVersion:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER},
+        section:{enum:['request','checkpoint','message','manifest']},
+        messageIndex:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER,description:'Required only for the message section; zero-based message index.'},
+        offset:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER,description:'UTF-8 byte offset for text; message index for manifest. Defaults to 0.'},
+        maxBytes:{type:'integer',minimum:4,maximum:16000,default:16000,description:'Text sections only.'},
+        expectedDigest:{type:'string',pattern:'^[0-9a-f]{64}$',description:'Text sections only. Full content SHA-256; required for continuation offsets greater than zero.'},
+      },
     },
   },
   {
@@ -129,6 +146,16 @@ async function callTool(store, name, args = {}, handlers = {}) {
     case 'read_task': {
       const task = handlers.readTask?await handlers.readTask(args.taskId):await store.requireTask(args.taskId);
       return toolResult({task});
+    }
+    case 'read_task_context': {
+      const task = handlers.readTask?await handlers.readTask(args.taskId):await store.requireTask(args.taskId);
+      try {
+        return toolResult(await readTaskContext(task,args));
+      } catch(error) {
+        if(error?.code==='CONTEXT_VERSION_CONFLICT'&&error.statusCode===409&&Number.isSafeInteger(error.currentVersion)&&error.currentVersion>0&&error.currentVersion===task.version)
+          return {...toolResult({conflict:'context_version',taskId:task.id,currentVersion:error.currentVersion}),isError:true};
+        throw error;
+      }
     }
     case 'claim_execution':
       return toolResult(await store.claimExecution(args.taskId, args));
