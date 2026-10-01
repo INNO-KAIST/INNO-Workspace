@@ -2,8 +2,8 @@
 ## 현재 재개 지점 (2026-10-01)
 - 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
-- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. 운영 활성화는 미완료.
-- 다음: 결과 없는 예약·남은 임시파일·legacy outbox의 명시 복구 → 전체 lifecycle 통합 검증 → 운영 활성화·배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
+- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제와 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
+- 다음: 내부 예약 해제의 HTTP·사용자 확인 연결, 남은 임시파일·legacy outbox의 명시 복구 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -615,3 +615,10 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 실제 desktop script의 선행 runner.available 검사를 beforeClaim helper로 옮겼다. 저장된 결과·ACK 정리는 로그인 여부와 독립적이며, 새 claim에는 저장 공간과 CLI 가용성 검사를 적용한다. 기본 receipt protocol 0을 유지한다.
 - 구현 대상 37/37 및 readiness 인접 46/46; 독립 파일 37/37·startup 39/39, 미해결 리뷰 결함 없음. 최종 통합 Node 830/830 (.inno/tmp/task3e-final-full.log), script 구문 및 git diff --check 통과. 최종 전체 검사 이후 제품 코드 변경 없음.
 - 내부 개발 완료이며 운영 미배포. Task3 전체와 Task4는 미완료: no-result 예약, tmp/legacy 명시 복구, 실제 Worker lifecycle 통합과 활성화 필요. CR004/CR005 승인 대기 상태 유지. 전체 목표 active.
+### 2026-10-01 SRC02/06 Task3f 명시 예약 해제·Task4 파일/Worker 통합
+- 내부 releaseDeliveryReservation은 정확한 6필드 예약과 expectedVersion/confirmDiscard:true를 요구한다. running(만료 포함), 손상 task/예약, 다른 작업실, complete/fail 수신 기록 존재를 거절한다. raw 예약·task body/version·workspace·양쪽 receipt 부재를 단일 DELETE로 검사하며 task/revision/budget를 수정하지 않는다.
+- 예약 missing은 reservation_not_found만 반환한다. 결과 수락이나 과거 폐기 성공의 증거가 아니다. 새 TTL/tombstone/자동 삭제 없음. 현재·과거 실행 예약의 수동 폐기 기반이며 HTTP/UI는 아직 연결 전이다.
+- 구현 RED0/17 → GREEN22/22, 독립22/22 및 인접39/39. 실제 late acceptance 승리 시 receipt 보존·discard 충돌; discard가 acceptance preflight 이후 먼저 실행되면 수락 batch 전체 rollback(task/revision 불변/receipt0)을 독립 재현했다. expiry-paused recoverInterrupted 경로에서도 missing reservation으로 차단됨을 확인했다.
+- 신규 delivery-lifecycle.test는 createWorker+TestD1+createCloudRequest+실제 FileOutbox+DesktopBridge를 연결한다. 정상 complete/ACK 정리, 수락 응답 유실 후 후속 메시지 보존 재전송, ACK 응답 유실 후 ACK만 재시도, 작업실 교체 시 pending 보존·원DB 재연결 4/4. 새 모델 조회/claim/AI 재실행 없이 drain됨을 검증했다. fixture 파일만 비재귀 정리한다.
+- 최종 전체 Node 856/856(.inno/tmp/task3f-lifecycle-full.log), 독립 검토 결함 없음, git diff --check 통과. 실제 네트워크/AI/운영DB/스키마 변경 없음. 테스트 SQLite와 in-process Worker 증거이며 실제 Cloudflare 장애 복구 보장을 의미하지 않는다.
+- 다음은 복구 API/사용자 확인·임시파일/legacy 명시 복구·실제 script 활성화와 릴리스 검증이다. default protocol0 유지, 운영 미배포. CR004/CR005 승인 대기 및 전체 목표 active 유지.
