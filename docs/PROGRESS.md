@@ -3,7 +3,7 @@
 - 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
 - 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP, Task3h 복구 UI·client·local proxy 연결 및 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
-- 다음: Task3i 임시파일 복구 helper 검증 완료. 전용 복구 잠금·서비스/UI 연결, legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
+- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. 서비스/UI 연결, legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -641,3 +641,9 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 메인 검토에서 BOM 자동 제거로 기존 FileOutbox가 읽지 못하는 파일을 승격하는 문제를 발견했다. 실제 RED 후 ignoreBOM:true로 파싱 거절, 양 파일 보존 회귀 통과. NUL 경로 의심은 독립 재현으로 철회하여 불필요한 변경 없음.
 - 최종 전체918건:917통과/0실패/1skip(.inno/tmp/task3i-full.log). 최종 대상53통과/1skip, 독립 최초33통과/1skip 및 BOM 추가1/1, 구문/diff 통과. 실제 자식 프로세스 재시작·flush/close/rename 실패 포함. Windows 실제 symlink 생성은 EPERM으로 skip; 주입 unsafe-file 검사에서는 원문 open0 확인.
 - 외부 편집자에 대한 완전 CAS, 전체 Windows reparse 방어, 전원상실 rename 내구성은 보장하지 않는다. helper만 내부 완료이며 서비스/UI/legacy 채택/영속 claim journal 미완료. 기본 protocol0, 실제AI/운영DB/배포 없음. CR004/005 승인 대기, 전체 목표 active.
+
+### 2026-10-01 SRC02/06 Task3j 브리지 복구 잠금·종료 대기
+- 내부 protocol1 recoveryInspect/recoveryMaintenance가 tick/start/기존maintenance와 같은 busy를 첫 await 전에 선점한다. 읽기 검사는 unsafe를 초기화하거나 새로 설정하지 않으며, 변경 복구는 진입 즉시 unsafe를 유지한다. busy/stopped/version0는 콜백 전에 거절한다. 기존maintenance 제약 유지.
+- settled는 진행 중 복구 완료도 기다린다. 복구 도중 stop은 완료된 승격을 실패로 바꾸지 않고, 완료 후 busy만 해제한다. version1 outbox 읽기 오류는 status/start/tick/maintenance에서 unsafe를 유지하고, status는 원문 오류 없이 pending:true/recoveryRequired:true를 반환한다. 정상 legacy 상태 형식 유지.
+- 실제 FileOutbox+복구helper+bridge에서 명시 승격→complete/ACK 전달→새 claim/AI0 검증. 검사 오류·동시 진입·실패 후 재시도·stop/settled 대기 포함. RED0/7→신규8/8, 구현 관련73통과/1skip, 독립57/57, 최종 전체926건 중925통과/0실패/1skip(.inno/tmp/task3j-full.log), 구문/diff 통과. skip은 앞 단계의 실제 Windows symlink 생성 권한 제한이다.
+- 이 보호는 프로세스 내부다. 재시작 이후 안전성은 영속 claim journal·소유자 확인 계약이 필요하다. 이번에 scriptloop/HTTP/UI는 변경하지 않았다. 다음은 클라우드 의존 없는 로컬 복구 endpoint·polling 정지 상태 및 명시 drain-only 연결. 기본 protocol0/운영 미배포/실제AI 없음. CR004/005 승인 대기, 전체 목표 active.

@@ -5,10 +5,22 @@ import {boundedExecutionEvidence} from '../public/core/execution-evidence.mjs';
 import {checkedDeliveryBinding,deliveryBindingConflict} from './delivery-binding.mjs';
 import {protocolBinding,checkedRecord,checkedReceipt,checkedClaim,checkedAck,protocolError} from './delivery-protocol.mjs';
 export function createDesktopBridge({request,runner,outbox,heartbeatMs=15000,beforeClaim=async()=>{},readDeliveryBinding,onError=()=>{},deliveryReceiptVersion=0}){
- let busy=false,stopped=false,deliveryUnsafe=false,controller,background=Promise.resolve();
+ let busy=false,stopped=false,deliveryUnsafe=false,controller,background=Promise.resolve(),recoveryBackground=Promise.resolve();
  const bindingEnabled=typeof readDeliveryBinding==='function';
  const versioned=deliveryReceiptVersion===1;
  if(![0,1].includes(deliveryReceiptVersion)||versioned&&!bindingEnabled)throw protocolError();
+ const readOutbox=()=>{
+  try{return outbox.read();}catch(error){if(versioned)deliveryUnsafe=true;throw error;}
+ };
+ function recover(work,mutating){
+  if(!versioned||busy||stopped||typeof work!=='function')throw protocolError();
+  busy=true;
+  // This latch is process-local. Explicit recovery never automatically resets it.
+  if(mutating)deliveryUnsafe=true;
+  const operation=Promise.resolve().then(work).finally(()=>{busy=false;});
+  recoveryBackground=operation.catch(()=>{});
+  return operation;
+ }
  const readBinding=async()=>bindingEnabled?(versioned?protocolBinding:checkedDeliveryBinding)(await readDeliveryBinding()):undefined;
  const options=binding=>binding?{workspaceId:binding.workspaceId}:undefined;
  const protocolOptions=binding=>({...options(binding),deliveryReceiptVersion:1});
@@ -58,14 +70,20 @@ export function createDesktopBridge({request,runner,outbox,heartbeatMs=15000,bef
  }
  return {
   stop(){stopped=true;controller?.abort();},
-  settled:()=>background,
-  status:()=>({busy,stopped,...(versioned?{deliveryUnsafe}:{}),pending:!!outbox.read(),sourceDelegationVersion:runner.sourceDelegationVersion===1?1:0}),
+  settled:()=>Promise.all([background,recoveryBackground]).then(()=>undefined),
+  status(){
+   let pending,recoveryRequired=false;
+   try{pending=!!readOutbox();}catch{pending=true;recoveryRequired=true;}
+   return {busy,stopped,...(versioned?{deliveryUnsafe}:{}),pending,...(recoveryRequired?{recoveryRequired:true}:{}),sourceDelegationVersion:runner.sourceDelegationVersion===1?1:0};
+  },
+  async recoveryInspect(work){return recover(work,false);},
+  async recoveryMaintenance(work){return recover(work,true);},
   async maintenance(work){
-   if(busy||stopped||deliveryUnsafe||outbox.read())throw Object.assign(Error('실행 중이거나 미전달 결과가 있어 정리할 수 없습니다.'),{status:409});
+   if(busy||stopped||deliveryUnsafe||readOutbox())throw Object.assign(Error('실행 중이거나 미전달 결과가 있어 정리할 수 없습니다.'),{status:409});
    busy=true;try{return await work();}finally{busy=false;}
   },
   async startTask(taskId,input){
-   if(busy||stopped||deliveryUnsafe||outbox.read())throw Object.assign(Error('Desktop is busy or has a pending result. Wait before starting another task.'),{status:409});
+   if(busy||stopped||deliveryUnsafe||readOutbox())throw Object.assign(Error('Desktop is busy or has a pending result. Wait before starting another task.'),{status:409});
    const materials=sanitizeMaterials(input.materials);busy=true;
    try{
     await beforeClaim();if(stopped)throw Object.assign(Error('Desktop is stopping'),{status:409});
@@ -82,7 +100,7 @@ export function createDesktopBridge({request,runner,outbox,heartbeatMs=15000,bef
   async tick(){
    if(busy||stopped)return false;busy=true;
    try{
-    const pending=outbox.read();if(pending){await deliver(pending);return true;}
+    const pending=readOutbox();if(pending){await deliver(pending);return true;}
     if(deliveryUnsafe)throw protocolError();
     await beforeClaim();if(stopped)return false;
     const models=await modelSnapshot();if(stopped)return false;
