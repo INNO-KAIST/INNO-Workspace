@@ -177,7 +177,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
           if (!headers['access-control-allow-origin']) return responseJson({error: 'origin is not allowed'}, 403);
           return new Response(null, {status: 204, headers: {
             ...headers,
-            'access-control-allow-headers': 'authorization, content-type',
+            'access-control-allow-headers': 'authorization, content-type, x-inno-workspace-id, x-inno-delivery-receipt-version',
             'access-control-allow-methods': 'GET, POST, OPTIONS',
             'access-control-max-age': '600',
           }});
@@ -187,7 +187,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
           if (!authorized(request, env)) return responseJson({error: 'unauthorized'}, 401, {...headers, 'www-authenticate': 'Bearer'});
         }
         const {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement}=runtime(env,context);
-        const capabilities = {sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,reviewObservationRecovery:true,cloudCodex: true, localCodex: false, claudeRoutine: hasRoutine, cloud: true, connected: true};
+        const capabilities = {desktopDeliveryRecovery:deliveryReceiptVersion===1,sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,reviewObservationRecovery:true,cloudCodex: true, localCodex: false, claudeRoutine: hasRoutine, cloud: true, connected: true};
         const bridgeMatch=pathname.match(/^\/api\/desktop\/([^/]+)\/(start|renew|complete|fail|ack|reservations|discard)$/);
         const recoveryRoute=bridgeMatch&&['reservations','discard'].includes(bridgeMatch[2]);
         const receiptHeader=request.headers.get('x-inno-delivery-receipt-version');

@@ -32,11 +32,12 @@ if(process.platform==='win32'&&process.env.LOCALAPPDATA){
 const spawnCodex=(command,args,options)=>spawn(command==='codex'?codexCommand:command,args,options);
 const runner=createCodexRunner({spawnProcess:spawnCodex,modelCatalog:createModelCatalog({spawnProcess:spawnCodex,env:withoutApiEnvironment(),cwd:root}),cwd:path.join(privateDir,'desktop-runs'),managedDelivery:true,sourceDelegationVersion:sourceDelegationVersionFromEnvironment(process.env)});
 let lock;try{lock=await acquireBridgeLock();}catch(error){const message=startupPortMessage(error);if(!message)throw error;console.error(message);process.exit(1);}
-const bridge=createDesktopBridge({request,runner,outbox,readDeliveryBinding:async()=>({origin:endpoint,workspaceId:(await request('/api/desktop/identity')).workspaceId}),beforeClaim:createDesktopReadiness({runner,runRoot:path.join(privateDir,'desktop-runs')}),onError:e=>console.error(e.code?.startsWith('WORKSPACE_')?e.message:e.status?'INNO result delivery HTTP '+e.status:'INNO execution interrupted; saved results are retained.')});
+const readDeliveryBinding=async()=>({origin:endpoint,workspaceId:(await request('/api/desktop/identity')).workspaceId});
+const bridge=createDesktopBridge({request,runner,outbox,readDeliveryBinding,beforeClaim:createDesktopReadiness({runner,runRoot:path.join(privateDir,'desktop-runs')}),onError:e=>console.error(e.code?.startsWith('WORKSPACE_')?e.message:e.status?'INNO result delivery HTTP '+e.status:'INNO execution interrupted; saved results are retained.')});
 const localTokenPath=path.join(privateDir,'desktop-access-token.txt');
 if(!existsSync(localTokenPath))writeFileSync(localTokenPath,randomBytes(32).toString('base64url'),{mode:0o600});
 const localToken=readFileSync(localTokenPath,'utf8').trim();
-const desktopServer=createDesktopServer({token:localToken,publicDir:path.join(root,'public'),request,bridge,runStorage:new RunStorage(path.join(privateDir,'desktop-runs')),localRecords:new LocalRecords(path.join(privateDir,'tasks.sqlite'))});
+const desktopServer=createDesktopServer({token:localToken,publicDir:path.join(root,'public'),request,bridge,readDeliveryBinding,runStorage:new RunStorage(path.join(privateDir,'desktop-runs')),localRecords:new LocalRecords(path.join(privateDir,'tasks.sqlite'))});
 try{await new Promise((resolve,reject)=>{desktopServer.once('error',reject);desktopServer.listen(4175,'127.0.0.1',resolve);});}catch(e){await lock.close();const message=startupPortMessage(e);if(!message)throw e;console.error(message);process.exit(1);}
 writeFileSync(path.join(privateDir,'DESKTOP-ACCESS.md'),'# Desktop cloud workspace\n\n[Open desktop cloud workspace](http://127.0.0.1:4175/#token='+encodeURIComponent(localToken)+')\n\nThis private link opens the same cloud tasks and reads selected sources locally. Do not share it.\n');
 let stopping=false,wake;

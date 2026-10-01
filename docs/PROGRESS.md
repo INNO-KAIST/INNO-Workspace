@@ -2,8 +2,8 @@
 ## 현재 재개 지점 (2026-10-01)
 - 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
-- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP 연결과 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
-- 다음: 예약 복구의 사용자 확인 UI·클라이언트·로컬 프록시 연결, 남은 임시파일·legacy outbox의 명시 복구 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
+- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP, Task3h 복구 UI·client·local proxy 연결 및 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
+- 다음: 남은 임시파일·legacy outbox의 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -628,3 +628,10 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 독립리뷰에서 header A 확인후본문읽기중 DB B 전환+B본문이면 discard가 B예약을지울수있음을재현했다. ACK에도동일원인. 두분기의 body.workspaceId와최초desktopWorkspaceId를결합해수정하고 recovery identity UUID검사도body전에강제했다. RED재현 후신규3회귀통과, 미해결리뷰없음.
 - 최초 새HTTP RED1/14→기능구현16/16, 전체872/872(.inno/tmp/task3g-full.log)는위경합보강전검증. 최종보강후 구현자·독립관련58/58, 메인최종변경/통합57/57(.inno/tmp/task3g-final-main.log), Worker dry-run(.inno/tmp/task3g-final-dry-run.log), diff검사통과. 불필요한전체검사반복은하지않았다.
 - 운영/실제AI/외부HTTP/스키마변경없음. 사용자UI·client headers·local proxy·CORS연결은아직미구현이며독립읽기감사결과를기존계획에저장했다. 로컬/다른기기의결과존재를서버가증명할수없으므로해제확인과pending차단은다음연결에필수. 임시파일/legacy복구와활성화도남아있다. 전체goal active; CR004/CR005승인대기.
+### 2026-10-01 SRC02/05/06 Task3h 사용자 복구 UI·클라이언트·로컬 연결
+- WorkspaceClient 예약조회/폐기는 매요청 identity를 새로 확인하고 baseUrl/token/remote와 UI isCurrent를 identity 후 POST 직전 다시 검사한다. 전환된 old client 요청이 뒤늦게 전송되지 않는다. 이미 성공한 폐기를 뒤늦은 연결 변경으로 실패로 바꾸지 않는다. 추가 header는 workspace/version으로 제한하고 redirect:error 적용.
+- 로컬 proxy는 identity/예약 route를 명시 허용하고 auth/origin/header/body 귀속검사를 유지한다. discard는 bridge.maintenance 내부 fresh binding 재검사 후 전달하여 busy/pending/stopped/unsafe 경계를 지킨다. script의 기존 binding 함수를 재사용한다. Worker 내부 version1만 recovery capability true, 기본/exported0 그대로이며 승인origin CORS에필요header만추가.
+- 별도복구dialog: task예약50개페이지, 두확인(모든기기의실행종료/미전달결과없음), 실행/로컬상태차단, selection/client/epoch/version 무효화, exact descriptor 응답검증. missing은성공표시하지않음. 자동조회poll/자동retry/원본파일삭제/브라우저확인영구저장없음. 목록DOM유지로focus보존, 한국어일시/모바일줄바꿈.
+- UI 초기RED는module-not-found이며행동RED증거아님. 실제추가안전회귀4개가실패후수정됨: version변경중busy영구유지, 잘못된목록/응답, 목록DOM보존등. UI최종10/10, client/proxy구현60/60, 독립A인접47/47 및최종UI/client/proxy26/26. 최종전체901/901(.inno/tmp/task3h-full.log), Worker dry-run(.inno/tmp/task3h-dry-run.log),구문/diff검사통과.
+- 실제C UA in-app browser에서 real Worker/TestD1 in-memory/localproxy/public UI를 연결한127.0.0.1임시화면검증. desktop 및390x844 viewport, 목록선택, 체크1개일때폐기비활성, Escape취소및focus복귀, 재열기체크초기화, 체크2개후검증용예약해제/성공문구/버전3유지확인. 실제휴대폰하드웨어·클라우드배포검증은아님. 임시viewport복원·탭닫기·식별된검증용Node종료·fixture파일삭제완료.
+- 운영/유료API/실제AI/운영DB변경없음. 새기능기본비활성, 미배포. 다음은 orphan tmp/legacy명시복구 및결과저장실패후재시작차단보장, 최종활성화/릴리스검증. 전체goal active, CR004/005승인대기유지.

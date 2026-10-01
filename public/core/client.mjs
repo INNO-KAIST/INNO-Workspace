@@ -38,16 +38,35 @@ async function localMutate(update){
  });
 }
 
+const deliveryWorkspace=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+const deliveryConnectionError=()=>Object.assign(Error('작업실 연결을 확인한 뒤 다시 시도하세요. 연결이 변경된 요청은 진행하지 않습니다.'),{status:409});
 export class WorkspaceClient {
   constructor({baseUrl='',token='',remote=false,retryStorage}={}){this.baseUrl=validateEndpoint(baseUrl);this.token=token;this.remote=remote;this.state=blank();this.lastSync=null;this.syncError=null;this.refreshSequence=0;this.appliedSequence=0;this.syncedRevision=undefined;this.creationRetries=new CreationRetries(this.baseUrl+'\n'+token,retryStorage);}
-  async request(path,body){
+  async request(path,body,options={}){
+    if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>!['workspaceId','deliveryReceiptVersion'].includes(key))||Object.keys(options).length&&(options.deliveryReceiptVersion!==1||!deliveryWorkspace(options.workspaceId)))throw deliveryConnectionError();
     const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),30000);
     try{
-      const r=await fetch(this.baseUrl+path,{method:body===undefined?'GET':'POST',headers:{...(this.token?{Authorization:`Bearer ${this.token}`} :{}),...(body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body),signal:controller.signal,cache:'no-store'});
+      const r=await fetch(this.baseUrl+path,{method:body===undefined?'GET':'POST',headers:{...(this.token?{Authorization:`Bearer ${this.token}`} :{}),...(body===undefined?{}:{'Content-Type':'application/json'}),...(options.deliveryReceiptVersion===1?{'x-inno-workspace-id':options.workspaceId,'x-inno-delivery-receipt-version':'1'}:{})},body:body===undefined?undefined:JSON.stringify(body),signal:controller.signal,cache:'no-store',redirect:'error'});
       let d;try{d=await r.json();}catch{throw new Error('서버 응답을 읽을 수 없습니다. API 주소를 확인하세요.');}
       if(!r.ok){const e=new Error(d.error?.message||d.error||d.message||`요청 실패 (${r.status})`);e.status=r.status;throw e;}
       return d;
     }finally{clearTimeout(timeout);}
+  }
+  async deliveryRecoveryRequest(id,action,input,expectedWorkspaceId,{isCurrent=()=>true}={}){
+    const supported=()=>this.remote&&this.state.capabilities?.connected!==false&&this.state.capabilities?.desktopDeliveryRecovery===true;
+    if(typeof isCurrent!=='function'||!isCurrent()||!supported()||typeof id!=='string'||!id.trim()||id.length>200||expectedWorkspaceId!==undefined&&!deliveryWorkspace(expectedWorkspaceId))throw deliveryConnectionError();
+    const connection={baseUrl:this.baseUrl,token:this.token,remote:this.remote},saved=JSON.parse(JSON.stringify(input));
+    const unchanged=()=>isCurrent()&&supported()&&Object.keys(connection).every(key=>this[key]===connection[key]);
+    const identity=await this.request('/api/desktop/identity');
+    if(!unchanged()||!deliveryWorkspace(identity?.workspaceId)||expectedWorkspaceId!==undefined&&identity.workspaceId!==expectedWorkspaceId)throw deliveryConnectionError();
+    const result=await this.request(`/api/desktop/${encodeURIComponent(id)}/${action}`,saved,{workspaceId:identity.workspaceId,deliveryReceiptVersion:1});
+    if(action==='reservations'&&!unchanged())throw deliveryConnectionError();
+    return result;
+  }
+  async readDeliveryReservations(id,input,expectedWorkspaceId,options){return this.deliveryRecoveryRequest(id,'reservations',input,expectedWorkspaceId,options);}
+  async discardDeliveryReservation(id,input,options){
+    if(input?.confirmDiscard!==true||input?.reservation?.taskId!==id||!deliveryWorkspace(input?.reservation?.workspaceId))throw deliveryConnectionError();
+    return this.deliveryRecoveryRequest(id,'discard',input,input.reservation.workspaceId,options);
   }
   async refresh(){
     if(!this.remote){this.state={...blank(),...await localRead()};return this.state;}
