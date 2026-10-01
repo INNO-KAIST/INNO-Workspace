@@ -78,10 +78,10 @@ export function createDesktopBridge({request,runner,outbox,heartbeatMs=15000,bef
  return {
   stop(){stopped=true;controller?.abort();},
   pauseForRecovery,
-  async drainPending(){
-   if(!versioned||busy||stopped)throw protocolError();
+  async drainPending({readPending=readOutbox}={}){
+   if(!versioned||busy||stopped||typeof readPending!=='function')throw protocolError();
    pauseForRecovery();
-   return recover(async()=>{const pending=readOutbox();if(!pending)return false;await deliver(pending);return true;},true);
+   return recover(async()=>{const pending=await readPending();if(stopped)throw protocolError();if(!pending)return false;await deliver(pending);return true;},true);
   },
   settled:()=>Promise.all([background,recoveryBackground]).then(()=>undefined),
   runtimeStatus:()=>({busy,stopped,...(versioned?{deliveryUnsafe,recoveryPaused}:{}),sourceDelegationVersion:runner.sourceDelegationVersion===1?1:0}),

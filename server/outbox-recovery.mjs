@@ -72,6 +72,17 @@ export function createOutboxRecovery(pendingPath,{fs=nodeFs,withExclusive}={}){
   const a=before[key],b=after[key];return a.meta.exists===b.meta.exists&&a.meta.sha256===b.meta.sha256&&(!a.meta.exists||same(a.identity,b.identity));
  });
  return {
+  // Internal only: the caller holds the bridge lock through subsequent delivery.
+  // Return this bounded, verified snapshot; arbitrary external writers are excluded.
+  async readPending(hash){
+   if(typeof hash!=='string'||!HEX.test(hash))throw conflict();
+   const expectedHash=hash;
+   try{
+    const pair=await readPair();
+    if(pair.temporary.meta.exists||!['pending','ack_pending'].includes(pair.pending.meta.phase)||pair.pending.meta.sha256!==expectedHash)throw conflict();
+    return pair.pending.record;
+   }catch{throw conflict();}
+  },
   async inspect(){
    try{const pair=await readPair();return {pending:pair.pending.meta,temporary:pair.temporary.meta,canPromote:await permitted(pair)};}catch{throw conflict();}
   },

@@ -11,6 +11,7 @@ async function body(req){let size=0;const chunks=[];for await(const chunk of req
 export function createDesktopServer({token,publicDir,request,bridge,localRecords,runStorage,readDeliveryBinding,deliveryReceiptVersion=0,outboxRecovery}){
  if(typeof token!=='string'||token.length<24)throw Error('A strong local token is required');
  const localRecoveryEnabled=deliveryReceiptVersion===1&&typeof outboxRecovery?.inspect==='function'&&typeof outboxRecovery?.promote==='function';
+ const localDrainEnabled=localRecoveryEnabled&&typeof outboxRecovery?.readPending==='function'&&typeof bridge?.drainPending==='function';
  const root=path.resolve(publicDir instanceof URL?fileURLToPath(publicDir):publicDir);
  const server=createServer(async(req,res)=>{
   try{
@@ -24,11 +25,20 @@ export function createDesktopServer({token,publicDir,request,bridge,localRecords
     const localStatus=req.method==='GET'&&p==='/api/desktop/status';
     const localInspect=req.method==='GET'&&p==='/api/desktop/recovery';
     const localPromote=req.method==='POST'&&p==='/api/desktop/recovery/promote';
-    if(localStatus||localInspect||localPromote){
-     if(!localStatus&&!localRecoveryEnabled)return json(res,404,{error:'not found'});
+    const localDrain=req.method==='POST'&&p==='/api/desktop/recovery/drain';
+    if(localStatus||localInspect||localPromote||localDrain){
+     if(!localStatus&&!localRecoveryEnabled||localDrain&&!localDrainEnabled)return json(res,404,{error:'not found'});
      try{
-      if(localStatus)return json(res,200,{localDesktop:bridge.runtimeStatus(),outboxStatus:'not_inspected',capabilities:{desktopOutboxRecovery:localRecoveryEnabled}});
+      if(localStatus)return json(res,200,{localDesktop:bridge.runtimeStatus(),outboxStatus:'not_inspected',capabilities:{desktopOutboxRecovery:localRecoveryEnabled,desktopOutboxDrain:localDrainEnabled}});
       if(localInspect){const recovery=await bridge.recoveryInspect(()=>outboxRecovery.inspect());return json(res,200,{recovery,localDesktop:bridge.runtimeStatus()});}
+      if(localDrain){
+       const input=await body(req);
+       if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length!==2||!Object.hasOwn(input,'pendingHash')||!Object.hasOwn(input,'confirm')||input.confirm!==true||typeof input.pendingHash!=='string'||!/^[0-9a-f]{64}$/.test(input.pendingHash))throw Object.assign(Error('Invalid recovery confirmation'),{status:409});
+       const pendingHash=input.pendingHash;
+       const drained=await bridge.drainPending({readPending:()=>outboxRecovery.readPending(pendingHash)});
+       if(drained!==true)throw Object.assign(Error('Saved delivery was not verified'),{status:409});
+       return json(res,200,{drained:true});
+      }
       // The helper owns recoveryMaintenance through withExclusive. Do not nest
       // locks or perform status/file I/O after its committed promotion.
       return json(res,200,await outboxRecovery.promote(await body(req)));
