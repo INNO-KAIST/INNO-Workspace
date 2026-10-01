@@ -71,6 +71,7 @@ export function createDesktopBridge({request,runner,outbox,heartbeatMs=15000,bef
  return {
   stop(){stopped=true;controller?.abort();},
   settled:()=>Promise.all([background,recoveryBackground]).then(()=>undefined),
+  runtimeStatus:()=>({busy,stopped,...(versioned?{deliveryUnsafe}:{}),sourceDelegationVersion:runner.sourceDelegationVersion===1?1:0}),
   status(){
    let pending,recoveryRequired=false;
    try{pending=!!readOutbox();}catch{pending=true;recoveryRequired=true;}

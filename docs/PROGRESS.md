@@ -3,7 +3,7 @@
 - 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
 - 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP, Task3h 복구 UI·client·local proxy 연결 및 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
-- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. 서비스/UI 연결, legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
+- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. 실제 서비스 루프·UI 연결, legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -647,3 +647,10 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - settled는 진행 중 복구 완료도 기다린다. 복구 도중 stop은 완료된 승격을 실패로 바꾸지 않고, 완료 후 busy만 해제한다. version1 outbox 읽기 오류는 status/start/tick/maintenance에서 unsafe를 유지하고, status는 원문 오류 없이 pending:true/recoveryRequired:true를 반환한다. 정상 legacy 상태 형식 유지.
 - 실제 FileOutbox+복구helper+bridge에서 명시 승격→complete/ACK 전달→새 claim/AI0 검증. 검사 오류·동시 진입·실패 후 재시도·stop/settled 대기 포함. RED0/7→신규8/8, 구현 관련73통과/1skip, 독립57/57, 최종 전체926건 중925통과/0실패/1skip(.inno/tmp/task3j-full.log), 구문/diff 통과. skip은 앞 단계의 실제 Windows symlink 생성 권한 제한이다.
 - 이 보호는 프로세스 내부다. 재시작 이후 안전성은 영속 claim journal·소유자 확인 계약이 필요하다. 이번에 scriptloop/HTTP/UI는 변경하지 않았다. 다음은 클라우드 의존 없는 로컬 복구 endpoint·polling 정지 상태 및 명시 drain-only 연결. 기본 protocol0/운영 미배포/실제AI 없음. CR004/005 승인 대기, 전체 목표 active.
+
+### 2026-10-01 SRC02/06 Task3k 클라우드 독립 로컬 복구 API
+- GET /api/desktop/status는 파일 I/O 없는 runtimeStatus와 outboxStatus:not_inspected를 반환한다. 내부 version1+helper가 있을 때만 GET /api/desktop/recovery와 POST /api/desktop/recovery/promote 사용 가능. 기존 token/Host/Origin 인증 이후 cloud 처리 전에 분기하며 기본0은 파일복구404.
+- GET 검사는 recoveryInspect 안의 bounded helper 1회만 사용하고 잠금 해제 후 메모리 상태를 결합한다. 기존 status의 전체 FileOutbox 재독을 피하여 큰 파일 진단의 메모리 한도를 유지한다. POST는 helper.withExclusive 잠금만 한 번 사용하고 commit후 상태/파일I/O 없음. 새route 오류는 고정 메시지로 원문/경로 누출 방지.
+- 실제 HTTP+bridge+FileOutbox+helper: cloud unavailable에서 조회·승격, 인증/origin/host거절, busy/stopped파일보존, stalehash/확인/경로추가거절, 유사경로·잘못된메서드404, 같은hash동시승격200/409 한 번만commit. 2MiB파일에서 unbounded outbox.read0 및 oversize검사, 새claim/AI0 검증.
+- 최초RED0/7→최종신규13/13, 관련54통과/1skip, 독립38/38. 전체939건 중938통과/0실패/1skip(.inno/tmp/task3k-full.log), 구문/diff 통과. skip은 기존Windows 실제symlink권한제한.
+- scriptloop/운영helper배선/UI는 아직 변경 전이며 endpoint만 내부 완료다. 다음은 version1 오류 후 HTTP/프로세스잠금을 유지하는 복구서비스·명시 drain-only·화면 및 영속 claim journal. 기본protocol0, 운영미배포, 실제AI/운영DB변경없음. CR004/005 승인 대기, 전체목표 active.

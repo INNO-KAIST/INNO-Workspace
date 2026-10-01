@@ -8,8 +8,9 @@ import {checkedDeliveryBinding,deliveryBindingConflict} from './delivery-binding
 const MIME={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json','.svg':'image/svg+xml','.webmanifest':'application/manifest+json'};
 const json=(res,status,data)=>{res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(data));};
 async function body(req){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>750000)throw Object.assign(Error('Request exceeds 750000 bytes'),{status:413});chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');}catch{throw Object.assign(Error('Invalid JSON'),{status:400});}}
-export function createDesktopServer({token,publicDir,request,bridge,localRecords,runStorage,readDeliveryBinding}){
+export function createDesktopServer({token,publicDir,request,bridge,localRecords,runStorage,readDeliveryBinding,deliveryReceiptVersion=0,outboxRecovery}){
  if(typeof token!=='string'||token.length<24)throw Error('A strong local token is required');
+ const localRecoveryEnabled=deliveryReceiptVersion===1&&typeof outboxRecovery?.inspect==='function'&&typeof outboxRecovery?.promote==='function';
  const root=path.resolve(publicDir instanceof URL?fileURLToPath(publicDir):publicDir);
  const server=createServer(async(req,res)=>{
   try{
@@ -20,6 +21,19 @@ export function createDesktopServer({token,publicDir,request,bridge,localRecords
    if(p.startsWith('/api/')){
     const expected=Buffer.from('Bearer '+token),actual=Buffer.from(req.headers.authorization||'');
     if(actual.length!==expected.length||!timingSafeEqual(actual,expected))return json(res,401,{error:'unauthorized'});
+    const localStatus=req.method==='GET'&&p==='/api/desktop/status';
+    const localInspect=req.method==='GET'&&p==='/api/desktop/recovery';
+    const localPromote=req.method==='POST'&&p==='/api/desktop/recovery/promote';
+    if(localStatus||localInspect||localPromote){
+     if(!localStatus&&!localRecoveryEnabled)return json(res,404,{error:'not found'});
+     try{
+      if(localStatus)return json(res,200,{localDesktop:bridge.runtimeStatus(),outboxStatus:'not_inspected',capabilities:{desktopOutboxRecovery:localRecoveryEnabled}});
+      if(localInspect){const recovery=await bridge.recoveryInspect(()=>outboxRecovery.inspect());return json(res,200,{recovery,localDesktop:bridge.runtimeStatus()});}
+      // The helper owns recoveryMaintenance through withExclusive. Do not nest
+      // locks or perform status/file I/O after its committed promotion.
+      return json(res,200,await outboxRecovery.promote(await body(req)));
+     }catch(error){return json(res,[400,409,413].includes(error?.status??error?.statusCode)?(error.status??error.statusCode):500,{error:'Local delivery recovery could not be completed. Review the local recovery status.'});}
+    }
     if(req.method==='GET'&&p==='/api/state'){const state=await request(p+url.search),localDesktop=bridge.status();return json(res,200,{...state,capabilities:{...state.capabilities,desktopDeliveryRecovery:state.capabilities?.desktopDeliveryRecovery===true&&typeof readDeliveryBinding==='function',desktopSourceDelegationVersion:state.capabilities?.sourceDelegationVersion===1&&localDesktop.sourceDelegationVersion===1?1:0,desktopSources:true,localRecordImport:!!localRecords,runStorage:!!runStorage},localDesktop});}
     if(req.method==='GET'&&p==='/api/desktop/identity'){
      if(typeof readDeliveryBinding!=='function')throw deliveryBindingConflict('unverified');
