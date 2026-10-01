@@ -1,4 +1,16 @@
 import {readTaskContext} from '../public/core/task-context-read.mjs';
+const CONTEXT_DIGEST={type:'string',pattern:'^[0-9a-f]{64}$'};
+const RESUME_STATE={description:'Optional derived resume state, at most 32768 UTF-8 bytes. Omit to preserve; null clears. source_matched verifies source hashes only, never semantic completeness, quality or approval authority. Allowed only on a running checkpoint, not completed.',anyOf:[{type:'null'},{type:'object',required:['version','taskId','mode','basis','items'],additionalProperties:false,properties:{
+  version:{const:1},taskId:{type:'string',pattern:'^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$'},mode:{enum:['root','child','review']},
+  basis:{type:'object',required:['requestDigest','historyDigest','scopeDigest','messageCount'],additionalProperties:false,properties:{requestDigest:CONTEXT_DIGEST,historyDigest:CONTEXT_DIGEST,scopeDigest:CONTEXT_DIGEST,messageCount:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER}}},
+  items:{type:'array',minItems:1,maxItems:48,items:{type:'object',required:['kind','text','references'],additionalProperties:false,properties:{
+    kind:{enum:['goal','constraint','decision','completed','pending','evidence']},text:{type:'string',minLength:1,maxLength:2000},
+    references:{type:'array',minItems:1,maxItems:8,items:{oneOf:[
+      {type:'object',required:['section','digest'],additionalProperties:false,properties:{section:{const:'request'},digest:CONTEXT_DIGEST}},
+      {type:'object',required:['section','messageIndex','digest'],additionalProperties:false,properties:{section:{const:'message'},messageIndex:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER},digest:CONTEXT_DIGEST}},
+    ]}},
+  }}},
+}}]};
 const OBSERVED_USAGE={type:'object',description:'Only actual executor-reported counts. Omit when unavailable; never estimate.',additionalProperties:false,properties:{cachedInputTokens:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER,description:'Reported cached portion of total inputTokens; omit when unknown.'},inputTokens:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER},outputTokens:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER}}};
 const RENEW_TOOL={name:'renew_execution',description:'Extend the current live execution lease without restarting work. Use before five minutes pass during long work. Cannot revive expired, paused, or superseded ownership.',inputSchema:{type:'object',required:['taskId','executionId','generation'],additionalProperties:false,properties:{taskId:{type:'string'},executionId:{type:'string'},generation:{type:'integer'},leaseMs:{type:'integer',minimum:1000,maximum:3600000}}}};
 const MODELS_TOOL={name:'available_models',description:'Read the current desktop account model catalog and supported Claude role aliases before cross-provider allocation. Empty Codex catalog means reconnect the desktop; do not guess.',inputSchema:{type:'object',properties:{},additionalProperties:false}};
@@ -36,13 +48,14 @@ const TOOLS = Object.freeze([
   },
   {
     name: 'read_task_context',
-    description: 'Read one bounded durable context section within the same task scope as read_task; never starts AI work. Supply the current task expectedVersion. If unknown, request manifest with expectedVersion:0; an authorized version conflict returns only conflict, taskId and currentVersion. Text offsets are UTF-8 bytes; pages default to at most 16000 bytes. Every text continuation (offset > 0) requires the previous contentDigest as expectedDigest. On version conflict, reread manifest using the returned currentVersion. On digest mismatch, reread manifest using the same expectedVersion. Restart text at offset 0; do not combine revisions. Manifest offsets are message indexes and return at most 20 metadata-only entries; maxBytes, messageIndex and expectedDigest are not valid for manifest. No source attachments or artifacts are returned.',
+    description: 'Read one bounded durable context section within the same task scope as read_task; never starts AI work. Supply the current task expectedVersion. If unknown, request manifest with expectedVersion:0; an authorized version conflict returns only conflict, taskId and currentVersion. Text offsets are UTF-8 bytes; pages default to at most 16000 bytes. Every text continuation (offset > 0) requires the previous contentDigest as expectedDigest. On version conflict, reread manifest using the returned currentVersion. On digest mismatch, reread manifest using the same expectedVersion. Restart text at offset 0; do not combine revisions. Manifest offsets are message indexes and return at most 20 metadata-only entries; maxBytes, messageIndex and expectedDigest are not valid for manifest. Basis returns source digests for an optional messageCount prefix. Resume returns verified derived state only when source_matched; this proves source agreement only, never semantic completeness, quality or approval authority. Resume pendingMessageIndexes contains at most 20 indexes; pendingMessageCount reports the total and nextPendingMessageIndex, when non-null, can be used as the manifest offset to inspect further pending references. Basis/resume reject offset, maxBytes, expectedDigest and messageIndex; resume also rejects messageCount. No source attachment or artifact bodies are returned.',
     annotations: {readOnlyHint:true, destructiveHint:false},
     inputSchema: {
       type:'object', required:['taskId','expectedVersion','section'], additionalProperties:false,
       properties: {
         taskId:{type:'string'}, expectedVersion:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER},
-        section:{enum:['request','checkpoint','message','manifest']},
+        section:{enum:['request','checkpoint','message','manifest','basis','resume']},
+        messageCount:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER,description:'Basis section only: number of original messages covered; defaults to all.'},
         messageIndex:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER,description:'Required only for the message section; zero-based message index.'},
         offset:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER,description:'UTF-8 byte offset for text; message index for manifest. Defaults to 0.'},
         maxBytes:{type:'integer',minimum:4,maximum:16000,default:16000,description:'Text sections only.'},
@@ -68,7 +81,7 @@ const TOOLS = Object.freeze([
       type: 'object', required: ['taskId', 'executionId', 'generation', 'content'], additionalProperties: false,
       properties: {
         taskId: {type: 'string'}, executionId: {type: 'string'}, generation: {type: 'integer'}, usage:OBSERVED_USAGE, content: {type: 'string'},
-        status: {enum: ['running', 'completed']}, summary: {type: 'string'}, reviewReport:REVIEW,
+        status: {enum: ['running', 'completed']}, summary: {type: 'string'}, reviewReport:REVIEW, resumeState:RESUME_STATE,
       },
     },
   },
@@ -160,6 +173,7 @@ async function callTool(store, name, args = {}, handlers = {}) {
     case 'claim_execution':
       return toolResult(await store.claimExecution(args.taskId, args));
     case 'checkpoint_task': {
+      if (args.status === 'completed' && args.resumeState !== undefined)throw new Error('Resume state is not supported on completed checkpoints');
       if (args.status === 'completed') {
         const current=await store.requireTask(args.taskId);
         if(current.status==='completed'&&current.checkpoint?.executionId===args.executionId&&current.checkpoint?.generation===args.generation)return toolResult({task:current});
@@ -175,7 +189,9 @@ async function callTool(store, name, args = {}, handlers = {}) {
         return toolResult({task});
       }
       const task = await store.applyExecutionAction(args.taskId, {...args, action: 'checkpoint'});
-      return toolResult({task});
+      return args.resumeState !== undefined
+        ? toolResult({task:acknowledgement(task),resumeStateSaved:args.resumeState!==null})
+        : toolResult({task});
     }
     case 'artifact_task': {
       const task = await store.applyExecutionAction(args.taskId, {...args, action: 'artifact'});

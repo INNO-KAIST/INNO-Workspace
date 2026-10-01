@@ -1,3 +1,4 @@
+import {sanitizeResumeState} from './context-resume.mjs';
 import {validateOfficeArtifact} from './office-container.mjs';
 import {sanitizeArtifactChecks} from './artifact-checks.mjs';
 import {sanitizeSourceView,sanitizeSourceCoverage} from './source-coverage.mjs';
@@ -271,6 +272,12 @@ export function applyAction(task, input, overrides = {}) {
         content: text(input.content, 'checkpoint content'),
         updatedAt: now,
       };
+      if(input.resumeState===null)delete next.checkpoint.resumeState;
+      else if(input.resumeState!==undefined){
+        const resumeState=sanitizeResumeState(input.resumeState);
+        if(resumeState.taskId!==task.id)throw new ValidationError('Resume state task scope mismatch');
+        next.checkpoint.resumeState=resumeState;
+      }
       break;
     case 'artifact':
       next.artifacts.push(artifact(input.artifact, deps.id, now));

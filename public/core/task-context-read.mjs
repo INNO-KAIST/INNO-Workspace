@@ -1,4 +1,5 @@
-const INPUT_FIELDS = new Set(['taskId', 'expectedVersion', 'section', 'messageIndex', 'offset', 'maxBytes', 'expectedDigest']);
+import {createContextBasis,verifyResumeState} from './context-resume.mjs';
+const INPUT_FIELDS = new Set(['taskId', 'expectedVersion', 'section', 'messageIndex', 'offset', 'maxBytes', 'expectedDigest', 'messageCount']);
 const fail = (statusCode, message) => { throw Object.assign(new Error(message), {statusCode}); };
 const sha256 = async bytes => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), value => value.toString(16).padStart(2, '0')).join('');
 const messageRole = role => ['user', 'assistant', 'system'].includes(role) ? role : 'system';
@@ -27,9 +28,20 @@ export async function readTaskContext(task, input) {
     fail(409, 'Task context version mismatch');
   }
   const taskVersion = expectedVersion;
-  if (!['request', 'checkpoint', 'message', 'manifest'].includes(section)) fail(400, 'Invalid context section');
+  if (!['request', 'checkpoint', 'message', 'manifest', 'basis', 'resume'].includes(section)) fail(400, 'Invalid context section');
   if (!Number.isSafeInteger(offset) || offset < 0) fail(400, 'Invalid context offset');
   const has = field => Object.hasOwn(input, field);
+  if (section === 'basis' || section === 'resume') {
+    if (['offset','maxBytes','expectedDigest','messageIndex'].some(has)
+      || (section === 'resume' && has('messageCount'))) fail(400, 'Invalid structured context read fields');
+    if (section === 'basis') {
+      if (has('messageCount') && (!Number.isSafeInteger(input.messageCount) || input.messageCount < 0)) fail(400, 'Invalid messageCount');
+      const basis = await createContextBasis(task, has('messageCount') ? {messageCount:input.messageCount} : {});
+      return {...basis, taskVersion, section};
+    }
+    return {taskId, taskVersion, section, ...await verifyResumeState(task)};
+  }
+  if (has('messageCount')) fail(400, 'messageCount requires basis section');
   if (section !== 'message' && has('messageIndex')) fail(400, 'messageIndex requires message section');
   if (section === 'manifest') {
     if (has('maxBytes') || has('expectedDigest')) fail(400, 'Manifest does not accept maxBytes or expectedDigest');

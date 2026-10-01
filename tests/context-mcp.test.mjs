@@ -28,7 +28,7 @@ test('MCP advertises bounded read-only context sections with strict paging argum
  assert.equal(tool.annotations.readOnlyHint,true);
  assert.equal(tool.inputSchema.additionalProperties,false);
  assert.deepEqual(tool.inputSchema.required,['taskId','expectedVersion','section']);
- assert.deepEqual(tool.inputSchema.properties.section.enum,['request','checkpoint','message','manifest']);
+ assert.deepEqual(tool.inputSchema.properties.section.enum,['request','checkpoint','message','manifest','basis','resume']);
  assert.equal(tool.inputSchema.properties.maxBytes.maximum,16000);
  assert.equal(tool.inputSchema.properties.executionId,undefined);
 });
