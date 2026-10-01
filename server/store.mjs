@@ -1,3 +1,4 @@
+import {sanitizeResumeState} from '../public/core/context-resume.mjs';
 import {createHash} from 'node:crypto';
 import {creationId,creationPayload} from '../public/core/create-requests.mjs';
 import {validateOfficeArtifact} from '../public/core/office-container.mjs';
@@ -276,6 +277,13 @@ export class SqliteTaskStore {
     const current = this.requireTask(id);
     return this.replaceTask(id, current.version, task => {
       this.assertExecution(task, input);
+      const checkpoint={...task.checkpoint};
+      if(input.resumeState===null)delete checkpoint.resumeState;
+      else if(input.resumeState!==undefined){
+        const resumeState=sanitizeResumeState(input.resumeState);
+        if(resumeState.taskId!==task.id)throw new ValidationError('Resume state task scope mismatch');
+        checkpoint.resumeState=resumeState;
+      }
       const now = this.now();
       const elapsed=wallElapsedMs(task.checkpoint?.claimedAt,now);
       const executionEvidence=allowDesktopEvidence&&input.executionEvidence?validateOwnedExecutionEvidence(task,input.executionEvidence):null;
@@ -312,7 +320,7 @@ export class SqliteTaskStore {
         messages: [...task.messages, {id: this.id(), role: 'assistant', content, createdAt: now}],
         artifacts: [...task.artifacts, ...artifacts],
         checkpoint: {
-          ...task.checkpoint,
+          ...checkpoint,
           resultArtifactIds: [...task.artifacts.filter(a => a.executionId === input.executionId && a.generation === input.generation), ...artifacts].map(a => a.id),
           usage: executionUsage(task.checkpoint,input.usage,now), usageHistory: usageHistory(task.checkpoint,input.usage,now,{task,transition:'completion'}),
           status: 'completed',

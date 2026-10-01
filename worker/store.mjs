@@ -1,3 +1,4 @@
+import {sanitizeResumeState} from '../public/core/context-resume.mjs';
 import {creationId,creationPayload,digestText} from '../public/core/create-requests.mjs';
 import {validateOfficeArtifact} from '../public/core/office-container.mjs';
 import {sanitizeArtifactChecks} from '../public/core/artifact-checks.mjs';
@@ -405,6 +406,13 @@ export class D1TaskStore {
         && current.checkpoint?.generation === input.generation;
       if (!sameInterruptedOwner) this.assertExecution(current, input);
       const reviewReport=current.delegation&&current.delegation.state!=='superseded'?validateReviewReport(sameInterruptedOwner?{...current,status:'running'}:current,input):undefined;
+      const checkpoint={...current.checkpoint};
+      if(input.resumeState===null)delete checkpoint.resumeState;
+      else if(input.resumeState!==undefined){
+        const resumeState=sanitizeResumeState(input.resumeState);
+        if(resumeState.taskId!==current.id)throw new ValidationError('Resume state task scope mismatch');
+        checkpoint.resumeState=resumeState;
+      }
       const now = this.now();
       const elapsed=wallElapsedMs(current.checkpoint?.claimedAt,now);
       const executionEvidence=allowDesktopEvidence&&input.executionEvidence?validateOwnedExecutionEvidence(current,input.executionEvidence):null;
@@ -436,7 +444,7 @@ export class D1TaskStore {
         ...(reviewReport?{reviewObservation:{createdAt:now,reviewExecutionId:current.checkpoint.executionId,reviewGeneration:current.checkpoint.generation,batchId:current.delegation.batchId,epoch:current.delegation.epoch,children:current.delegation.children.map(child=>({childTaskId:child.taskId,...(child.selection?.profile?{status:'pending',attempts:0}:{status:'not_attributable',reason:'saved_profile_missing',attempts:0,nextAt:null})}))}}:{}),
         messages: [...current.messages, {id: this.id(), role: 'assistant', content, createdAt: now}],
         artifacts: [...current.artifacts, ...artifacts],
-        checkpoint: {...current.checkpoint, resultArtifactIds:[...current.artifacts.filter(a=>a.executionId===input.executionId&&a.generation===input.generation),...artifacts].map(a=>a.id), usage: executionUsage(current.checkpoint,input.usage,now), usageHistory: usageHistory(current.checkpoint,input.usage,now,{task:current,transition:'completion'}), failure: undefined, status: 'completed', content: input.checkpoint ?? 'Execution completed.', completedAt: now, wallElapsedMs:elapsed, ...(executionEvidence?{executionEvidence:{...executionEvidence,wallElapsedMs:elapsed}}:{}), updatedAt: now},
+        checkpoint: {...checkpoint, resultArtifactIds:[...current.artifacts.filter(a=>a.executionId===input.executionId&&a.generation===input.generation),...artifacts].map(a=>a.id), usage: executionUsage(current.checkpoint,input.usage,now), usageHistory: usageHistory(current.checkpoint,input.usage,now,{task:current,transition:'completion'}), failure: undefined, status: 'completed', content: input.checkpoint ?? 'Execution completed.', completedAt: now, wallElapsedMs:elapsed, ...(executionEvidence?{executionEvidence:{...executionEvidence,wallElapsedMs:elapsed}}:{}), updatedAt: now},
       };
     },undefined,{deliveryReceipt});
   }

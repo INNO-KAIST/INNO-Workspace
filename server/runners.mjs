@@ -1,4 +1,5 @@
 import {buildTaskContext} from '../public/core/task-context.mjs';
+import {sanitizeResumeState} from '../public/core/context-resume.mjs';
 import {ContextRetrievalRequiredError} from '../public/core/context-errors.mjs';
 import {sourceDelegationContext,delegationAttachments} from '../public/core/delegation-sources.mjs';
 import {fileURLToPath} from 'node:url';
@@ -169,9 +170,12 @@ function structuredResult(content) {
   } catch {
     return null;
   }
+  const hasResumeState = parsed && typeof parsed === 'object' && !Array.isArray(parsed) && Object.hasOwn(parsed, 'resumeState');
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || typeof parsed.summary !== 'string' || !parsed.summary.trim()) {
+    if (hasResumeState) throw new Error('Invalid resume state result');
     return null;
   }
+  const resumeState = hasResumeState ? (parsed.resumeState === null ? null : sanitizeResumeState(parsed.resumeState)) : undefined;
   const sourceArtifacts = parsed.artifacts ?? [];
   if (!Array.isArray(sourceArtifacts) || sourceArtifacts.length > 10) throw new Error('Codex returned an invalid artifact list');
   let total = 0;
@@ -210,6 +214,7 @@ function structuredResult(content) {
     handoff: parsed.handoff,
     delegation: parsed.delegation,
     reviewReport: parsed.reviewReport,
+    ...(hasResumeState ? {resumeState} : {}),
   };
 }
 
@@ -487,7 +492,12 @@ export function createCodexRunner({
       }
       if (!parsed.content) throw new Error('Codex completed without an assistant result');
       const structured = structuredResult(parsed.content);
-      if (structured) structured.artifacts = await materializeArtifacts(structured.artifacts, executionDirectory);
+      const hasResumeState = structured && Object.hasOwn(structured, 'resumeState');
+      if (hasResumeState) {
+        if (typeof executionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(executionId) || !Number.isSafeInteger(generation) || generation < 1) throw new Error('Invalid resume state execution ownership');
+        if (structured.resumeState !== null && structured.resumeState.taskId !== task.id) throw new Error('Invalid resume state task binding');
+        if (structured.handoff || structured.delegation) throw new Error('Resume state cannot accompany handoff or delegation');
+      }
       if(mode!=='root'&&structured?.delegation)throw new Error(`${mode} execution cannot return recursive delegation`);
       if(mode!=='root'&&structured?.handoff)throw new Error(`${mode} execution cannot return provider handoff`);
       if(deadline&&structured?.delegation)throw new Error('evaluation budget execution cannot return delegation');
@@ -497,6 +507,8 @@ export function createCodexRunner({
       const delegation=managedDelivery&&mode==='root'&&structured?.delegation?validateDelegationResult(structured.delegation,models,{sourceDelegationVersion:sourceContext?1:0}):undefined;
       if(delegation&&sourceContext)for(const child of delegation.children)delegationAttachments(task,child.sourceIds,{sourceDelegationVersion:1});
       const reviewReport=mode==='review'?validateReviewReport(structured?.reviewReport,task):undefined;
+      if (hasResumeState && reviewReport?.some(row => row.criteria.some(criterion => criterion.status !== 'pass'))) throw new Error('Resume state requires a passing review completion');
+      if (structured) structured.artifacts = await materializeArtifacts(structured.artifacts, executionDirectory);
       const report=routingReport(structured?.routing,models);
       if(managedDelivery&&mode==='root'&&structured?.handoff)handoffTask({...task,status:'running',checkpoint:{...task.checkpoint,provider:'codex',executionId,generation}},{executionId,generation,content:structured.content,handoff:structured.handoff,artifacts:structured.artifacts});
       const artifacts=withRoutingArtifact(structured?.artifacts??[],structured?.content??parsed.content,report,managedDelivery);
@@ -510,6 +522,7 @@ export function createCodexRunner({
         ...(managedDelivery && mode==='root' && structured?.handoff ? {handoff:structured.handoff} : {}),
         ...(delegation ? {delegation} : {}),
         ...(reviewReport ? {reviewReport} : {}),
+        ...(hasResumeState ? {resumeState: structured.resumeState} : {}),
       };
       } catch(error) {if(observedUsage)error.usage=observedUsage;throw error;} finally {
         // Non-recursive: preserve every directory containing files or child folders.

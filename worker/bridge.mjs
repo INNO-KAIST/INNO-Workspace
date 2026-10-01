@@ -1,3 +1,4 @@
+import {sanitizeResumeState} from '../public/core/context-resume.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
 import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
 
@@ -64,6 +65,14 @@ export class CloudBridge {
       const t=await this.store.requireTask(id);
       if(t.status==='completed'&&t.checkpoint?.executionId===input.executionId&&t.checkpoint?.generation===input.generation){
         if(deliveryReceipt!==undefined||t.checkpoint?.deliveryReceiptVersion===1)throw new ConflictError('Delivery receipt replay requires stored verification',t.version);
+        if(input.resumeState!==undefined){
+          const supplied=input.resumeState===null?null:sanitizeResumeState(input.resumeState);
+          let stored;
+          try{stored=t.checkpoint.resumeState===undefined?null:sanitizeResumeState(t.checkpoint.resumeState);}
+          catch{throw new ConflictError('Completed resume state cannot change',t.version);}
+          if((supplied&&supplied.taskId!==t.id)||JSON.stringify(supplied)!==JSON.stringify(stored))
+            throw new ConflictError('Completed resume state cannot change',t.version);
+        }
         return t;
       }
       if(input.executionEvidence&&t.checkpoint?.provider!=='codex')throw new ValidationError('execution evidence provider does not match owner');

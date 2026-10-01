@@ -53,7 +53,7 @@ for(const kind of ['local','worker']){
   }
   const wrongOwner=await f.call('checkpoint_task',{...f.owner,generation:f.owner.generation+1,content:'wrong owner',resumeState:null});
   assert.ok(wrongOwner.error||wrongOwner.result?.isError);assert.deepEqual(await f.store.requireTask(f.id),snapshot);
-  const completed=await f.call('checkpoint_task',{...f.owner,status:'completed',content:'must not complete',resumeState:state});
+  const completed=await f.call('checkpoint_task',{...f.owner,status:'completed',content:'must not complete',resumeState:{...state,items:[]}});
   assert.equal(completed.result.isError,true);assert.deepEqual(await f.store.requireTask(f.id),snapshot);
   const cleared=await f.call('checkpoint_task',{...f.owner,content:'clear state',resumeState:null});
   assert.equal(decoded(cleared).resumeStateSaved,false);

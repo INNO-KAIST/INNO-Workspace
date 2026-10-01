@@ -1,6 +1,8 @@
+import {sanitizeResumeState} from '../public/core/context-resume.mjs';
+import {ConflictError} from '../public/core/tasks.mjs';
 import {readTaskContext} from '../public/core/task-context-read.mjs';
 const CONTEXT_DIGEST={type:'string',pattern:'^[0-9a-f]{64}$'};
-const RESUME_STATE={description:'Optional derived resume state, at most 32768 UTF-8 bytes. Omit to preserve; null clears. source_matched verifies source hashes only, never semantic completeness, quality or approval authority. Allowed only on a running checkpoint, not completed.',anyOf:[{type:'null'},{type:'object',required:['version','taskId','mode','basis','items'],additionalProperties:false,properties:{
+const RESUME_STATE={description:'Optional derived resume state, at most 32768 UTF-8 bytes. Omit to preserve; null clears. source_matched verifies source hashes only, never semantic completeness, quality or approval authority. Accepted on running or completed checkpoints. Completed replay may only repeat an identical stored state; null matches only an absent state.',anyOf:[{type:'null'},{type:'object',required:['version','taskId','mode','basis','items'],additionalProperties:false,properties:{
   version:{const:1},taskId:{type:'string',pattern:'^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$'},mode:{enum:['root','child','review']},
   basis:{type:'object',required:['requestDigest','historyDigest','scopeDigest','messageCount'],additionalProperties:false,properties:{requestDigest:CONTEXT_DIGEST,historyDigest:CONTEXT_DIGEST,scopeDigest:CONTEXT_DIGEST,messageCount:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER}}},
   items:{type:'array',minItems:1,maxItems:48,items:{type:'object',required:['kind','text','references'],additionalProperties:false,properties:{
@@ -173,10 +175,18 @@ async function callTool(store, name, args = {}, handlers = {}) {
     case 'claim_execution':
       return toolResult(await store.claimExecution(args.taskId, args));
     case 'checkpoint_task': {
-      if (args.status === 'completed' && args.resumeState !== undefined)throw new Error('Resume state is not supported on completed checkpoints');
       if (args.status === 'completed') {
         const current=await store.requireTask(args.taskId);
-        if(current.status==='completed'&&current.checkpoint?.executionId===args.executionId&&current.checkpoint?.generation===args.generation)return toolResult({task:current});
+        if(current.status==='completed'&&current.checkpoint?.executionId===args.executionId&&current.checkpoint?.generation===args.generation){
+          if(args.resumeState===undefined)return toolResult({task:current});
+          const supplied=args.resumeState===null?null:sanitizeResumeState(args.resumeState);
+          let stored;
+          try{stored=current.checkpoint.resumeState===undefined?null:sanitizeResumeState(current.checkpoint.resumeState);}
+          catch{throw new ConflictError('Completed resume state cannot change',current.version);}
+          if((supplied&&supplied.taskId!==current.id)||JSON.stringify(supplied)!==JSON.stringify(stored))
+            throw new ConflictError('Completed resume state cannot change',current.version);
+          return toolResult({task:acknowledgement(current),resumeStateSaved:args.resumeState!==null});
+        }
         const task = await store.finishExecution(args.taskId, {
           executionId: args.executionId,
           generation: args.generation,
@@ -184,9 +194,10 @@ async function callTool(store, name, args = {}, handlers = {}) {
           content: args.summary || args.content,
           checkpoint: args.content,
           reviewReport: args.reviewReport,
+          ...(args.resumeState!==undefined?{resumeState:args.resumeState}:{}),
         });
         await handlers.afterComplete?.(task);
-        return toolResult({task});
+        return args.resumeState!==undefined ? toolResult({task:acknowledgement(task),resumeStateSaved:args.resumeState!==null}) : toolResult({task});
       }
       const task = await store.applyExecutionAction(args.taskId, {...args, action: 'checkpoint'});
       return args.resumeState !== undefined

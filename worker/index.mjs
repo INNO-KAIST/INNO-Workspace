@@ -277,6 +277,9 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
             return responseJson({task,deliveryReceipt:saved,replayed:false},200,headers);
           };
           try{
+           if(bridgeMatch[2]==='complete'&&input.resumeState!==undefined&&(input.handoff||input.delegation||
+             (Array.isArray(input.reviewReport)&&input.reviewReport.some(row=>Array.isArray(row?.criteria)&&row.criteria.some(criterion=>criterion?.status!=='pass')))))
+             throw new ValidationError('Resume state is not supported on handoff, delegation, or non-passing review transitions');
            if(input.models!==undefined)await catalog.report(input.models);
            if(bridgeMatch[2]==='start')return responseJson({claim:await orchestration.hydrateClaim(await bridge.start(id,input,claimOptions)),workspaceId:desktopWorkspaceId,...claimConfirmation},200,headers);
            if(bridgeMatch[2]==='complete'&&input.handoff)return await accepted(await handoff({...input,taskId:id},receiptOptions));
@@ -286,10 +289,12 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
             const replay=parent.delegation?.lastReviewRetry;
             if(replay?.executionId===input.executionId&&replay?.generation===input.generation&&!['superseded','cancelled'].includes(parent.delegation.state)){
               if(deliveryReceipt||parent.checkpoint?.deliveryReceiptVersion===1)throw new ConflictError('Delivery receipt replay requires stored verification',parent.version);
+              if(input.resumeState!==undefined)throw new ValidationError('Resume state is not supported on non-completion review replay');
               return responseJson({task:parent},200,headers);
             }
             if(parent.status==='waiting_user'&&parent.checkpoint?.executionId===input.executionId&&parent.checkpoint?.generation===input.generation){
               if(deliveryReceipt||parent.checkpoint?.deliveryReceiptVersion===1)throw new ConflictError('Delivery receipt replay requires stored verification',parent.version);
+              if(input.resumeState!==undefined)throw new ValidationError('Resume state is not supported on non-completion review replay');
               return responseJson({task:parent},200,headers);
             }
             if(parent.status==='running'&&parent.delegation?.state==='reviewing'){

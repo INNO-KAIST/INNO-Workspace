@@ -3,7 +3,7 @@
 - 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
 - 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP, Task3h 복구 UI·client·local proxy 연결 및 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
-- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. Task3l 복구 서비스 루프·스크립트 배선 검증 완료(기본0). Task3m 해시 확인 명시 전달 HTTP 검증 완료. Task3n 로컬 복구 UI 구현·독립 리뷰·실제 브라우저 검증 완료. 전체1010건 중1009통과/0실패/기존symlink1skip. 이후 legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화는 2026-10-01 승인·PRD 반영 완료. CONTEXT-EFFICIENCY-IMPLEMENTATION.md Stage1 공통 조립/제공자 연결 검증 완료. Stage2A 범위 제한 원문 조회 검증 완료. Stage2B1 재개 상태 저장·출처 검증 완료. 다음 Stage2B2 일반 결과 저장·실제 제공자별 조회 연결 및 문맥 선택.
+- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. Task3l 복구 서비스 루프·스크립트 배선 검증 완료(기본0). Task3m 해시 확인 명시 전달 HTTP 검증 완료. Task3n 로컬 복구 UI 구현·독립 리뷰·실제 브라우저 검증 완료. 전체1010건 중1009통과/0실패/기존symlink1skip. 이후 legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화는 2026-10-01 승인·PRD 반영 완료. CONTEXT-EFFICIENCY-IMPLEMENTATION.md Stage1 공통 조립/제공자 연결 검증 완료. Stage2A 범위 제한 원문 조회 검증 완료. Stage2B1 재개 상태 저장·출처 검증 완료. Stage2B2 일반 결과 전달·저장 연결 검증 완료. 다음 실제 제공자별 조회 연결 및 문맥 선택.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -718,3 +718,11 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - read_task_context basis/resume선택자를기존scope/version검증아래추가. basis만 optionalmessageCount를받고irrelevantslice인자는거절한다. resume는검증상태와bounded미처리정보를준다. 기존parent/review권한확대없음.
 - 검증: core7/7, author통합27/27, 독립25/25. 최종전체1051중1050pass/0fail/기존Windows symlink1skip(.inno/tmp/ctx-stage2b1-full.log). 기존Wranglerdry-run 및diff검증통과. 실제AI/운영DB/배포없음.
 - 다음: 일반runner결과와finishExecution/receipt/outbox에상태전달, managedCodex의실행범위로컬원문조회와Claudecallback안내/실제지원경로검증, 유효상태+미처리원문을이용한문맥선택. 최초oversize와불완전·stale상태도안전하게처리해야한다. 현재prompt는역사를생략하지않으며CR005전체완료아님. SRCjournal/legacy/unknownowner및CR004잔여유지.
+
+### 2026-10-01 CR-005 Stage2B2 일반 결과 전달·완료 저장 연결
+- Codex structured output의optional resumeState 객체/null/생략을검증·구분하여runner→실제FileOutbox pending.input→완료요청으로그대로전달한다. task/executionbinding검사, 무효상태를plaintext로조용히버리지않음. receipt스키마/기본0gate변경없으며payload해시에상태포함.
+- local/D1 finishExecution은상태preserve/replace/delete를기존owner/CAS/result/artifact/usage/receipt 원자저장과함께반영한다. 완료assistant메시지는기존basis가처리했다고조작하지않고미처리로남긴다. MCP완료상태저장지원·최소ack, 완료후동일state재호출만허용하며변경은거절. v0desktopreplay도동일규칙적용.
+- 미지원handoff/delegation/nonpassreview 및retry/waiting_user재전송에state를동반하면sideeffect전거절한다. 독립리뷰P1(allpass로꾸민noncompletionreplay가state를버리고success)과P2(nonpassreview검사가artifact처리뒤)는guard/검증순서와회귀로해결.
+- 검증: producer65/65(신규7), store/HTTP52/52(신규17), 독립29/29. 합성CLI·실제파일을사용한응답유실후브리지재생성재전송에서state/null/omitted보존·runner재실행0 확인. 이신규시험은별도OS프로세스강제종료시험이아니다. actualHTTP/receipt변경409/CAS실패부분반영없음도검증.
+- 최종전체1075중1074pass/0fail/기존Windows symlink1skip(.inno/tmp/ctx-stage2b2-full.log), 기존Wranglerdry-run/diff통과. 실제AI/운영DB/배포없음.
+- 다음 실제managedCodex의실행범위로컬원문조회, Claude callback안내, normal결과와함께재개상태생성, 검증된상태+미처리원문선택및최초oversizebootstrap을연결한다. 현재자동문맥압축·기록생성·history생략은아직없음. 기존SRCjournal/legacy/unknownowner와CR004별도잔여유지.
