@@ -3,7 +3,7 @@
 - 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
 - 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP, Task3h 복구 UI·client·local proxy 연결 및 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
-- 다음: 남은 임시파일·legacy outbox의 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
+- 다음: Task3i 임시파일 복구 helper 검증 완료. 전용 복구 잠금·서비스/UI 연결, legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -635,3 +635,9 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - UI 초기RED는module-not-found이며행동RED증거아님. 실제추가안전회귀4개가실패후수정됨: version변경중busy영구유지, 잘못된목록/응답, 목록DOM보존등. UI최종10/10, client/proxy구현60/60, 독립A인접47/47 및최종UI/client/proxy26/26. 최종전체901/901(.inno/tmp/task3h-full.log), Worker dry-run(.inno/tmp/task3h-dry-run.log),구문/diff검사통과.
 - 실제C UA in-app browser에서 real Worker/TestD1 in-memory/localproxy/public UI를 연결한127.0.0.1임시화면검증. desktop 및390x844 viewport, 목록선택, 체크1개일때폐기비활성, Escape취소및focus복귀, 재열기체크초기화, 체크2개후검증용예약해제/성공문구/버전3유지확인. 실제휴대폰하드웨어·클라우드배포검증은아님. 임시viewport복원·탭닫기·식별된검증용Node종료·fixture파일삭제완료.
 - 운영/유료API/실제AI/운영DB변경없음. 새기능기본비활성, 미배포. 다음은 orphan tmp/legacy명시복구 및결과저장실패후재시작차단보장, 최종활성화/릴리스검증. 전체goal active, CR004/005승인대기유지.
+### 2026-10-01 SRC02/06 Task3i 임시파일 복구 helper
+- 고정 pending/.tmp 경로에서 최대1MiB+1 읽기, regular-file/UTF-8/부모 경로·파일 정체성·해시 검사. 조회는 원문 없는 상태·검증된 owner/binding만 반환한다. legacy는 진단만 가능하다.
+- 명시 확인·예상 해시·호출자 배타 잠금 필수. 일치하는 pending/ack_pending 조합만 flush→close1회→재검사→rename으로 승격한다. orphan ACK·손상·다른 결과는 보존하며 거절한다. rename 후 잠금 해제 실패는 성공+recoveryLockUncertain으로 구분한다. 자동 삭제/TTL/백업 누적 없음.
+- 메인 검토에서 BOM 자동 제거로 기존 FileOutbox가 읽지 못하는 파일을 승격하는 문제를 발견했다. 실제 RED 후 ignoreBOM:true로 파싱 거절, 양 파일 보존 회귀 통과. NUL 경로 의심은 독립 재현으로 철회하여 불필요한 변경 없음.
+- 최종 전체918건:917통과/0실패/1skip(.inno/tmp/task3i-full.log). 최종 대상53통과/1skip, 독립 최초33통과/1skip 및 BOM 추가1/1, 구문/diff 통과. 실제 자식 프로세스 재시작·flush/close/rename 실패 포함. Windows 실제 symlink 생성은 EPERM으로 skip; 주입 unsafe-file 검사에서는 원문 open0 확인.
+- 외부 편집자에 대한 완전 CAS, 전체 Windows reparse 방어, 전원상실 rename 내구성은 보장하지 않는다. helper만 내부 완료이며 서비스/UI/legacy 채택/영속 claim journal 미완료. 기본 protocol0, 실제AI/운영DB/배포 없음. CR004/005 승인 대기, 전체 목표 active.
