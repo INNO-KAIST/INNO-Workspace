@@ -2,8 +2,8 @@
 ## 현재 재개 지점 (2026-10-01)
 - 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
-- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제와 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
-- 다음: 내부 예약 해제의 HTTP·사용자 확인 연결, 남은 임시파일·legacy outbox의 명시 복구 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
+- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP 연결과 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
+- 다음: 예약 복구의 사용자 확인 UI·클라이언트·로컬 프록시 연결, 남은 임시파일·legacy outbox의 명시 복구 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -622,3 +622,9 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 신규 delivery-lifecycle.test는 createWorker+TestD1+createCloudRequest+실제 FileOutbox+DesktopBridge를 연결한다. 정상 complete/ACK 정리, 수락 응답 유실 후 후속 메시지 보존 재전송, ACK 응답 유실 후 ACK만 재시도, 작업실 교체 시 pending 보존·원DB 재연결 4/4. 새 모델 조회/claim/AI 재실행 없이 drain됨을 검증했다. fixture 파일만 비재귀 정리한다.
 - 최종 전체 Node 856/856(.inno/tmp/task3f-lifecycle-full.log), 독립 검토 결함 없음, git diff --check 통과. 실제 네트워크/AI/운영DB/스키마 변경 없음. 테스트 SQLite와 in-process Worker 증거이며 실제 Cloudflare 장애 복구 보장을 의미하지 않는다.
 - 다음은 복구 API/사용자 확인·임시파일/legacy 명시 복구·실제 script 활성화와 릴리스 검증이다. default protocol0 유지, 운영 미배포. CR004/CR005 승인 대기 및 전체 목표 active 유지.
+### 2026-10-01 SRC02/06 Task3g 인증된 예약 조회·명시 폐기 경로
+- POST desktop/:task/reservations와 /discard를 내부 protocol1 gate에 연결했다. 인증·정확한 version/workspace header가 필요하며 새 경로는 기존 workspace metadata만 읽고 missing/손상을 거절한다. 조회·거절은 쓰기0, catalog/report/claim/dispatch 미진입. default/exported0과 기존 legacy 경로 유지.
+- 목록은 정확한 input/expectedVersion/afterKey를 검증하고 최대1025행 SELECT로1024초과를 거절한다. 전체6필드/workspace/hash검증 후 해당task만50개 keycursor페이지로 반환한다. 페이지 고정스냅샷 보장없으며 폐기는별도CAS. 1024개 Node로컬wall 약41ms는Cloudflare CPU/무료구간성능증거가 아니다.
+- 독립리뷰에서 header A 확인후본문읽기중 DB B 전환+B본문이면 discard가 B예약을지울수있음을재현했다. ACK에도동일원인. 두분기의 body.workspaceId와최초desktopWorkspaceId를결합해수정하고 recovery identity UUID검사도body전에강제했다. RED재현 후신규3회귀통과, 미해결리뷰없음.
+- 최초 새HTTP RED1/14→기능구현16/16, 전체872/872(.inno/tmp/task3g-full.log)는위경합보강전검증. 최종보강후 구현자·독립관련58/58, 메인최종변경/통합57/57(.inno/tmp/task3g-final-main.log), Worker dry-run(.inno/tmp/task3g-final-dry-run.log), diff검사통과. 불필요한전체검사반복은하지않았다.
+- 운영/실제AI/외부HTTP/스키마변경없음. 사용자UI·client headers·local proxy·CORS연결은아직미구현이며독립읽기감사결과를기존계획에저장했다. 로컬/다른기기의결과존재를서버가증명할수없으므로해제확인과pending차단은다음연결에필수. 임시파일/legacy복구와활성화도남아있다. 전체goal active; CR004/CR005승인대기.

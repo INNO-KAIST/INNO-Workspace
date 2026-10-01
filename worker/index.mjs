@@ -25,6 +25,7 @@ import {workspaceIdentity} from './workspace-identity.mjs';
 import {createDeliveryReceipt} from '../public/core/delivery-receipt.mjs';
 import {readDeliveryReceipt} from './delivery-receipts.mjs';
 import {releaseDeliveryReceipt} from './delivery-ack.mjs';
+import {listDeliveryReservations,releaseDeliveryReservation} from './delivery-recovery.mjs';
 
 const ROUTINE_BETA = 'experimental-cc-routine-2026-04-01';
 
@@ -187,17 +188,19 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
         }
         const {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement}=runtime(env,context);
         const capabilities = {sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,reviewObservationRecovery:true,cloudCodex: true, localCodex: false, claudeRoutine: hasRoutine, cloud: true, connected: true};
-        const bridgeMatch=pathname.match(/^\/api\/desktop\/([^/]+)\/(start|renew|complete|fail|ack)$/);
+        const bridgeMatch=pathname.match(/^\/api\/desktop\/([^/]+)\/(start|renew|complete|fail|ack|reservations|discard)$/);
+        const recoveryRoute=bridgeMatch&&['reservations','discard'].includes(bridgeMatch[2]);
         const receiptHeader=request.headers.get('x-inno-delivery-receipt-version');
         const receiptRequested=request.headers.has('x-inno-delivery-receipt-version');
-        if(receiptRequested&&(deliveryReceiptVersion!==1||receiptHeader!=='1'||request.method!=='POST'||(pathname!=='/api/desktop/poll'&&(!bridgeMatch||!['start','complete','fail','ack'].includes(bridgeMatch[2])))))
+        if(receiptRequested&&(deliveryReceiptVersion!==1||receiptHeader!=='1'||request.method!=='POST'||(pathname!=='/api/desktop/poll'&&(!bridgeMatch||!['start','complete','fail','ack','reservations','discard'].includes(bridgeMatch[2])))))
           throw new ValidationError('Desktop delivery receipt version is not enabled for this route');
         if(receiptRequested&&!request.headers.has('x-inno-workspace-id'))throw new ValidationError('Workspace identity is required for desktop delivery receipt');
-        if(bridgeMatch?.[2]==='ack'&&!receiptRequested)throw new ValidationError('Desktop delivery acknowledgment requires version 1');
+        if((bridgeMatch?.[2]==='ack'||recoveryRoute)&&!receiptRequested)throw new ValidationError('Desktop delivery acknowledgment requires version 1');
         const claimOptions=receiptRequested?{deliveryReceiptVersion:1,workspaceId:request.headers.get('x-inno-workspace-id')}:undefined;
         const claimConfirmation=receiptRequested?{deliveryReceiptVersion:1}:{};
         const desktopMutation=request.method==='POST'&&(pathname==='/api/desktop/poll'||Boolean(bridgeMatch));
-        const desktopWorkspaceId=desktopMutation?await workspaceIdentity(store.db):undefined;
+        const desktopWorkspaceId=desktopMutation?(recoveryRoute?(await store.db.prepare("SELECT value FROM metadata WHERE key='desktop_workspace_id'").first())?.value:await workspaceIdentity(store.db)):undefined;
+        if(recoveryRoute&&(typeof desktopWorkspaceId!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(desktopWorkspaceId)))throw new ConflictError('Workspace identity is missing or invalid');
         if(desktopMutation&&request.headers.has('x-inno-workspace-id')&&request.headers.get('x-inno-workspace-id')!==desktopWorkspaceId)
           throw new ConflictError('Workspace identity mismatch');
 
@@ -256,8 +259,15 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
         }
         if(request.method==='POST'&&bridgeMatch){
           const id=decodeURIComponent(bridgeMatch[1]), input=await body(request);
+          if(bridgeMatch[2]==='reservations')return responseJson(await listDeliveryReservations(store.db,id,input,desktopWorkspaceId),200,headers);
+          if(bridgeMatch[2]==='discard'){
+            if(input?.reservation?.taskId!==id)throw new ConflictError('Desktop reservation discard task mismatch');
+            if(input.reservation.workspaceId!==desktopWorkspaceId)throw new ConflictError('Desktop reservation discard workspace mismatch');
+            return responseJson(await releaseDeliveryReservation(store.db,input),200,headers);
+          }
           if(bridgeMatch[2]==='ack'){
             if(input?.receipt?.taskId!==id)throw new ConflictError('Desktop delivery acknowledgment task mismatch');
+            if(input.receipt.workspaceId!==desktopWorkspaceId)throw new ConflictError('Desktop delivery acknowledgment workspace mismatch');
             return responseJson(await releaseDeliveryReceipt(store.db,input.receipt),200,headers);
           }
           const deliveryReceipt=receiptRequested&&['complete','fail'].includes(bridgeMatch[2])?await createDeliveryReceipt({workspaceId:desktopWorkspaceId,taskId:id,action:bridgeMatch[2],input}):undefined;

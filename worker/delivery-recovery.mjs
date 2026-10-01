@@ -7,13 +7,17 @@ const UUID=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}
 const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).length===keys.length&&keys.every(key=>Object.hasOwn(value,key));
 const positive=value=>Number.isSafeInteger(value)&&value>0;
 const identifier=value=>typeof value==='string'&&!!value.trim()&&value.length<=200;
-function checkedInput(input){
- if(!exact(input,['reservation','expectedVersion','confirmDiscard'])||input.confirmDiscard!==true||!positive(input.expectedVersion)||!exact(input.reservation,FIELDS))throw new ValidationError('Explicit desktop reservation discard confirmation is required');
- // Copy every primitive before the first asynchronous key or database operation.
- const reservation=Object.fromEntries(FIELDS.map(field=>[field,input.reservation[field]])),expectedVersion=input.expectedVersion;
+function checkedReservation(value){
+ if(!exact(value,FIELDS))throw new ValidationError('Invalid desktop delivery reservation');
+ const reservation=Object.fromEntries(FIELDS.map(field=>[field,value[field]]));
  const time=typeof reservation.claimedAt==='string'?Date.parse(reservation.claimedAt):NaN;
  if(reservation.version!==1||typeof reservation.workspaceId!=='string'||!UUID.test(reservation.workspaceId)||!identifier(reservation.taskId)||!identifier(reservation.executionId)||!positive(reservation.generation)||!Number.isFinite(time)||new Date(time).toISOString()!==reservation.claimedAt)throw new ValidationError('Invalid desktop delivery reservation');
- return {reservation,expectedVersion};
+ return reservation;
+}
+function checkedInput(input){
+ if(!exact(input,['reservation','expectedVersion','confirmDiscard'])||input.confirmDiscard!==true||!positive(input.expectedVersion))throw new ValidationError('Explicit desktop reservation discard confirmation is required');
+ // Copy every primitive before the first asynchronous key or database operation.
+ return {reservation:checkedReservation(input.reservation),expectedVersion:input.expectedVersion};
 }
 const conflict=message=>new ConflictError(message);
 const parse=(raw,label)=>{try{return JSON.parse(raw);}catch{throw conflict('Invalid stored '+label);}};
@@ -53,4 +57,30 @@ export async function releaseDeliveryReservation(db,input){
  if(after.task.body!==before.task.body||after.task.version!==before.task.version)throw conflict('Desktop reservation task changed during discard');
  if(!after.row)return missing();
  throw conflict(after.row.value!==before.row.value?'Desktop delivery reservation changed during discard':'Desktop delivery reservation could not be released');
+}
+
+// A bounded, read-only page, not a snapshot across requests. Every discard still
+// needs its own explicit confirmation and current task/version CAS checks.
+export async function listDeliveryReservations(db,taskId,input,workspaceId){
+ if(!identifier(taskId)||typeof workspaceId!=='string'||!UUID.test(workspaceId)
+  ||!input||typeof input!=='object'||Array.isArray(input)
+  ||!exact(input,Object.hasOwn(input,'afterKey')?['expectedVersion','afterKey']:['expectedVersion'])
+  ||!positive(input.expectedVersion)
+  ||Object.hasOwn(input,'afterKey')&&(typeof input.afterKey!=='string'||!/^desktop_reservation:[0-9a-f]{64}$/.test(input.afterKey)))throw new ValidationError('Invalid desktop reservation listing request');
+ const expectedVersion=input.expectedVersion,afterKey=input.afterKey;
+ if((await db.prepare("SELECT value FROM metadata WHERE key='desktop_workspace_id'").first())?.value!==workspaceId)throw conflict('Desktop reservation workspace mismatch');
+ const task=await db.prepare('SELECT id,version,body FROM tasks WHERE id=?1').bind(taskId).first();
+ if(!task||typeof task.body!=='string')throw conflict('Desktop reservation task is missing');
+ const body=parse(task.body,'desktop reservation task');
+ if(!body||typeof body!=='object'||Array.isArray(body)||task.id!==taskId||body.id!==task.id||task.version!==expectedVersion||body.version!==task.version||!TASK_STATUSES.includes(body.status))throw conflict('Desktop reservation task changed or is invalid');
+ const rows=(await db.prepare("SELECT key,value FROM metadata WHERE key GLOB 'desktop_reservation:*' ORDER BY key LIMIT 1025").all()).results;
+ if(!Array.isArray(rows)||rows.length>1024)throw conflict('Desktop delivery reservation listing limit exceeded');
+ const matches=[];
+ for(const row of rows){
+  let reservation;try{reservation=checkedReservation(parse(row.value,'desktop delivery reservation'));}catch{throw conflict('Invalid stored desktop delivery reservation');}
+  if(reservation.workspaceId!==workspaceId||row.key!==await reservationKey(reservation))throw conflict('Desktop delivery reservation identity mismatch');
+  if(reservation.taskId===taskId&&(afterKey===undefined||row.key>afterKey))matches.push({key:row.key,reservation});
+ }
+ const page=matches.slice(0,50);
+ return {reservations:page.map(row=>row.reservation),nextAfterKey:matches.length>50?page.at(-1).key:null,taskVersion:expectedVersion,workspaceId};
 }
