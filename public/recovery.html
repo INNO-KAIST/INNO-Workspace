@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#173a39">
+  <title>로컬 결과 복구 · INNO Workspace</title>
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./recovery.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="page-head">
+      <p class="eyebrow">INNO WORKSPACE · 이 기기</p>
+      <h1>로컬 결과 복구</h1>
+      <p>이 기기에 저장된 결과의 상태를 확인하고 필요한 작업을 직접 선택하세요. 상태 확인이나 복구 작업이 자동 실행을 재개하지는 않습니다.</p>
+    </header>
+    <section class="card" aria-labelledby="status-heading">
+      <div class="section-head">
+        <div><p class="eyebrow">LOCAL STATUS</p><h2 id="status-heading">현재 상태</h2></div>
+        <button id="refresh" type="button">상태 확인</button>
+      </div>
+      <p id="message" class="message" role="status" aria-live="polite">상태를 확인하려면 버튼을 누르세요.</p>
+      <p id="error" class="error" role="alert" aria-live="assertive"></p>
+      <dl id="runtime" class="facts"></dl>
+    </section>
+    <section class="card" aria-labelledby="files-heading">
+      <p class="eyebrow">SAVED FILES</p><h2 id="files-heading">저장된 파일</h2>
+      <p class="support">표시되는 내용은 상태와 식별 정보뿐입니다. 저장된 결과 본문은 이 화면에 표시하지 않습니다.</p>
+      <div class="file-grid">
+        <article aria-labelledby="pending-heading"><h3 id="pending-heading">전달 대기 결과</h3><dl id="pending" class="facts"></dl></article>
+        <article aria-labelledby="temporary-heading"><h3 id="temporary-heading">임시 파일</h3><dl id="temporary" class="facts"></dl></article>
+      </div>
+    </section>
+    <section class="card" aria-labelledby="actions-heading">
+      <p class="eyebrow">RECOVERY</p><h2 id="actions-heading">직접 복구</h2>
+      <div class="action">
+        <h3>임시 파일 반영</h3>
+        <p>확인한 임시 파일을 전달 대기 결과로 반영합니다. 현재 상태를 다시 확인한 뒤 선택하세요.</p>
+        <label><input id="confirm-promote" type="checkbox" disabled> 표시된 임시 파일을 반영하겠습니다.</label>
+        <button id="promote" type="button" disabled>임시 파일 반영</button>
+      </div>
+      <div class="action">
+        <h3>저장 결과 전달</h3>
+        <p>전달 대기 결과만 보냅니다. 작업을 새로 시작하지 않습니다.</p>
+        <label><input id="confirm-drain" type="checkbox" disabled> 표시된 저장 결과를 전달하겠습니다.</label>
+        <button id="drain" type="button" disabled>저장 결과 전달</button>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="./recovery.mjs"></script>
+</body>
+</html>

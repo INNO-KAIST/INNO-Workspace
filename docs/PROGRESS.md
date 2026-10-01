@@ -3,7 +3,7 @@
 - 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
 - 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP, Task3h 복구 UI·client·local proxy 연결 및 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
-- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. Task3l 복구 서비스 루프·스크립트 배선 검증 완료(기본0). Task3m 해시 확인 명시 전달 HTTP 검증 완료. Task3n 로컬 복구 UI 진행 중(A controller24/24+독립검증 완료, B 페이지/스타일/링크 작성 중). 이후 legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
+- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. Task3l 복구 서비스 루프·스크립트 배선 검증 완료(기본0). Task3m 해시 확인 명시 전달 HTTP 검증 완료. Task3n 로컬 복구 UI 구현·독립 리뷰·실제 브라우저 검증 완료. 전체1010건 중1009통과/0실패/기존symlink1skip. 이후 legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -676,3 +676,16 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 기본 RED 후21/21 및 독립21/21. 독립 리뷰에서 onChange busy 알림 중 dispose 재진입 후에도 요청 시작되는 결함을 재현했다. active guard 추가와 refresh/promote/drain3개 RED→GREEN 후 최종24/24, 독립 해당3/3 통과(.inno/tmp/task3n-controller-final.log).
 - B의 recovery.html/recovery.mjs/recovery.css/private 접속링크 및 실제 브라우저 통합은 진행 중이다. 전체 suite는 A/B 통합 동결 후1회 실행할 예정이며 이번에 완료했다고 주장하지 않는다.
 - 브라우저용 임시 fixture .inno/tmp/recovery-page-preview.mjs를 준비했다. 합성 데이터만 사용하는 Node 서버가127.0.0.1:54169에서 실행 중(tool session86794). 다음 작업에서 실제 프로세스 생존을 먼저 확인하고 중복 시작하지 말 것. 검증 후 탭/viewport/서버/자체 fixture를 정리할 것. 실제AI/운영DB/배포없음, 기본protocol0 유지.
+
+### Task3n 통합 대기 중 — 재시작 hook 재검토
+- 현 bridge의 검증된 readBinding 이후/claimRequest 이전 intent 영속화, verifyClaim/workspace확인 이후/execute 이전 owner 영속화가 필요하다. 각 write 실패는 원격요청 또는 runner 진입을 막고, owner write await 후에도 stopped/paused/unsafe를 다시 확인해야 한다.
+- 최초 exact-wire outbox.write 성공 후 binding/owner 일치 확인이 journal 정리 후보 경계다. deliver/drain/empty outbox만으로 unknown 또는 불일치 journal을 지우지 않는다. 단일 소형 journal+tmp schema와 명시 해제 계약은 다음 구현에서 구체화한다.
+- unknown poll 응답 유실은 기존 task별 예약조회만으로 자동 해제할 수 없다는 제한을 유지한다. 이번 감사는 읽기 전용이며 새 서버 attempt 프로토콜을 추가하지 않았다.
+
+### 2026-10-01 SRC02/05/06 Task3n 로컬 복구 화면 통합
+- 독립 recovery.html/mjs/css, 외부 폰트 없는 반응형 화면, 안전 metadata textContent, 명시 조회와 별도 확인, mutation 후 snapshot 초기화 및 상태 확인 버튼 focus를 구현했다. private DESKTOP-ACCESS 복구 링크는 protocol1일 때만 생성하며 실제 constant0 유지.
+- 실제 브라우저에서 sourceDelegationVersion과 복구 capability를 혼동해 버튼이 비활성화되는 결함을 발견·수정했다. 복구 gate는 capability를 사용하며 snapshot이 있으면 검사 완료로 표시한다. 독립 리뷰 잔여 finding 없음; 독립 controller24/24.
+- 합성 로컬 fixture에서 explicit refresh→임시 반영→snapshot/확인 초기화→refresh→저장 결과 전달→refresh 후 양쪽 파일 없음·pause 유지 확인. token fragment 제거, 결과 원문 비노출, mutation 후 refresh focus 확인. 390x844 및1280x900에서 가로 넘침 없음, 확인 label44px. 모바일은 브라우저 viewport 검증이며 실제 휴대폰 하드웨어 검증은 아니다.
+- 전체1010건 중1009통과/0실패/기존Windows symlink권한1skip(.inno/tmp/task3n-full.log), renderer/script node --check 및 git diff --check 통과. 운영 AI/DB 호출 없음.
+- 미리보기 프로세스27376 종료, 탭 닫기·viewport reset, 자체 fixture폴더/스크립트 정리 완료. 위 이전 기록의 session86794/포트54169는 더 이상 실행 중이 아니다.
+- 다음: 영속 claim journal/unknown owner 및 legacy 결과 명시 복구 계약·구현·실제 재시작 검증 후 활성화. protocol0 유지, 배포 없음. CR004/005 승인 대기; 전체 목표 미완료.

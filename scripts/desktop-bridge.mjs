@@ -44,7 +44,7 @@ if(!existsSync(localTokenPath))writeFileSync(localTokenPath,randomBytes(32).toSt
 const localToken=readFileSync(localTokenPath,'utf8').trim();
 const desktopServer=createDesktopServer({deliveryReceiptVersion,outboxRecovery,token:localToken,publicDir:path.join(root,'public'),request,bridge,readDeliveryBinding,runStorage:new RunStorage(path.join(privateDir,'desktop-runs')),localRecords:new LocalRecords(path.join(privateDir,'tasks.sqlite'))});
 try{await new Promise((resolve,reject)=>{desktopServer.once('error',reject);desktopServer.listen(4175,'127.0.0.1',resolve);});}catch(e){await lock.close();const message=startupPortMessage(e);if(!message)throw e;console.error(message);process.exit(1);}
-writeFileSync(path.join(privateDir,'DESKTOP-ACCESS.md'),'# Desktop cloud workspace\n\n[Open desktop cloud workspace](http://127.0.0.1:4175/#token='+encodeURIComponent(localToken)+')\n\nThis private link opens the same cloud tasks and reads selected sources locally. Do not share it.\n');
+writeFileSync(path.join(privateDir,'DESKTOP-ACCESS.md'),'# Desktop cloud workspace\n\n[Open desktop cloud workspace](http://127.0.0.1:4175/#token='+encodeURIComponent(localToken)+')\n\n'+(deliveryReceiptVersion===1?'[Open local result recovery](http://127.0.0.1:4175/recovery.html#token='+encodeURIComponent(localToken)+')\n\n':'')+'This private link opens the same cloud tasks and reads selected sources locally. Do not share it.\n');
 const shutdown=new AbortController();
 for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{shutdown.abort();bridge.stop();});
 console.log('Desktop source connection: open .inno/DESKTOP-ACCESS.md');
