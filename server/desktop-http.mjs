@@ -7,8 +7,8 @@ import path from 'node:path';
 import {checkedDeliveryBinding,deliveryBindingConflict} from './delivery-binding.mjs';
 const MIME={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json','.svg':'image/svg+xml','.webmanifest':'application/manifest+json'};
 const json=(res,status,data)=>{res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(data));};
-async function body(req){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>750000)throw Object.assign(Error('Request exceeds 750000 bytes'),{status:413});chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');}catch{throw Object.assign(Error('Invalid JSON'),{status:400});}}
-export function createDesktopServer({token,publicDir,request,bridge,localRecords,runStorage,readDeliveryBinding,deliveryReceiptVersion=0,outboxRecovery}){
+async function body(req,maxBytes=750000){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>maxBytes)throw Object.assign(Error('Request exceeds supported byte limit'),{status:413});chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');}catch{throw Object.assign(Error('Invalid JSON'),{status:400});}}
+export function createDesktopServer({token,publicDir,request,bridge,localRecords,runStorage,readDeliveryBinding,deliveryReceiptVersion=0,outboxRecovery,contextAccess}){
  if(typeof token!=='string'||token.length<24)throw Error('A strong local token is required');
  const localRecoveryEnabled=deliveryReceiptVersion===1&&typeof outboxRecovery?.inspect==='function'&&typeof outboxRecovery?.promote==='function';
  const localDrainEnabled=localRecoveryEnabled&&typeof outboxRecovery?.readPending==='function'&&typeof bridge?.drainPending==='function';
@@ -19,6 +19,19 @@ export function createDesktopServer({token,publicDir,request,bridge,localRecords
    if(!hosts.has(req.headers.host))return json(res,403,{error:'Invalid local host'});
    if(req.headers.origin&&req.headers.origin!==`http://${req.headers.host}`)return json(res,403,{error:'Cross-origin access is not allowed'});
    const url=new URL(req.url,`http://${req.headers.host}`),p=url.pathname;
+   // This exact read-only route uses an execution capability, never admin auth.
+   if(p==='/api/desktop/context'){
+    if(req.method!=='POST'||!contextAccess)return json(res,404,{error:'not found'});
+    if(url.search||req.url!==p)return json(res,400,{error:'Invalid local context endpoint'});
+    const authorization=/^Bearer ([A-Za-z0-9_-]{43})$/.exec(req.headers.authorization??'');
+    if(!authorization)return json(res,401,{error:'Local context access is unavailable'});
+    try{return json(res,200,await contextAccess.read(authorization[1],await body(req,4096)));}
+    catch(error){
+     const status=[400,401,409,413,429].includes(error?.statusCode??error?.status)?(error.statusCode??error.status):500;
+     const versionConflict=error?.code==='CONTEXT_VERSION_CONFLICT'&&Number.isSafeInteger(error.currentVersion)&&error.currentVersion>0;
+     return json(res,status,{error:'Local context read could not be completed',...(versionConflict?{code:'CONTEXT_VERSION_CONFLICT',currentVersion:error.currentVersion}:{})});
+    }
+   }
    if(p.startsWith('/api/')){
     const expected=Buffer.from('Bearer '+token),actual=Buffer.from(req.headers.authorization||'');
     if(actual.length!==expected.length||!timingSafeEqual(actual,expected))return json(res,401,{error:'unauthorized'});

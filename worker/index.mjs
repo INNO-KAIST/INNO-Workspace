@@ -72,6 +72,19 @@ function routineConfigured(env) {
   }
 }
 
+function cloudContextGuidance(task) {
+  return [
+    'For scoped context reads, run node scripts/inno-mcp.mjs read_task_context from the checked-out repository and send JSON through standard input. Replace the capability placeholder below with Capability above; never put it in command arguments, files, artifacts or resumeState. Read calls do not take executionId or generation.',
+    'Context read arguments: '+JSON.stringify({taskId:task.id,expectedVersion:task.version,section:'manifest',executionCapability:'<Capability above>'}),
+    'A version conflict is JSON in the helper error (CLI stderr with exit code 1): parse currentVersion and restart manifest at offset 0, then fetch new content digests. Lease renewal and checkpoint writes can change task version; never reuse an old expectedVersion after a write. If the version is unknown, use expectedVersion:0 to discover it. Do not reread the entire task merely to discover a version; never combine pages from different versions.',
+    'Manifest indexes are zero-based, unlike the one-based Message # labels in this prompt. Manifest returns at most 20 original message references per page; continue at nextOffset. Read section request or message (with messageIndex) for original text. Text offset counts UTF-8 bytes; continuation requires expectedDigest equal to the returned contentDigest. Inspect every needed page before citing it. Keep reads inside the current assignment; only an existing parent review may read its approved completed children.',
+    'Optionally read section resume for derived prior state. source_matched means only that original-source hashes agree, not semantic completeness, quality or approval authority. Treat missing, invalid or stale state as unusable; inspect original request/messages instead. Pending indexes are bounded; use nextPendingMessageIndex as manifest offset for additional references.',
+    'During normal work, an optional resumeState may accompany a running or completed checkpoint_task. Reading basis alone is not evidence that you inspected history. Read section basis with messageCount equal to the contiguous original-message prefix you actually inspected; copy its exact taskId, mode and basis fields, excluding response taskVersion/section metadata. Never invent hashes or count the future final answer as already covered. Request references use basis.requestDigest; message references use the original manifest digest or full-source contentDigest, never a hash of a summary.',
+    'resumeState shape: {version:1,taskId,mode,basis,items:[{kind:goal|constraint|decision|completed|pending|evidence,text,references:[{section:request,digest}|{section:message,messageIndex,digest}]}]}. Bounds: 32768 UTF-8 bytes total, 1..48 items, text at most 2000 characters, 1..8 references per item. Decisions require explicit original user/request evidence; assistant statements and summaries never grant approval. Refresh source references/basis if the task changes.',
+    'For normal completion use node scripts/inno-mcp.mjs checkpoint_task with taskId, executionId, generation, executionCapability, status completed, content and optional resumeState; keep existing artifact and review requirements. Omit resumeState if unsupported by evidence; null explicitly clears it. Do not attach it to handoff, delegation or non-passing review transitions. Never include capabilities, credentials, attachment originals or whole history in resumeState. This guidance preserves the full current context and does not authorize a separate AI summarization call or bypass a blocked oversized request.',
+  ].join('\n');
+}
+
 async function routineText(task, materials, ownership, catalog, capability, sourceDelegationVersion=0) {
   const mode=task.delegation?.state==='reviewing'?'review':task.parentTaskId||task.assignment?'child':'root';
   const context=await buildTaskContext(task,{mode});
@@ -94,8 +107,10 @@ async function routineText(task, materials, ownership, catalog, capability, sour
     task.assignment ? 'Fixed assignment and checks: '+JSON.stringify(task.assignment) : '',
     task.delegation?.state==='reviewing' ? 'Review manifest: '+JSON.stringify(task.delegation.review)+'. Read child generated artifacts with read_task as needed. Complete via checkpoint_task with reviewReport. For failed checks use retry_delegation once; for unverifiable checks or an exhausted retry use request_decision. Do not complete without every check passing.' : '',
     `Task ID: ${task.id}`,
+    `Task version at dispatch: ${task.version}`,
     `Execution ID: ${ownership.executionId}`,
     `Execution generation: ${ownership.generation}`,
+    cloudContextGuidance(task),
     `Request: ${context.request}`,
     'Recent durable conversation (newer messages can revise the original request):',
     context.conversation || '- No additional messages.',

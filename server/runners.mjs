@@ -1,3 +1,4 @@
+import {checkedContextUrl} from './context-access.mjs';
 import {buildTaskContext} from '../public/core/task-context.mjs';
 import {sanitizeResumeState} from '../public/core/context-resume.mjs';
 import {ContextRetrievalRequiredError} from '../public/core/context-errors.mjs';
@@ -32,7 +33,7 @@ const API_ENVIRONMENT_KEYS = new Set([
 ]);
 
 export function withoutApiEnvironment(processEnv = process.env) {
-  return Object.fromEntries(Object.entries(processEnv).filter(([key]) => !API_ENVIRONMENT_KEYS.has(key.toUpperCase())));
+  return Object.fromEntries(Object.entries(processEnv).filter(([key]) => !API_ENVIRONMENT_KEYS.has(key.toUpperCase())&&!key.toUpperCase().startsWith('INNO_CONTEXT_')));
 }
 
 function collectProcess(child, {input, signal, timeoutMs, onTimeout, onClose, stdoutCollector=createTailCollector(1024*1024)} = {}) {
@@ -99,6 +100,18 @@ function collectProcess(child, {input, signal, timeoutMs, onTimeout, onClose, st
   });
 }
 
+function localContextGuidance(task){
+  return [
+    'The desktop bridge provides read-only context for this immutable execution snapshot through a loopback helper. This is not remote MCP and cannot start AI work or read other tasks. Run the executable below with exactly the listed argument, using shell-appropriate quoting; pipe the JSON arguments through standard input. The helper reads its endpoint and scoped token from the execution environment. Never copy that token into prompts, arguments, files, artifacts or resumeState.',
+    'Context helper executable: '+JSON.stringify(process.execPath),
+    'Context helper arguments: '+JSON.stringify([fileURLToPath(new URL('../scripts/read-local-context.mjs',import.meta.url))]),
+    'Context read arguments: '+JSON.stringify({taskId:task.id,expectedVersion:task.version,section:'manifest'}),
+    'Use only this taskId and snapshot expectedVersion. Sections: manifest (offset is a zero-based message index; at most 20 references), request, message (requires zero-based messageIndex), checkpoint, basis, resume. Text offsets are UTF-8 bytes; maxBytes is 4..16000 and continuation requires expectedDigest from the full-source contentDigest. Prompt Message # labels are one-based. Source attachments and artifacts are not served. An expired capability, changed scope or exhausted read budget requires stopping and reporting the unavailable evidence; do not read arbitrary files or use another task to bypass it.',
+    'For optional resumeState in the normal final JSON, first read original request/messages and basis with messageCount equal to the contiguous prefix actually inspected. Copy only taskId, mode and basis from that response, not wrapper section/taskVersion. Reading basis is not proof of reading history. Never invent hashes or include the future final answer in covered history. Original request references use basis.requestDigest; message references use manifest digest or full-source contentDigest. Derived resume state marked source_matched proves source hashes only, never semantic completeness, quality or approval authority. Inspect pending original messages; invalid/stale state is unusable.',
+    'Optional resumeState shape: {version:1,taskId,mode,basis,items:[{kind:goal|constraint|decision|completed|pending|evidence,text,references:[{section:request,digest}|{section:message,messageIndex,digest}]}]}. At most 32768 UTF-8 bytes total, 1..48 items, text at most 2000 characters, 1..8 references each. Decisions require explicit original user/request evidence, not assistant statements. Omit resumeState when unsupported; null explicitly clears. Include it only with a normal completion, never a handoff, delegation or non-passing review. Do not copy credentials, attachment originals or whole history into it. Preserve the full current context; no separate AI summarization call or oversized-context bypass is authorized.',
+  ].join('\n');
+}
+
 async function taskPrompt(task, materials = [], ownership = {}) {
   const context=await buildTaskContext(task,{mode:ownership.mode??executionMode(task)});
   if(!context.complete)throw new ContextRetrievalRequiredError();
@@ -126,6 +139,7 @@ async function taskPrompt(task, materials = [], ownership = {}) {
     ownership.executionId && !ownership.managedDelivery && !ownership.evaluationBound ? 'The current execution is already claimed. Use the INNO MCP tools with this execution ID and generation for checkpoints, plans, and artifacts; do not claim it again.' : '',
     `Task type: ${task.type}`,
     `Task title: ${task.title}`,
+    ownership.contextGuidance || '',
     '',
     'User request:',
     context.request,
@@ -380,6 +394,8 @@ export function createCodexRunner({
   },
   ensureDirectory = directory => mkdirSync(directory, {recursive: true}),
   managedDelivery = false,
+  contextAccess,
+  contextUrl,
   sourceDelegationVersion = 0,
   mcpUrl,
   mcpToken,
@@ -397,6 +413,7 @@ export function createCodexRunner({
     models: async()=>{const catalog=await readCatalog();const models=modelCatalogRows(Array.isArray(catalog)?catalog:catalog?.models);return Array.isArray(catalog)?models:{models,observedAt:catalog?.observedAt??null,status:catalog?.status==='fresh'?'fresh':'unavailable'};},
     sourceDelegationVersion:sourceDelegationVersion===1?1:0,
     async run({task, materials = [], reviewInputs = [], executionId, generation, signal, executionBudgetVersion, sourceDelegationVersion:negotiatedSourceVersion=sourceDelegationVersion}) {
+      let contextLease;
       let deadline,processStartedMono=null,processClosedMono=null,rootProcessClosed=false,deadlineExceeded=false;
       const observation=()=>localExecutionObservation(processStartedMono,processClosedMono,{rootProcessClosed,deadlineExceeded});
       try {
@@ -414,6 +431,12 @@ export function createCodexRunner({
         assignedRoute=assignedCodexModel(task.assignment,models);
       }
       if(signal?.aborted)throw Object.assign(new Error('execution aborted'),{name:'AbortError'});
+      let contextGuidance='';
+      let localContextUrl;
+      if(managedDelivery&&!deadline&&contextAccess&&contextUrl){
+        localContextUrl=checkedContextUrl(typeof contextUrl==='function'?contextUrl():contextUrl);
+        contextGuidance=localContextGuidance(task);
+      }
       const executionDirectory = runDirectory({task, executionId, generation});
       ensureDirectory(executionDirectory);
       const handoffFiles=mode==='root'&&!deadline?await prepareHandoffInputs(task,executionDirectory):[];
@@ -452,7 +475,12 @@ export function createCodexRunner({
         '-',
       ];
       const modelPolicy=deadline?'EVALUATION BUDGET EXECUTION: Work directly in this process. Do not use MCP tools, native subagents, delegation, or provider handoff. Return only the assigned result.':mode==='child'?codexChildPolicy(task,assignedRoute):mode==='review'?codexReviewPolicy(task):managedDelivery?delegationRoutingPolicy(models,{sourceDelegationVersion:sourceContext?1:0}):routingPolicy(models);
-      const input=await taskPrompt(task, materials, {executionId, generation, managedDelivery, handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'});
+      const input=await taskPrompt(task, materials, {executionId, generation, managedDelivery, contextGuidance, handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'});
+      if(localContextUrl){
+        contextLease=contextAccess.open(task,signal);
+        runEnv.INNO_CONTEXT_URL=localContextUrl;
+        runEnv.INNO_CONTEXT_TOKEN=contextLease.token;
+      }
       const processStartedAt=now();
       if(deadline)remainingExecutionMs(deadline,processStartedAt,monotonicNow());
       const child = spawnProcess('codex', codexArgs, {
@@ -532,7 +560,7 @@ export function createCodexRunner({
       } catch(error) {
         if(task?.evaluationBudget)error.localExecution=observation();
         throw error;
-      }
+      } finally {contextLease?.revoke();}
     },
   };
 }

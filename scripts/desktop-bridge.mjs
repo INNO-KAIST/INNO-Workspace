@@ -1,3 +1,4 @@
+import {createContextAccess} from '../server/context-access.mjs';
 import {createModelCatalog} from '../server/model-routing.mjs';
 import {RunStorage} from '../server/run-storage.mjs';
 import {LocalRecords} from '../server/local-records.mjs';
@@ -34,7 +35,8 @@ if(process.platform==='win32'&&process.env.LOCALAPPDATA){
  }
 }
 const spawnCodex=(command,args,options)=>spawn(command==='codex'?codexCommand:command,args,options);
-const runner=createCodexRunner({spawnProcess:spawnCodex,modelCatalog:createModelCatalog({spawnProcess:spawnCodex,env:withoutApiEnvironment(),cwd:root}),cwd:path.join(privateDir,'desktop-runs'),managedDelivery:true,sourceDelegationVersion:sourceDelegationVersionFromEnvironment(process.env)});
+const contextAccess=createContextAccess();
+const runner=createCodexRunner({contextAccess,contextUrl:'http://127.0.0.1:4175/api/desktop/context',spawnProcess:spawnCodex,modelCatalog:createModelCatalog({spawnProcess:spawnCodex,env:withoutApiEnvironment(),cwd:root}),cwd:path.join(privateDir,'desktop-runs'),managedDelivery:true,sourceDelegationVersion:sourceDelegationVersionFromEnvironment(process.env)});
 let lock;try{lock=await acquireBridgeLock();}catch(error){const message=startupPortMessage(error);if(!message)throw error;console.error(message);process.exit(1);}
 const readDeliveryBinding=async()=>({origin:endpoint,workspaceId:(await request('/api/desktop/identity')).workspaceId});
 const bridge=createDesktopBridge({deliveryReceiptVersion,request,runner,outbox,readDeliveryBinding,beforeClaim:createDesktopReadiness({runner,runRoot:path.join(privateDir,'desktop-runs')}),onError:()=>console.error('INNO execution interrupted; saved results are retained.')});
@@ -42,11 +44,11 @@ const outboxRecovery=createOutboxRecovery(pendingPath,{withExclusive:work=>bridg
 const localTokenPath=path.join(privateDir,'desktop-access-token.txt');
 if(!existsSync(localTokenPath))writeFileSync(localTokenPath,randomBytes(32).toString('base64url'),{mode:0o600});
 const localToken=readFileSync(localTokenPath,'utf8').trim();
-const desktopServer=createDesktopServer({deliveryReceiptVersion,outboxRecovery,token:localToken,publicDir:path.join(root,'public'),request,bridge,readDeliveryBinding,runStorage:new RunStorage(path.join(privateDir,'desktop-runs')),localRecords:new LocalRecords(path.join(privateDir,'tasks.sqlite'))});
+const desktopServer=createDesktopServer({contextAccess,deliveryReceiptVersion,outboxRecovery,token:localToken,publicDir:path.join(root,'public'),request,bridge,readDeliveryBinding,runStorage:new RunStorage(path.join(privateDir,'desktop-runs')),localRecords:new LocalRecords(path.join(privateDir,'tasks.sqlite'))});
 try{await new Promise((resolve,reject)=>{desktopServer.once('error',reject);desktopServer.listen(4175,'127.0.0.1',resolve);});}catch(e){await lock.close();const message=startupPortMessage(e);if(!message)throw e;console.error(message);process.exit(1);}
 writeFileSync(path.join(privateDir,'DESKTOP-ACCESS.md'),'# Desktop cloud workspace\n\n[Open desktop cloud workspace](http://127.0.0.1:4175/#token='+encodeURIComponent(localToken)+')\n\n'+(deliveryReceiptVersion===1?'[Open local result recovery](http://127.0.0.1:4175/recovery.html#token='+encodeURIComponent(localToken)+')\n\n':'')+'This private link opens the same cloud tasks and reads selected sources locally. Do not share it.\n');
 const shutdown=new AbortController();
-for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{shutdown.abort();bridge.stop();});
+for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{shutdown.abort();contextAccess.close();bridge.stop();});
 console.log('Desktop source connection: open .inno/DESKTOP-ACCESS.md');
 console.log('INNO desktop bridge connected. One task at a time; Ctrl+C to stop.');
 try{
@@ -55,7 +57,7 @@ try{
   onError:()=>console.error('INNO delivery interrupted; saved results are retained. Review local desktop status.')
  });
 }finally{
- shutdown.abort();bridge.stop();
+ shutdown.abort();contextAccess.close();bridge.stop();
  try{await bridge.settled();}
  finally{
   try{await new Promise((resolve,reject)=>desktopServer.close(error=>error?reject(error):resolve()));}
