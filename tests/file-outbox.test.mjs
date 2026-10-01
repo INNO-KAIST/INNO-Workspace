@@ -71,3 +71,39 @@ test('invalid pending JSON fails closed and stays on disk',async t=>{
  assert.equal(requests,0);
  assert.equal(readFileSync(pending,'utf8'),'{invalid json');
 });
+
+import * as realFs from 'node:fs';
+test('outbox flushes and closes its exclusive temporary file before rename',t=>{
+ const pending=fixture(t),calls=[];
+ const fs={...realFs};for(const name of ['openSync','writeFileSync','fsyncSync','closeSync','renameSync'])fs[name]=(...args)=>{calls.push({name,args});return realFs[name](...args);};
+ const outbox=createFileOutbox(pending,{fs});outbox.write({phase:'pending',content:'original'});
+ assert.deepEqual(calls.map(c=>c.name),['openSync','writeFileSync','fsyncSync','closeSync','renameSync']);assert.deepEqual(calls[0].args,[pending+'.tmp','wx',0o600]);assert.equal(calls[1].args[0],calls[2].args[0]);assert.deepEqual(outbox.read(),{phase:'pending',content:'original'});assert.equal(existsSync(pending+'.tmp'),false);
+});
+for(const stage of ['writeFileSync','fsyncSync','closeSync','renameSync'])test(`${stage} failure keeps original pending and temporary evidence`,t=>{
+ const pending=fixture(t),original='{"phase":"pending","content":"original"}';writeFileSync(pending,original);
+ const fs={...realFs,[stage]:(...args)=>{if(stage==='writeFileSync')realFs.writeFileSync(args[0],'partial');if(stage==='closeSync')realFs.closeSync(args[0]);throw Error('injected '+stage);}};
+ const outbox=createFileOutbox(pending,{fs});assert.throws(()=>outbox.write({phase:'ack_pending',receipt:'saved'}),new RegExp('injected '+stage));assert.equal(readFileSync(pending,'utf8'),original);assert.equal(existsSync(pending+'.tmp'),true);
+ const debris=readFileSync(pending+'.tmp','utf8');const restarted=createFileOutbox(pending);for(const operation of [()=>restarted.read(),()=>restarted.write({other:true}),()=>restarted.clear()])assert.throws(operation,{code:'OUTBOX_RECOVERY_REQUIRED'});assert.equal(readFileSync(pending,'utf8'),original);assert.equal(readFileSync(pending+'.tmp','utf8'),debris);
+});
+test('orphan temporary files block all new work and survive read/write/clear without a pending file',async t=>{
+ const pending=fixture(t);writeFileSync(pending+'.tmp','{"phase":"pending","content":"not renamed"}');const outbox=createFileOutbox(pending);let calls=0;
+ const bridge=createDesktopBridge({outbox,request:async()=>{calls++;},runner:{run:()=>{calls++;}}});await assert.rejects(()=>bridge.tick(),{code:'OUTBOX_RECOVERY_REQUIRED'});
+ for(const operation of [()=>outbox.read(),()=>outbox.write({new:true}),()=>outbox.clear()])assert.throws(operation,{code:'OUTBOX_RECOVERY_REQUIRED'});assert.equal(calls,0);assert.equal(existsSync(pending),false);assert.equal(readFileSync(pending+'.tmp','utf8'),' {"phase":"pending","content":"not renamed"}'.trim());
+});
+test('write or flush error survives close failure without closing the descriptor twice',t=>{
+ for(const stage of ['writeFileSync','fsyncSync']){
+  const pending=fixture(t);writeFileSync(pending,'{"old":true}');let closes=0;
+  const fs={...realFs,[stage]:()=>{throw Error('first '+stage);},closeSync:fd=>{closes++;realFs.closeSync(fd);throw Error('secondary close');}};
+  assert.throws(()=>createFileOutbox(pending,{fs}).write({next:true}),new RegExp('first '+stage));assert.equal(closes,1);assert.equal(readFileSync(pending,'utf8'),'{"old":true}');assert.equal(existsSync(pending+'.tmp'),true);
+ }
+});
+test('JSON scalars and arrays on disk cannot masquerade as an empty outbox',async t=>{
+ for(const raw of ['null','false','0','""','[]']){
+  const pending=fixture(t);writeFileSync(pending,raw);let requests=0;
+  const bridge=createDesktopBridge({outbox:createFileOutbox(pending),request:async()=>{requests++;return {claim:null};},runner:{}});await assert.rejects(()=>bridge.tick(),{code:'OUTBOX_RECOVERY_REQUIRED'});assert.equal(requests,0);assert.equal(readFileSync(pending,'utf8'),raw);
+ }
+});
+test('invalid write shapes cannot replace a valid saved delivery or create temporary debris',t=>{
+ const pending=fixture(t),outbox=createFileOutbox(pending);outbox.write({taskId:'original'});
+ for(const value of [null,false,0,'',[],undefined]){assert.throws(()=>outbox.write(value),{code:'OUTBOX_RECOVERY_REQUIRED'});assert.deepEqual(outbox.read(),{taskId:'original'});assert.equal(existsSync(pending+'.tmp'),false);}
+});

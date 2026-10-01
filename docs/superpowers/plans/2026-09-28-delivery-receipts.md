@@ -67,3 +67,6 @@ Task3c implemented 2026-10-01: gated HTTP poll/start reservation negotiation and
 
 
 Task3d internal client phases implemented 2026-10-01: verified claim negotiation, exact-wire pending, validated payload-free ack_pending saved before ACK, verified release then clear, sticky unsafe admission stop. Renewal/stop outcomes are retained before errors. Mock outbox restart/failure tests pass; actual fsync/process restart/startup login-independent drain and no-result recovery remain. Final full809/809, target19/19, independent73/73 then final changed-scope53/53. Default off; no production activation.
+
+
+Task3e implemented 2026-10-01: exclusive temporary write, file fsync and one close before rename; unfinished temp and invalid scalar records fail closed without deleting evidence. Seven actual child-process restart boundaries passed; power-loss directory durability is not claimed. Production script gates CLI availability only before fresh claims, allowing pending/ACK drain without login. Final full830/830, independent file37/37 and startup39/39; protocol default0, no deployment. Task3 remains open for explicit no-result, temporary-file and legacy recovery before lifecycle integration/activation.

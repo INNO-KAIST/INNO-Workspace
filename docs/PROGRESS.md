@@ -2,8 +2,8 @@
 ## 현재 재개 지점 (2026-10-01)
 - 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
-- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. 실제 파일 내구성·startup 복구·운영 활성화는 미완료.
-- 다음: 실제 FileOutbox 저장/프로세스 재시작 및 startup 복구 → 통합·독립 검증 후 배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다.
+- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. 운영 활성화는 미완료.
+- 다음: 결과 없는 예약·남은 임시파일·legacy outbox의 명시 복구 → 전체 lifecycle 통합 검증 → 운영 활성화·배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -609,3 +609,9 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 독립 검토에서 null 응답이 검증 전 destructuring을 통해 latch를 우회하는 결함을 찾아 수정했다. 최종 대상19/19, 최종 전체809/809 (.inno/tmp/task3d-client-final-full.log), 메인19/19, 독립 최초73/73 및 수정후 관련53/53, diff 통과.
 - 검증은 mock outbox의 실패·새 인스턴스 재개를 포함한다. 실제 FileOutbox flush와 별도 프로세스 재시작, 로그인과 독립적인 startup drain, no-result 명시 복구는 다음 단계다. Worker 코드 변경 없어 이번에는 dry-run을 반복하지 않았다. 프로덕션 옵션/스크립트 변경·배포·실제 AI 없음.
 - CR-005 설계 승인 질문은 계속 대기; 자동 목표 재개를 승인 응답으로 해석하지 않는다. 기존 승인 범위의 복구 작업은 계속 가능하다.
+### 2026-10-01 SRC02/06 Task3e 실제 파일 재시작·시작 검사 분리
+- FileOutbox는 배타적 tmp 생성 → write → fsync → close → rename으로 저장한다. write/flush/close/rename 실패는 기존 pending 및 tmp를 보존하며, tmp가 남으면 read/write/clear를 차단해 명시 복구를 요구한다. JSON scalar/배열을 빈 outbox로 오인하지 않도록 거절한다.
+- 실제 자식 프로세스 종료·재시작 7개 경계에서 pending/ack_pending 보존을 검증했다. ack_pending 재개는 결과 POST·새 claim·AI 재실행 없이 ACK만 전송한다. 합성 HTTP이며 실제 AI·운영 DB 호출은 없다. Windows 전원 상실 시 디렉터리 rename 내구성은 입증하지 않았다.
+- 실제 desktop script의 선행 runner.available 검사를 beforeClaim helper로 옮겼다. 저장된 결과·ACK 정리는 로그인 여부와 독립적이며, 새 claim에는 저장 공간과 CLI 가용성 검사를 적용한다. 기본 receipt protocol 0을 유지한다.
+- 구현 대상 37/37 및 readiness 인접 46/46; 독립 파일 37/37·startup 39/39, 미해결 리뷰 결함 없음. 최종 통합 Node 830/830 (.inno/tmp/task3e-final-full.log), script 구문 및 git diff --check 통과. 최종 전체 검사 이후 제품 코드 변경 없음.
+- 내부 개발 완료이며 운영 미배포. Task3 전체와 Task4는 미완료: no-result 예약, tmp/legacy 명시 복구, 실제 Worker lifecycle 통합과 활성화 필요. CR004/CR005 승인 대기 상태 유지. 전체 목표 active.

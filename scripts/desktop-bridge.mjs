@@ -4,12 +4,13 @@ import {LocalRecords} from '../server/local-records.mjs';
 import {spawn} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
 import {createDesktopServer} from '../server/desktop-http.mjs';
-import {acquireBridgeLock,startupPortMessage,retryableStatus,checkRunStorage} from '../server/bridge-runtime.mjs';
+import {acquireBridgeLock,startupPortMessage,retryableStatus} from '../server/bridge-runtime.mjs';
 import {readFileSync,writeFileSync,existsSync,mkdirSync,readdirSync,statSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {withoutApiEnvironment,createCodexRunner} from '../server/runners.mjs';
 import {createDesktopBridge} from '../server/desktop-bridge.mjs';
+import {createDesktopReadiness} from '../server/desktop-readiness.mjs';
 import {sourceDelegationVersionFromEnvironment} from '../public/core/source-delegation-gate.mjs';
 import {createFileOutbox} from '../server/file-outbox.mjs';
 import {createCloudRequest,normalizedCloudOrigin} from '../server/delivery-binding.mjs';
@@ -30,9 +31,8 @@ if(process.platform==='win32'&&process.env.LOCALAPPDATA){
 }
 const spawnCodex=(command,args,options)=>spawn(command==='codex'?codexCommand:command,args,options);
 const runner=createCodexRunner({spawnProcess:spawnCodex,modelCatalog:createModelCatalog({spawnProcess:spawnCodex,env:withoutApiEnvironment(),cwd:root}),cwd:path.join(privateDir,'desktop-runs'),managedDelivery:true,sourceDelegationVersion:sourceDelegationVersionFromEnvironment(process.env)});
-if(!await runner.available())throw Error('Sign in to Codex using your ChatGPT subscription before starting the desktop bridge.');
 let lock;try{lock=await acquireBridgeLock();}catch(error){const message=startupPortMessage(error);if(!message)throw error;console.error(message);process.exit(1);}
-const bridge=createDesktopBridge({request,runner,outbox,readDeliveryBinding:async()=>({origin:endpoint,workspaceId:(await request('/api/desktop/identity')).workspaceId}),beforeClaim:()=>checkRunStorage(path.join(privateDir,'desktop-runs')),onError:e=>console.error(e.code?.startsWith('WORKSPACE_')?e.message:e.status?'INNO result delivery HTTP '+e.status:'INNO execution interrupted; saved results are retained.')});
+const bridge=createDesktopBridge({request,runner,outbox,readDeliveryBinding:async()=>({origin:endpoint,workspaceId:(await request('/api/desktop/identity')).workspaceId}),beforeClaim:createDesktopReadiness({runner,runRoot:path.join(privateDir,'desktop-runs')}),onError:e=>console.error(e.code?.startsWith('WORKSPACE_')?e.message:e.status?'INNO result delivery HTTP '+e.status:'INNO execution interrupted; saved results are retained.')});
 const localTokenPath=path.join(privateDir,'desktop-access-token.txt');
 if(!existsSync(localTokenPath))writeFileSync(localTokenPath,randomBytes(32).toString('base64url'),{mode:0o600});
 const localToken=readFileSync(localTokenPath,'utf8').trim();
