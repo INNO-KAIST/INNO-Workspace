@@ -5,10 +5,17 @@ import {boundedExecutionEvidence} from '../public/core/execution-evidence.mjs';
 import {checkedDeliveryBinding,deliveryBindingConflict} from './delivery-binding.mjs';
 import {protocolBinding,checkedRecord,checkedReceipt,checkedClaim,checkedAck,protocolError} from './delivery-protocol.mjs';
 export function createDesktopBridge({request,runner,outbox,heartbeatMs=15000,beforeClaim=async()=>{},readDeliveryBinding,onError=()=>{},deliveryReceiptVersion=0}){
- let busy=false,stopped=false,deliveryUnsafe=false,controller,background=Promise.resolve(),recoveryBackground=Promise.resolve();
+ let busy=false,stopped=false,deliveryUnsafe=false,recoveryPaused=false,controller,background=Promise.resolve(),recoveryBackground=Promise.resolve();
  const bindingEnabled=typeof readDeliveryBinding==='function';
  const versioned=deliveryReceiptVersion===1;
  if(![0,1].includes(deliveryReceiptVersion)||versioned&&!bindingEnabled)throw protocolError();
+ function pauseForRecovery(){
+  if(!versioned)throw protocolError();
+  recoveryPaused=true;deliveryUnsafe=true;
+ }
+ async function claimRequest(...args){
+  try{return await request(...args);}catch(error){if(versioned)deliveryUnsafe=true;throw error;}
+ }
  const readOutbox=()=>{
   try{return outbox.read();}catch(error){if(versioned)deliveryUnsafe=true;throw error;}
  };
@@ -70,12 +77,18 @@ export function createDesktopBridge({request,runner,outbox,heartbeatMs=15000,bef
  }
  return {
   stop(){stopped=true;controller?.abort();},
+  pauseForRecovery,
+  async drainPending(){
+   if(!versioned||busy||stopped)throw protocolError();
+   pauseForRecovery();
+   return recover(async()=>{const pending=readOutbox();if(!pending)return false;await deliver(pending);return true;},true);
+  },
   settled:()=>Promise.all([background,recoveryBackground]).then(()=>undefined),
-  runtimeStatus:()=>({busy,stopped,...(versioned?{deliveryUnsafe}:{}),sourceDelegationVersion:runner.sourceDelegationVersion===1?1:0}),
+  runtimeStatus:()=>({busy,stopped,...(versioned?{deliveryUnsafe,recoveryPaused}:{}),sourceDelegationVersion:runner.sourceDelegationVersion===1?1:0}),
   status(){
    let pending,recoveryRequired=false;
    try{pending=!!readOutbox();}catch{pending=true;recoveryRequired=true;}
-   return {busy,stopped,...(versioned?{deliveryUnsafe}:{}),pending,...(recoveryRequired?{recoveryRequired:true}:{}),sourceDelegationVersion:runner.sourceDelegationVersion===1?1:0};
+   return {busy,stopped,...(versioned?{deliveryUnsafe,recoveryPaused}:{}),pending,...(recoveryRequired?{recoveryRequired:true}:{}),sourceDelegationVersion:runner.sourceDelegationVersion===1?1:0};
   },
   async recoveryInspect(work){return recover(work,false);},
   async recoveryMaintenance(work){return recover(work,true);},
@@ -87,26 +100,26 @@ export function createDesktopBridge({request,runner,outbox,heartbeatMs=15000,bef
    if(busy||stopped||deliveryUnsafe||readOutbox())throw Object.assign(Error('Desktop is busy or has a pending result. Wait before starting another task.'),{status:409});
    const materials=sanitizeMaterials(input.materials);busy=true;
    try{
-    await beforeClaim();if(stopped)throw Object.assign(Error('Desktop is stopping'),{status:409});
-    const models=await modelSnapshot();if(stopped)throw Object.assign(Error('Desktop is stopping'),{status:409});
-    const binding=await readBinding();if(stopped)throw Object.assign(Error('Desktop is stopping'),{status:409});
-    const response=await request(`/api/desktop/${encodeURIComponent(taskId)}/start`,{expectedVersion:input.expectedVersion,sourceDelegationVersion:runner.sourceDelegationVersion===1?1:0,sourceNames:materials.map(m=>m.name),...(models!==undefined?{models}:{})},versioned?protocolOptions(binding):options(binding));
-    if(stopped)throw Object.assign(Error('Desktop is stopping'),{status:409});
+    await beforeClaim();if(stopped||recoveryPaused||deliveryUnsafe)throw Object.assign(Error('Desktop is stopping'),{status:409});
+    const models=await modelSnapshot();if(stopped||recoveryPaused||deliveryUnsafe)throw Object.assign(Error('Desktop is stopping'),{status:409});
+    const binding=await readBinding();if(stopped||recoveryPaused||deliveryUnsafe)throw Object.assign(Error('Desktop is stopping'),{status:409});
+    const response=await claimRequest(`/api/desktop/${encodeURIComponent(taskId)}/start`,{expectedVersion:input.expectedVersion,sourceDelegationVersion:runner.sourceDelegationVersion===1?1:0,sourceNames:materials.map(m=>m.name),...(models!==undefined?{models}:{})},versioned?protocolOptions(binding):options(binding));
+    if(stopped||recoveryPaused||deliveryUnsafe)throw Object.assign(Error('Desktop is stopping'),{status:409});
     const claim=versioned?verifyClaim(response,binding,taskId):response.claim,workspaceId=response.workspaceId;
     if(bindingEnabled&&workspaceId!==binding.workspaceId)throw deliveryBindingConflict();
-    background=execute(claim,materials,models,binding).catch(onError).finally(()=>{busy=false;controller=null;});
+    background=execute(claim,materials,models,binding).catch(async error=>{if(versioned)pauseForRecovery();try{await onError(error);}catch{}}).finally(()=>{busy=false;controller=null;});
     return claim.task;
    }catch(e){busy=false;throw e;}
   },
   async tick(){
-   if(busy||stopped)return false;busy=true;
+   if(busy||stopped||recoveryPaused)return false;busy=true;
    try{
     const pending=readOutbox();if(pending){await deliver(pending);return true;}
     if(deliveryUnsafe)throw protocolError();
-    await beforeClaim();if(stopped)return false;
-    const models=await modelSnapshot();if(stopped)return false;
-    const binding=await readBinding();if(stopped)return false;
-    const response=await request('/api/desktop/poll',models===undefined?{}:{models},versioned?protocolOptions(binding):options(binding));if(stopped)return false;
+    await beforeClaim();if(stopped||recoveryPaused||deliveryUnsafe)return false;
+    const models=await modelSnapshot();if(stopped||recoveryPaused||deliveryUnsafe)return false;
+    const binding=await readBinding();if(stopped||recoveryPaused||deliveryUnsafe)return false;
+    const response=await claimRequest('/api/desktop/poll',models===undefined?{}:{models},versioned?protocolOptions(binding):options(binding));if(stopped||recoveryPaused||deliveryUnsafe)return false;
     const claim=versioned?verifyClaim(response,binding):response.claim,workspaceId=response.workspaceId;
     if(bindingEnabled&&workspaceId!==binding.workspaceId)throw deliveryBindingConflict();
     if(!claim)return false;

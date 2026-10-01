@@ -3,7 +3,7 @@
 - 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
 - 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP, Task3h 복구 UI·client·local proxy 연결 및 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
-- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. 실제 서비스 루프·UI 연결, legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
+- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. Task3l 복구 서비스 루프·스크립트 배선 검증 완료(기본0). 명시 전달 HTTP·UI 연결, legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화 제안은 승인 대기이며 제품 구현 전 PRD에 반영해야 한다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -654,3 +654,11 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 실제 HTTP+bridge+FileOutbox+helper: cloud unavailable에서 조회·승격, 인증/origin/host거절, busy/stopped파일보존, stalehash/확인/경로추가거절, 유사경로·잘못된메서드404, 같은hash동시승격200/409 한 번만commit. 2MiB파일에서 unbounded outbox.read0 및 oversize검사, 새claim/AI0 검증.
 - 최초RED0/7→최종신규13/13, 관련54통과/1skip, 독립38/38. 전체939건 중938통과/0실패/1skip(.inno/tmp/task3k-full.log), 구문/diff 통과. skip은 기존Windows 실제symlink권한제한.
 - scriptloop/운영helper배선/UI는 아직 변경 전이며 endpoint만 내부 완료다. 다음은 version1 오류 후 HTTP/프로세스잠금을 유지하는 복구서비스·명시 drain-only·화면 및 영속 claim journal. 기본protocol0, 운영미배포, 실제AI/운영DB변경없음. CR004/005 승인 대기, 전체목표 active.
+
+### 2026-10-01 SRC02/06 Task3l 복구 서비스 대기·명시 저장 결과 전달
+- polling/backoff를 runDesktopService로 분리했다. version0 기존 재시도/종료 기준 유지. version1은 unsafe 또는 비재시도 오류에서 sticky pause 후 abort까지 타이머·poll 없이 대기하여 HTTP/프로세스 잠금을 유지한다. 안전한 status분류로 중복 오류 알림을 억제하고 정상tick후 다시 알림 가능하다.
+- pauseForRecovery는 stopped와 구분하며 새start/tick을 막는다. beforeClaim/models/identity/claimresponse 이후 paused뿐 아니라 deliveryUnsafe를 검사한다. 상태조회 파일오류가 준비도중 unsafe만 설정하는8개경계RED후보완. 배정요청 응답유실은 retryable이라도 unsafe; 결과전송재시도와구분. asyncstart오류는busy해제전pause, onError거절도안전정리.
+- drainPending은 같은복구잠금과settled추적으로 저장결과만전달하고 empty는false. 성공/실패/empty모두pause유지·모델조회/claim/AI0. 실제파일complete/ACK전달, 실패보존, 중복drain거절검증. HTTP연결은아직없음.
+- 실제script는단일constant0을bridge/helper/HTTP/service에배선. 종료는abort+stop→settled→HTTP→processlock의finally정리; rawerror로그제거. 운영활성화환경스위치추가없음.
+- 검증: 신규서비스/경계33개, 관련100/100, 독립73/73. 최종전체972건중971통과/0실패/1skip(.inno/tmp/task3l-full.log), script구문/diff통과. skip은기존실제Windows symlink권한제한. 실제component통합에서park중HTTP200/port재점유거절/승격후AI0/해제후port재취득확인. fixture종료순서는production script실제프로세스종료증거가아니며script는구문+코드리뷰범위다.
+- 메모리pause/unsafe의재시작보존은아직미완료. 다음은drain-only인증HTTP·복구화면과영속claim journal/unknownowner명시해결, legacy정리및활성화검증. 실제AI/운영DB/배포없음, CR004/005승인대기및전체goal active유지.
