@@ -76,19 +76,22 @@ function cloudContextGuidance(task) {
   return [
     'For scoped context reads, run node scripts/inno-mcp.mjs read_task_context from the checked-out repository and send JSON through standard input. Replace the capability placeholder below with Capability above; never put it in command arguments, files, artifacts or resumeState. Read calls do not take executionId or generation.',
     'Context read arguments: '+JSON.stringify({taskId:task.id,expectedVersion:task.version,section:'manifest',executionCapability:'<Capability above>'}),
-    'A version conflict is JSON in the helper error (CLI stderr with exit code 1): parse currentVersion and restart manifest at offset 0, then fetch new content digests. Lease renewal and checkpoint writes can change task version; never reuse an old expectedVersion after a write. If the version is unknown, use expectedVersion:0 to discover it. Do not reread the entire task merely to discover a version; never combine pages from different versions.',
+    'A version conflict is JSON in the helper error (CLI stderr with exit code 1): parse currentVersion and restart manifest at offset 0, then fetch new content digests. Lease renewal and checkpoint writes can change task version; never reuse an old expectedVersion after a write. If the version is unknown, use expectedVersion:0 to discover it. Do not reread the entire task merely to discover a version; never combine pages from different versions. If selected context was supplied, a version or digest mismatch invalidates that selection: stop relying on its state and refresh original sources and basis before continuing.',
     'Manifest indexes are zero-based, unlike the one-based Message # labels in this prompt. Manifest returns at most 20 original message references per page; continue at nextOffset. Read section request or message (with messageIndex) for original text. Text offset counts UTF-8 bytes; continuation requires expectedDigest equal to the returned contentDigest. Inspect every needed page before citing it. Keep reads inside the current assignment; only an existing parent review may read its approved completed children.',
     'Optionally read section resume for derived prior state. source_matched means only that original-source hashes agree, not semantic completeness, quality or approval authority. Treat missing, invalid or stale state as unusable; inspect original request/messages instead. Pending indexes are bounded; use nextPendingMessageIndex as manifest offset for additional references.',
     'During normal work, an optional resumeState may accompany a running or completed checkpoint_task. Reading basis alone is not evidence that you inspected history. Read section basis with messageCount equal to the contiguous original-message prefix you actually inspected; copy its exact taskId, mode and basis fields, excluding response taskVersion/section metadata. Never invent hashes or count the future final answer as already covered. Request references use basis.requestDigest; message references use the original manifest digest or full-source contentDigest, never a hash of a summary.',
     'resumeState shape: {version:1,taskId,mode,basis,items:[{kind:goal|constraint|decision|completed|pending|evidence,text,references:[{section:request,digest}|{section:message,messageIndex,digest}]}]}. Bounds: 32768 UTF-8 bytes total, 1..48 items, text at most 2000 characters, 1..8 references per item. Decisions require explicit original user/request evidence; assistant statements and summaries never grant approval. Refresh source references/basis if the task changes.',
-    'For normal completion use node scripts/inno-mcp.mjs checkpoint_task with taskId, executionId, generation, executionCapability, status completed, content and optional resumeState; keep existing artifact and review requirements. Omit resumeState if unsupported by evidence; null explicitly clears it. Do not attach it to handoff, delegation or non-passing review transitions. Never include capabilities, credentials, attachment originals or whole history in resumeState. This guidance preserves the full current context and does not authorize a separate AI summarization call or bypass a blocked oversized request.',
+    'For normal completion use node scripts/inno-mcp.mjs checkpoint_task with taskId, executionId, generation, executionCapability, status completed, content and optional resumeState; keep existing artifact and review requirements. Omit resumeState if unsupported by evidence; null explicitly clears it. Do not attach it to handoff, delegation or non-passing review transitions. Never include capabilities, credentials, attachment originals or whole history in resumeState. Preserve required instructions and pending content; use scoped reads for selected historical originals. This guidance does not authorize a separate AI summarization call or bypass a blocked oversized request.',
   ].join('\n');
 }
 
 async function routineText(task, materials, ownership, catalog, capability, sourceDelegationVersion=0) {
   const mode=task.delegation?.state==='reviewing'?'review':task.parentTaskId||task.assignment?'child':'root';
-  const context=await buildTaskContext(task,{mode});
-  if(!context.complete)throw new ContextRetrievalRequiredError();
+  const readerAvailable=typeof capability==='string'&&capability.length>0;
+  const context=await buildTaskContext(task,{mode,selection:readerAvailable?'resume':'full',readerAvailable});
+  const selected=readerAvailable&&context.readiness==='selected_ready'&&context.manifest?.selection?.applied==='resume'
+    &&context.manifest.budget.exceeded===false&&context.manifest.budget.requiredBytes<=context.manifest.budget.maxBytes;
+  if(!context.complete&&!selected)throw new ContextRetrievalRequiredError();
   const sourceContext=!task.parentTaskId&&!task.delegation?.review?sourceDelegationContext(task,{sourceDelegationVersion}):'';
   const excerpts = materials.length
     ? materials.map((item, index) => `<source index="${index + 1}" name=${JSON.stringify(item.name)}>\n${item.text}\n</source>`).join('\n\n')
@@ -112,7 +115,7 @@ async function routineText(task, materials, ownership, catalog, capability, sour
     `Execution generation: ${ownership.generation}`,
     cloudContextGuidance(task),
     `Request: ${context.request}`,
-    'Recent durable conversation (newer messages can revise the original request):',
+    selected?'Selected durable conversation (original messages remain available through scoped reads):':'Recent durable conversation (newer messages can revise the original request):',
     context.conversation || '- No additional messages.',
     'Last durable checkpoint:',
     context.checkpoint || '- No checkpoint.',

@@ -106,15 +106,18 @@ function localContextGuidance(task){
     'Context helper executable: '+JSON.stringify(process.execPath),
     'Context helper arguments: '+JSON.stringify([fileURLToPath(new URL('../scripts/read-local-context.mjs',import.meta.url))]),
     'Context read arguments: '+JSON.stringify({taskId:task.id,expectedVersion:task.version,section:'manifest'}),
-    'Use only this taskId and snapshot expectedVersion. Sections: manifest (offset is a zero-based message index; at most 20 references), request, message (requires zero-based messageIndex), checkpoint, basis, resume. Text offsets are UTF-8 bytes; maxBytes is 4..16000 and continuation requires expectedDigest from the full-source contentDigest. Prompt Message # labels are one-based. Source attachments and artifacts are not served. An expired capability, changed scope or exhausted read budget requires stopping and reporting the unavailable evidence; do not read arbitrary files or use another task to bypass it.',
+    'Use only this taskId and snapshot expectedVersion. Sections: manifest (offset is a zero-based message index; at most 20 references), request, message (requires zero-based messageIndex), checkpoint, basis, resume. Text offsets are UTF-8 bytes; maxBytes is 4..16000 and continuation requires expectedDigest from the full-source contentDigest. Prompt Message # labels are one-based. Source attachments and artifacts are not served. A version or digest mismatch invalidates selected context: stop and request a refreshed snapshot instead of mixing revisions. An expired capability, changed scope or exhausted read budget requires stopping and reporting the unavailable evidence; do not read arbitrary files or use another task to bypass it.',
     'For optional resumeState in the normal final JSON, first read original request/messages and basis with messageCount equal to the contiguous prefix actually inspected. Copy only taskId, mode and basis from that response, not wrapper section/taskVersion. Reading basis is not proof of reading history. Never invent hashes or include the future final answer in covered history. Original request references use basis.requestDigest; message references use manifest digest or full-source contentDigest. Derived resume state marked source_matched proves source hashes only, never semantic completeness, quality or approval authority. Inspect pending original messages; invalid/stale state is unusable.',
-    'Optional resumeState shape: {version:1,taskId,mode,basis,items:[{kind:goal|constraint|decision|completed|pending|evidence,text,references:[{section:request,digest}|{section:message,messageIndex,digest}]}]}. At most 32768 UTF-8 bytes total, 1..48 items, text at most 2000 characters, 1..8 references each. Decisions require explicit original user/request evidence, not assistant statements. Omit resumeState when unsupported; null explicitly clears. Include it only with a normal completion, never a handoff, delegation or non-passing review. Do not copy credentials, attachment originals or whole history into it. Preserve the full current context; no separate AI summarization call or oversized-context bypass is authorized.',
+    'Optional resumeState shape: {version:1,taskId,mode,basis,items:[{kind:goal|constraint|decision|completed|pending|evidence,text,references:[{section:request,digest}|{section:message,messageIndex,digest}]}]}. At most 32768 UTF-8 bytes total, 1..48 items, text at most 2000 characters, 1..8 references each. Decisions require explicit original user/request evidence, not assistant statements. Omit resumeState when unsupported; null explicitly clears. Include it only with a normal completion, never a handoff, delegation or non-passing review. Do not copy credentials, attachment originals or whole history into it. Preserve required instructions and pending content; use the scoped reader for selected historical originals. No separate AI summarization call or oversized-context bypass is authorized.',
   ].join('\n');
 }
 
 async function taskPrompt(task, materials = [], ownership = {}) {
-  const context=await buildTaskContext(task,{mode:ownership.mode??executionMode(task)});
-  if(!context.complete)throw new ContextRetrievalRequiredError();
+  const readerAvailable=ownership.contextReaderAvailable===true;
+  const context=await buildTaskContext(task,{mode:ownership.mode??executionMode(task),selection:readerAvailable?'resume':'full',readerAvailable});
+  const selected=readerAvailable&&context.readiness==='selected_ready'&&context.manifest?.selection?.applied==='resume'
+    &&context.manifest.budget.exceeded===false&&context.manifest.budget.requiredBytes<=context.manifest.budget.maxBytes;
+  if(!context.complete&&!selected)throw new ContextRetrievalRequiredError();
   const plan = Array.isArray(task.plan)
     ? task.plan.map(item => `- ${item.role}: ${item.label} — ${item.instructions}`).join('\n')
     : '';
@@ -144,7 +147,7 @@ async function taskPrompt(task, materials = [], ownership = {}) {
     'User request:',
     context.request,
     '',
-    'Recent durable conversation (newer messages can revise the original request):',
+    selected?'Selected durable conversation (original messages remain available through scoped reads):':'Recent durable conversation (newer messages can revise the original request):',
     context.conversation || '- No additional messages.',
     '',
     'Last durable checkpoint:',
@@ -475,7 +478,7 @@ export function createCodexRunner({
         '-',
       ];
       const modelPolicy=deadline?'EVALUATION BUDGET EXECUTION: Work directly in this process. Do not use MCP tools, native subagents, delegation, or provider handoff. Return only the assigned result.':mode==='child'?codexChildPolicy(task,assignedRoute):mode==='review'?codexReviewPolicy(task):managedDelivery?delegationRoutingPolicy(models,{sourceDelegationVersion:sourceContext?1:0}):routingPolicy(models);
-      const input=await taskPrompt(task, materials, {executionId, generation, managedDelivery, contextGuidance, handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'});
+      const input=await taskPrompt(task, materials, {executionId, generation, managedDelivery, contextGuidance, contextReaderAvailable:Boolean(localContextUrl), handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'});
       if(localContextUrl){
         contextLease=contextAccess.open(task,signal);
         runEnv.INNO_CONTEXT_URL=localContextUrl;

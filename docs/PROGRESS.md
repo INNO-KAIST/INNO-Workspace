@@ -3,7 +3,7 @@
 - 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
 - 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP, Task3h 복구 UI·client·local proxy 연결 및 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
-- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. Task3l 복구 서비스 루프·스크립트 배선 검증 완료(기본0). Task3m 해시 확인 명시 전달 HTTP 검증 완료. Task3n 로컬 복구 UI 구현·독립 리뷰·실제 브라우저 검증 완료. 전체1010건 중1009통과/0실패/기존symlink1skip. 이후 legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화는 2026-10-01 승인·PRD 반영 완료. CONTEXT-EFFICIENCY-IMPLEMENTATION.md Stage1 공통 조립/제공자 연결 검증 완료. Stage2A 범위 제한 원문 조회 검증 완료. Stage2B1 재개 상태 저장·출처 검증 완료. Stage2B2 일반 결과 전달·저장 연결 검증 완료. Stage2C 제공자별 실제 조회 helper 연결·전체1085pass 검증 완료. 다음 문맥 선택·최초 oversize 처리 및 실제 구독 환경 검증.
+- 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. Task3l 복구 서비스 루프·스크립트 배선 검증 완료(기본0). Task3m 해시 확인 명시 전달 HTTP 검증 완료. Task3n 로컬 복구 UI 구현·독립 리뷰·실제 브라우저 검증 완료. 전체1010건 중1009통과/0실패/기존symlink1skip. 이후 legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화는 2026-10-01 승인·PRD 반영 완료. CONTEXT-EFFICIENCY-IMPLEMENTATION.md Stage1 공통 조립/제공자 연결 검증 완료. Stage2A 범위 제한 원문 조회 검증 완료. Stage2B1 재개 상태 저장·출처 검증 완료. Stage2B2 일반 결과 전달·저장 연결 검증 완료. Stage2C 제공자별 실제 조회 helper 연결 완료. Stage2D1 선택적 문맥 전달·전체1097pass 검증 완료. 사용자 요청으로 현재 단계 종료 후 Claude handoff. 다음 최초 oversize 처리·전체 prompt 예산·관측 UI·실제 구독 환경 검증; 상세 HANDOFF-CLAUDE.md.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -734,3 +734,9 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 검증: cloud36/36/독립16/16, local최종8/8. 전체1086중1085통과/실패0/기존 Windows symlink1skip(.inno/tmp/ctx-stage2c-full.log). 기존 Wrangler dry-run 통과(64assets). 실제 AI호출/운영DB수정/배포없음; receipt 기본0 유지.
 - 다음: deployed Codex sandbox/Claude Routine 실제지원경로 검증, 유효 재개상태+필수 원문+미처리 변경을 이용한 문맥선택과 최초oversize처리, 전체prompt예산/관측사용량. 현재 자동history생략/압축의종단완료나실측토큰절감을주장하지않는다. SRCjournal/legacy/unknownowner와CR004별도잔여유지.
 - Stage2C 최종 독립 로컬리뷰58/58통과, 수정요청없음. 관리인증격리/원문조회/폐기/상한/사전차단을 검증했다.
+
+### 2026-10-01 CR-005 Stage2D1 선택적 문맥 전달 완료 / Claude 인수인계 준비
+- source_matched+동일mode+직접참조+coveredprefix 조건의 과거 assistant만 선택적으로 대체한다. 전체 request/user/system/checkpoint/모든pending과 사용자 직전 제안을 유지하며 중복참조는 남은원문을가리키도록 재구성한다. state/안내/조회표식 포함 실제UTF8가 더작고96KB안일때만 selected_ready이며 complete=false로원문누락을명시한다.
+- 실제reader가설정된managedCodex 및capabilityWorkerClaude만 optin. 첫offset0조회부터표식expectedDigest를검증하며내용/버전변경시선택갱신전판단중단. reader없음/eval/standalone/stale등은전문fallback. 필수원문초과는유효state라도open0/spawn0/fire0로차단한다.
+- 검증: core14/14(기존사례포함), adapter최종5/5, 독립19/19. 전체1098중1097pass/0fail/기존host symlink1skip(.inno/tmp/ctx-stage2d1-full.log). Wranglerdry-run64assets통과. 실제AI/운영DB수정/배포없음.
+- 사용자가 이번작업까지만 마무리하고 Claude Opus5.5에서 전체검토/후속작업할상세handoff를요청했다. 이후제품구현은중단하고 HANDOFF-CLAUDE.md 작성·검증·개발브랜치공유만수행한다. 남은범위는handoff와현재상태참조.
