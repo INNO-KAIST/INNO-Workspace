@@ -2,8 +2,8 @@
 ## 현재 재개 지점 (2026-10-01)
 - 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
-- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; 클라이언트 정리 및 운영 활성화는 미완료.
-- 다음: 클라이언트 ack_pending 정리 프로토콜 → 통합·독립 검증 후 배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다.
+- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. 실제 파일 내구성·startup 복구·운영 활성화는 미완료.
+- 다음: 실제 FileOutbox 저장/프로세스 재시작 및 startup 복구 → 통합·독립 검증 후 배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -602,3 +602,10 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 새 사용자 요구 CR-005 접수: 장기 대화 압축에 더해 공급자 공통 문맥 구성/중복 제거/선택 조회/재개 상태 검증/실측·캐시 구분. docs/CONTEXT-EFFICIENCY-PROPOSAL.md 작성, PRD 편입 승인 질문 전달; 승인 전 제품 코드 변경 없음.
 - 읽기전용 감사: server/runners.mjs taskPrompt 및 worker/index.mjs routineText의 최근20개/각앞8000자/합계뒤80000자/checkpoint앞8000자 제한은 과거 결정·긴 요청의 끝부분을 누락할 수 있다. 단일 최초 요청 외 중복 제거는 제한적이다. 이 범위를 CTX-01~06으로 제안했다.
 - 개발 작업에도 전체 이력 재독보다 재개 문서·변경 파일 확인, 최소 맥락 위임, 변경 범위별 테스트와 최종 전체1회를 우선한다. Sol 구현 위임은 용량 부족으로 실패하여 기본 모델 위임으로 한 번 대체했으며 중복 구현은 없었다.
+## 2026-10-01 — Task3d 클라이언트 수신 확인 상태 전이
+- 명시적 deliveryReceiptVersion1 내부 옵션에서만 claim 버전/workspace/owner를 AI 실행 전 확인한다. 기본 legacy 유지, renew에는 receipt header를 보내지 않는다.
+- exact wire pending을 보관하고 동일 descriptor의 서버 receipt를 검증한 뒤 원문 없는 ack_pending을 await write한다. 그 후 ACK 응답을 검증하고 await clear한다. ack_pending으로 생성한 새 bridge 인스턴스는 result POST/poll/runner 없이 ACK만 실행한다.
+- 최초 결과 구성·저장 실패와 확인 불가능한 claim은 deliveryUnsafe로 새 claim/start를 막는다. 갱신 오류/중지 시 opted 결과를 먼저 저장하고 자동 전달하지 않는다. pending drain은 새 실행과 구분한다. 메모리 latch의 재시작 이후 지속성이나 전원 차단 보장은 주장하지 않는다.
+- 독립 검토에서 null 응답이 검증 전 destructuring을 통해 latch를 우회하는 결함을 찾아 수정했다. 최종 대상19/19, 최종 전체809/809 (.inno/tmp/task3d-client-final-full.log), 메인19/19, 독립 최초73/73 및 수정후 관련53/53, diff 통과.
+- 검증은 mock outbox의 실패·새 인스턴스 재개를 포함한다. 실제 FileOutbox flush와 별도 프로세스 재시작, 로그인과 독립적인 startup drain, no-result 명시 복구는 다음 단계다. Worker 코드 변경 없어 이번에는 dry-run을 반복하지 않았다. 프로덕션 옵션/스크립트 변경·배포·실제 AI 없음.
+- CR-005 설계 승인 질문은 계속 대기; 자동 목표 재개를 승인 응답으로 해석하지 않는다. 기존 승인 범위의 복구 작업은 계속 가능하다.

@@ -20,7 +20,8 @@ export function checkedDeliveryBinding(value){
 
 export function createCloudRequest({endpoint,token,fetchFn=fetch}){
  const origin=normalizedCloudOrigin(endpoint);
- return async(route,body,{workspaceId}={})=>{
+ return async(route,body,{workspaceId,deliveryReceiptVersion}={})=>{
+  if(deliveryReceiptVersion!==undefined&&(deliveryReceiptVersion!==1||workspaceId===undefined))throw deliveryBindingConflict('unverified');
   if(workspaceId!==undefined&&(typeof workspaceId!=='string'||!UUID_V4.test(workspaceId)))throw deliveryBindingConflict();
   if(typeof route!=='string'||!route.startsWith('/')||route.startsWith('//'))throw deliveryBindingConflict();
   let target;try{target=new URL(route,origin);}catch{throw deliveryBindingConflict();}
@@ -29,7 +30,7 @@ export function createCloudRequest({endpoint,token,fetchFn=fetch}){
   if(raw!==undefined&&Buffer.byteLength(raw)>700000)throw Object.assign(Error('Result saved locally; cloud transfer limit exceeded.'),{status:413});
   const response=await fetchFn(target,{
    method:raw===undefined?'GET':'POST',
-   headers:{authorization:`Bearer ${token}`,'content-type':'application/json',...(workspaceId!==undefined?{'x-inno-workspace-id':workspaceId}:{})},
+   headers:{authorization:`Bearer ${token}`,'content-type':'application/json',...(workspaceId!==undefined?{'x-inno-workspace-id':workspaceId}:{}),...(deliveryReceiptVersion===1?{'x-inno-delivery-receipt-version':'1'}:{})},
    body:raw,signal:AbortSignal.timeout(20000),redirect:'error',
   });
   if(!response.ok)throw Object.assign(Error(`INNO HTTP ${response.status}`),{status:response.status});
