@@ -1,9 +1,9 @@
 # SDD ledger — plan: docs/IMPLEMENTATION.md
-## 현재 재개 지점 (2026-09-28)
-- 전체 목표: 사용자 요청으로 일시중지 (2026-09-28). 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
+## 현재 재개 지점 (2026-10-01)
+- 전체 목표: 2026-10-01 사용자 요청으로 재개. 아래 과거 완료 표기는 당시 하위 단계의 완료이며 전체 플랫폼 완료가 아니다.
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
-- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. 공개 ACK/claim 협상 및 클라이언트 정리 연결은 미완료.
-- 재개 시 다음: 공개 claim/ACK 협상 및 클라이언트 ack_pending 정리 프로토콜 → 통합·독립 검증 후 배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다.
+- 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; 클라이언트 정리 및 운영 활성화는 미완료.
+- 다음: 클라이언트 ack_pending 정리 프로토콜 → 통합·독립 검증 후 배포. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다.
 - CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -594,3 +594,11 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 사용자 요청: 현재 작업까지만 마무리한 뒤 토큰 절약을 위해 일시중지. 새 세부 단계와 배포를 시작하지 않는다. 전체 플랫폼 목표는 미완료다.
 - 재개 지점: Task3 공개 claim/ACK 협상, 클라이언트 pending→검증된 ack_pending 영속화→서버 release→local clear. missing ACK 성공만으로 초기 pending 원문을 삭제하지 말 것. 예약 없는 실행의 명시적 복구, 로컬 쓰기 실패 후 새 claim 차단, 로그인과 독립적인 outbox drain도 남아 있다.
 - 운영은 기존 c925a00 문서 / 1e504e3 실행 코드 유지. 새 receipt protocol은 기본 비활성. 전체 목표 및 CR004 대기 상태는 유지한다.
+## 2026-10-01 — 재개, Task3c HTTP 협상 및 CR-005 설계
+- Task3c: 내부 version1 gate에서 poll/start에 reservation 옵션 전달과 확인 버전 응답, ACK의 인증/workspace/URL task/정확 receipt 확인 및 release helper 연결. ACK는 catalog/task/dispatch를 실행하지 않는다. capacity code는 허용한 값만 응답한다.
+- opted hydration 실패는 원래 오류와 reservation을 보존하며 가짜 receipt를 만들지 않는다. no-result 명시 복구는 여전히 남아 있다. 기본/exported Worker는 gate0, capability 미광고, 운영 배포 없음.
+- 검증: TDD 대상5/5, 전체790/790 (.inno/tmp/task3c-http-full.log), 메인5/5, 독립66/66, diff 및 기존 Wrangler dry-run 통과. AI 실행/외부 운영 데이터 변경 없음.
+- 다음: 클라이언트의 verified claim/pending→ack_pending→ACK→clear, 파일쓰기 실패 차단, 구독 CLI 로그인과 독립적인 결과 drain, no-result 복구 및 통합·기기 검증. 과거 운영 버전 정보는 9월28일 확인값이며 이번에 운영을 다시 조회한 것은 아니다.
+- 새 사용자 요구 CR-005 접수: 장기 대화 압축에 더해 공급자 공통 문맥 구성/중복 제거/선택 조회/재개 상태 검증/실측·캐시 구분. docs/CONTEXT-EFFICIENCY-PROPOSAL.md 작성, PRD 편입 승인 질문 전달; 승인 전 제품 코드 변경 없음.
+- 읽기전용 감사: server/runners.mjs taskPrompt 및 worker/index.mjs routineText의 최근20개/각앞8000자/합계뒤80000자/checkpoint앞8000자 제한은 과거 결정·긴 요청의 끝부분을 누락할 수 있다. 단일 최초 요청 외 중복 제거는 제한적이다. 이 범위를 CTX-01~06으로 제안했다.
+- 개발 작업에도 전체 이력 재독보다 재개 문서·변경 파일 확인, 최소 맥락 위임, 변경 범위별 테스트와 최종 전체1회를 우선한다. Sol 구현 위임은 용량 부족으로 실패하여 기본 모델 위임으로 한 번 대체했으며 중복 구현은 없었다.

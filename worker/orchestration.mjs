@@ -18,7 +18,7 @@ export function createOrchestration({store,delegations,hasRoutine,fire,waitUntil
   hydrateClaim:async claim=>{
    if(!claim)return null;
    try{return {...claim,reviewInputs:await reviewInputs(store,claim.task)};}
-   catch(error){await store.failExecution(claim.task.id,{executionId:claim.executionId,generation:claim.generation,error:'Generated review inputs could not be loaded; no model was started.'});throw error;}
+   catch(error){if(claim.task.checkpoint?.deliveryReceiptVersion!==1)await store.failExecution(claim.task.id,{executionId:claim.executionId,generation:claim.generation,error:'Generated review inputs could not be loaded; no model was started.'});throw error;}
   },
   async drain(limit=10){
    if(!Number.isInteger(limit)||limit<1||limit>20)throw Error('Recovery batch limit must be 1 to 20');

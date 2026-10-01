@@ -24,6 +24,7 @@ import {createTaskPolicyManagement} from './policy-management.mjs';
 import {workspaceIdentity} from './workspace-identity.mjs';
 import {createDeliveryReceipt} from '../public/core/delivery-receipt.mjs';
 import {readDeliveryReceipt} from './delivery-receipts.mjs';
+import {releaseDeliveryReceipt} from './delivery-ack.mjs';
 
 const ROUTINE_BETA = 'experimental-cc-routine-2026-04-01';
 
@@ -186,12 +187,15 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
         }
         const {store,bridge,orchestration,hasRoutine,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement}=runtime(env,context);
         const capabilities = {sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,reviewObservationRecovery:true,cloudCodex: true, localCodex: false, claudeRoutine: hasRoutine, cloud: true, connected: true};
-        const bridgeMatch=pathname.match(/^\/api\/desktop\/([^/]+)\/(start|renew|complete|fail)$/);
+        const bridgeMatch=pathname.match(/^\/api\/desktop\/([^/]+)\/(start|renew|complete|fail|ack)$/);
         const receiptHeader=request.headers.get('x-inno-delivery-receipt-version');
         const receiptRequested=request.headers.has('x-inno-delivery-receipt-version');
-        if(receiptRequested&&(deliveryReceiptVersion!==1||receiptHeader!=='1'||request.method!=='POST'||!bridgeMatch||!['complete','fail'].includes(bridgeMatch[2])))
+        if(receiptRequested&&(deliveryReceiptVersion!==1||receiptHeader!=='1'||request.method!=='POST'||(pathname!=='/api/desktop/poll'&&(!bridgeMatch||!['start','complete','fail','ack'].includes(bridgeMatch[2])))))
           throw new ValidationError('Desktop delivery receipt version is not enabled for this route');
         if(receiptRequested&&!request.headers.has('x-inno-workspace-id'))throw new ValidationError('Workspace identity is required for desktop delivery receipt');
+        if(bridgeMatch?.[2]==='ack'&&!receiptRequested)throw new ValidationError('Desktop delivery acknowledgment requires version 1');
+        const claimOptions=receiptRequested?{deliveryReceiptVersion:1,workspaceId:request.headers.get('x-inno-workspace-id')}:undefined;
+        const claimConfirmation=receiptRequested?{deliveryReceiptVersion:1}:{};
         const desktopMutation=request.method==='POST'&&(pathname==='/api/desktop/poll'||Boolean(bridgeMatch));
         const desktopWorkspaceId=desktopMutation?await workspaceIdentity(store.db):undefined;
         if(desktopMutation&&request.headers.has('x-inno-workspace-id')&&request.headers.get('x-inno-workspace-id')!==desktopWorkspaceId)
@@ -248,11 +252,15 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
         }
         if (request.method === 'POST' && pathname === '/api/desktop/poll') {
           const input=await body(request);if(input.models!==undefined)await catalog.report(input.models);
-          return responseJson({claim: await orchestration.hydrateClaim(await bridge.claim()),workspaceId:desktopWorkspaceId}, 200, headers);
+          return responseJson({claim: await orchestration.hydrateClaim(await bridge.claim(claimOptions)),workspaceId:desktopWorkspaceId,...claimConfirmation}, 200, headers);
         }
         if(request.method==='POST'&&bridgeMatch){
           const id=decodeURIComponent(bridgeMatch[1]), input=await body(request);
-          const deliveryReceipt=receiptRequested?await createDeliveryReceipt({workspaceId:desktopWorkspaceId,taskId:id,action:bridgeMatch[2],input}):undefined;
+          if(bridgeMatch[2]==='ack'){
+            if(input?.receipt?.taskId!==id)throw new ConflictError('Desktop delivery acknowledgment task mismatch');
+            return responseJson(await releaseDeliveryReceipt(store.db,input.receipt),200,headers);
+          }
+          const deliveryReceipt=receiptRequested&&['complete','fail'].includes(bridgeMatch[2])?await createDeliveryReceipt({workspaceId:desktopWorkspaceId,taskId:id,action:bridgeMatch[2],input}):undefined;
           if(deliveryReceipt){
             const saved=await readDeliveryReceipt(store.db,deliveryReceipt);
             if(saved)return responseJson({deliveryReceipt:saved,replayed:true},200,headers);
@@ -266,7 +274,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
           };
           try{
            if(input.models!==undefined)await catalog.report(input.models);
-           if(bridgeMatch[2]==='start')return responseJson({claim:await orchestration.hydrateClaim(await bridge.start(id,input)),workspaceId:desktopWorkspaceId},200,headers);
+           if(bridgeMatch[2]==='start')return responseJson({claim:await orchestration.hydrateClaim(await bridge.start(id,input,claimOptions)),workspaceId:desktopWorkspaceId,...claimConfirmation},200,headers);
            if(bridgeMatch[2]==='complete'&&input.handoff)return await accepted(await handoff({...input,taskId:id},receiptOptions));
            if(bridgeMatch[2]==='complete'&&input.delegation){const result=await delegate(id,{...input.delegation,executionId:input.executionId,generation:input.generation,content:input.content,usage:input.usage},receiptOptions);return await accepted(result.parent);}
            if(bridgeMatch[2]==='complete'&&input.reviewReport){
@@ -334,6 +342,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
       } catch (error) {
         const status = error?.statusCode ?? 500;
         const result = {error: status === 500 ? 'internal server error' : error.message};
+        if(error?.code==='DESKTOP_DELIVERY_CAPACITY')result.code=error.code;
         if (error instanceof ConflictError && Number.isInteger(error.currentVersion)) result.currentVersion = error.currentVersion;
         return responseJson(result, status, headers);
       }
