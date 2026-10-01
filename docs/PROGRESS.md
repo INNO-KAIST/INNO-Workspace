@@ -740,3 +740,8 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 실제reader가설정된managedCodex 및capabilityWorkerClaude만 optin. 첫offset0조회부터표식expectedDigest를검증하며내용/버전변경시선택갱신전판단중단. reader없음/eval/standalone/stale등은전문fallback. 필수원문초과는유효state라도open0/spawn0/fire0로차단한다.
 - 검증: core14/14(기존사례포함), adapter최종5/5, 독립19/19. 전체1098중1097pass/0fail/기존host symlink1skip(.inno/tmp/ctx-stage2d1-full.log). Wranglerdry-run64assets통과. 실제AI/운영DB수정/배포없음.
 - 사용자가 이번작업까지만 마무리하고 Claude Opus5.5에서 전체검토/후속작업할상세handoff를요청했다. 이후제품구현은중단하고 HANDOFF-CLAUDE.md 작성·검증·개발브랜치공유만수행한다. 남은범위는handoff와현재상태참조.
+
+### 2026-10-01 Claude handoff 문서 정리
+- docs/HANDOFF-CLAUDE.md에 코드/운영/승인/잔여 H1~H10/완료증거/재개명령/비밀정보 경계/Claude 시작문구를 통합했다. 독립 문서 검토를 거쳐 materials20개와첨부metadata5000개 상한 구분을 정정했다. REQUIREMENTS-STATUS의 오래된CR005승인대기/Task3e및작업순서도현재상태로갱신했다.
+- git ls-remote로 main c925a00a3b69f74877bc9d1689dbe99e4dd1d390, Wrangler deployments list로 latest e2a00c32-93a7-4a98-a36b-8eeb0eb38445를읽기전용확인했다. 운영작업/pending/포트/계정잔여량은미조회로명시했다.
+- 제품코드 f4a38ab 이후추가제품수정없음. 인계문서와검증된개발브랜치만GitHub공유하고 main/Worker/Pages배포는진행하지않는다. 사용자요청에따라Codex목표는인계완료후일시중지한다.
