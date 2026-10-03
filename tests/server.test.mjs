@@ -743,3 +743,24 @@ test('lost HTTP creation response retries after client reload without duplicatin
 });
 
 test('missing ordinary source prevents Codex process spawn',async()=>{let spawned=false;const runner=createCodexRunner({spawnProcess:()=>{spawned=true;throw Error('must not spawn');},ensureDirectory:()=>{}});await assert.rejects(()=>runner.run({task:{id:'source-required',prompt:'analyze evidence',attachments:[{name:'measurements.csv',source:'file'}]},materials:[]}),/Reconnect/);assert.equal(spawned,false);});
+
+for(const valid of [true,false])test(`local run stores ${valid?'valid':'no invalid'} context delivery and never loses the result`,async t=>{
+  const delivery={version:1,provider:'codex',unit:'utf8_bytes',readiness:'full_ready',contextBytes:900,originalBytes:900,selectionSavedBytes:0,omittedMessages:0,maxBytes:96000,hardMaxBytes:384000,reader:false,promptBytes:2000,materialBytes:0,inputTokens:null,cachedTokens:null};
+  const runner={available:async()=>true,run:async()=>({content:'Local result',contextDelivery:valid?delivery:{...delivery,inputTokens:7}})};
+  const app=await fixture({runners:{codex:runner}});t.after(()=>app.close());
+  const created=await json(await fetch(`${app.baseUrl}/api/tasks`,{method:'POST',headers:auth,body:JSON.stringify({prompt:'Analyze'})}));
+  await json(await fetch(`${app.baseUrl}/api/tasks/${created.body.task.id}/run`,{method:'POST',headers:auth,body:JSON.stringify({provider:'codex',expectedVersion:1})}));
+  const done=await waitFor(()=>{const task=app.store.getTask(created.body.task.id);return task.status==='completed'||task.status==='failed'?task:null;});
+  assert.equal(done.status,'completed');assert.equal(done.messages.at(-1).content,'Local result');
+  assert.deepEqual(done.checkpoint.contextDelivery,valid?delivery:undefined);
+});
+
+test('local run failure keeps the context delivery that explains it',async t=>{
+  const delivery={version:1,provider:'codex',unit:'utf8_bytes',readiness:'blocked',contextBytes:400000,originalBytes:400000,selectionSavedBytes:0,omittedMessages:0,maxBytes:96000,hardMaxBytes:384000,reader:false,promptBytes:null,materialBytes:0,inputTokens:null,cachedTokens:null};
+  const runner={available:async()=>true,run:async()=>{throw Object.assign(Error('blocked'),{code:'CONTEXT_RETRIEVAL_REQUIRED',contextDelivery:delivery});}};
+  const app=await fixture({runners:{codex:runner}});t.after(()=>app.close());
+  const created=await json(await fetch(`${app.baseUrl}/api/tasks`,{method:'POST',headers:auth,body:JSON.stringify({prompt:'Analyze'})}));
+  await json(await fetch(`${app.baseUrl}/api/tasks/${created.body.task.id}/run`,{method:'POST',headers:auth,body:JSON.stringify({provider:'codex',expectedVersion:1})}));
+  const failed=await waitFor(()=>{const task=app.store.getTask(created.body.task.id);return task.status==='failed'?task:null;});
+  assert.equal(failed.checkpoint.contextDelivery.readiness,'blocked');
+});

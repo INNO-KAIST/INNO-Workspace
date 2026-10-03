@@ -239,7 +239,7 @@ git diff --check
 npx --no-install wrangler deploy --dry-run --outdir .inno/deploy-check
 ```
 
-이번 검증은 이미 설치된 Wrangler4.131.1의 캐시 실행파일을 사용했다. `npx --no-install`이 설치를 찾지 못하면 기존 런타임 위치를 확인하고 자동 새 설치·버전 변경을 하지 않는다. 승인된 Python 명령은 이용 가능한 번들 Python으로 `-B tests/test_verify_deliverable.py`; Linux CI는 `python3 -B tests/test_verify_deliverable.py`다.
+이번 검증은 이미 설치된 Wrangler4.131.1의 캐시 실행파일을 사용했다(2026-10-03 Claude 확인: 실제 사용한 캐시는 `E:\Develop\INNO Workspace\.inno\npm-cache\_npx\c943b712072b77c4\node_modules\wrangler`, 버전 4.135.0. PowerShell PATH에는 node/npm이 없어 `%USERPROFILE%\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin\node.exe`(v24.19.0)로 실행). `npx --no-install`이 설치를 찾지 못하면 기존 런타임 위치를 확인하고 자동 새 설치·버전 변경을 하지 않는다. 승인된 Python 명령은 이용 가능한 번들 Python으로 `-B tests/test_verify_deliverable.py`; Linux CI는 `python3 -B tests/test_verify_deliverable.py`다.
 
 클라우드 checkout은 실제 checkout 디렉터리에서 Node>=24와 저장소 CI 명령을 사용한다. Windows `.cmd`, 절대 E: 경로, Codex 데스크톱 런타임 경로를 클라우드에서 그대로 실행하지 않는다.
 

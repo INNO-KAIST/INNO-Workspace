@@ -1,6 +1,9 @@
 import {ContextRetrievalRequiredError} from '../public/core/context-errors.mjs';
 import {ConflictError} from '../public/core/tasks.mjs';
 import {failureInput,runnerError} from '../public/core/failures.mjs';
+import {boundedContextDelivery} from '../public/core/context-delivery.mjs';
+// Optional evidence: an invalid record is dropped, never the launch outcome.
+const deliveryOf=value=>{try{const delivery=boundedContextDelivery(value);return delivery?{contextDelivery:delivery}:{};}catch{return {};}};
 const queued=t=>['queued','queued_for_review'].includes(t.status)&&t.checkpoint?.provider==='claude';
 const owns=(task,claim)=>task.status==='running'&&task.checkpoint?.executionId===claim.executionId&&task.checkpoint?.generation===claim.generation;
 // A durable claim precedes the external side effect. Ambiguous outcomes require
@@ -32,7 +35,7 @@ export async function runClaudeClaim({store,claim,fire}){
     if(!owns(current,claim))return;
     try{
      const owner={executionId:claim.executionId,generation:claim.generation};
-     if(definitive)await store.failExecution(task.id,{...owner,...failure});
+     if(definitive)await store.failExecution(task.id,{...owner,...failure,...deliveryOf(error?.contextDelivery)});
      else await store.markExecutionUncertain(task.id,{...owner,reason:'uncertain_fire'});
      return;
     }catch(writeError){if(!(writeError instanceof ConflictError))throw writeError;}
@@ -45,7 +48,7 @@ export async function runClaudeClaim({store,claim,fire}){
    try{
     const current=await store.requireTask(task.id);
     if(!owns(current,claim))return;
-    await store.leaveExecutionRunning(task.id,{executionId:claim.executionId,generation:claim.generation,sessionUrl:fired.claude_code_session_url,checkpoint:'Claude session started; results await verification.'});
+    await store.leaveExecutionRunning(task.id,{executionId:claim.executionId,generation:claim.generation,sessionUrl:fired.claude_code_session_url,checkpoint:'Claude session started; results await verification.',...deliveryOf(fired.contextDelivery)});
     return;
    }catch{/* Retry only this local metadata write, never the external fire. */}
   }

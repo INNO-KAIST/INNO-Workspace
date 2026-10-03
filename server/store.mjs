@@ -5,6 +5,7 @@ import {validateOfficeArtifact} from '../public/core/office-container.mjs';
 import {sanitizeArtifactChecks} from '../public/core/artifact-checks.mjs';
 import {executionUsage,usageHistory} from '../public/core/execution-usage.mjs';
 import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execution-evidence.mjs';
+import {ownedContextDelivery} from '../public/core/context-delivery.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
 import {assertEvaluationAttachable,assertEvaluationBindingPreserved,evaluationBinding,reserveClaimBudget} from '../public/core/evaluation-claim.mjs';
 import {encodeStoredEvaluationBudget,parseStoredEvaluationBudget} from '../worker/evaluation-budgets.mjs';
@@ -247,7 +248,7 @@ export class SqliteTaskStore {
         version: current.version + 1,
         updatedAt: now,
         checkpoint: {
-          ...previous, failure: undefined, executionEvidence: undefined, wallElapsedMs: undefined, completedAt: undefined,
+          ...previous, failure: undefined, executionEvidence: undefined, contextDelivery: undefined, wallElapsedMs: undefined, completedAt: undefined,
           executionId,
           generation,
           provider,
@@ -287,6 +288,7 @@ export class SqliteTaskStore {
       const now = this.now();
       const elapsed=wallElapsedMs(task.checkpoint?.claimedAt,now);
       const executionEvidence=allowDesktopEvidence&&input.executionEvidence?validateOwnedExecutionEvidence(task,input.executionEvidence):null;
+      const delivery=ownedContextDelivery(task,input.contextDelivery);
       const content = typeof input.content === 'string' ? input.content.trim() : '';
       if (!content) throw new ValidationError('execution result content is required');
       const generatedArtifacts = Array.isArray(input.artifacts) && input.artifacts.length
@@ -321,6 +323,7 @@ export class SqliteTaskStore {
         artifacts: [...task.artifacts, ...artifacts],
         checkpoint: {
           ...checkpoint,
+          ...(delivery?{contextDelivery:delivery}:{}),
           resultArtifactIds: [...task.artifacts.filter(a => a.executionId === input.executionId && a.generation === input.generation), ...artifacts].map(a => a.id),
           usage: executionUsage(task.checkpoint,input.usage,now), usageHistory: usageHistory(task.checkpoint,input.usage,now,{task,transition:'completion'}),
           status: 'completed',
@@ -360,6 +363,7 @@ export class SqliteTaskStore {
     const current = this.requireTask(id);
     return this.replaceTask(id, current.version, task => {
       this.assertExecution(task, input);
+      const delivery = ownedContextDelivery(task, input.contextDelivery);
       const now = this.now();
       const failure = failureRecord(input, now);
       const status = failure.kind === 'quota' ? 'waiting_quota' : failure.kind === 'authentication' ? 'waiting_connection' : 'failed';
@@ -370,6 +374,7 @@ export class SqliteTaskStore {
         updatedAt: now,
         checkpoint: {
           ...task.checkpoint,
+          ...(delivery?{contextDelivery:delivery}:{}),
           status,
           failure,
           usageHistory:usageHistory(task.checkpoint,input.usage,now,{task,transition:'failure'}),

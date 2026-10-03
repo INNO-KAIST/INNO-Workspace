@@ -1,5 +1,6 @@
 import {checkedContextUrl,SNAPSHOT_UNAVAILABLE} from './context-access.mjs';
 import {buildTaskContext} from '../public/core/task-context.mjs';
+import {contextDelivery} from '../public/core/context-delivery.mjs';
 import {sanitizeResumeState} from '../public/core/context-resume.mjs';
 import {ContextRetrievalRequiredError} from '../public/core/context-errors.mjs';
 import {sourceDelegationContext,delegationAttachments} from '../public/core/delegation-sources.mjs';
@@ -113,11 +114,21 @@ function localContextGuidance(task){
 }
 
 async function taskPrompt(task, materials = [], ownership = {}) {
+  return (await taskPromptWithContext(task, materials, ownership)).text;
+}
+
+async function taskPromptWithContext(task, materials = [], ownership = {}) {
   const readerAvailable=ownership.contextReaderAvailable===true;
   const context=await buildTaskContext(task,{mode:ownership.mode??executionMode(task),selection:readerAvailable?'resume':'full',readerAvailable});
   const selected=readerAvailable&&context.readiness==='selected_ready'&&context.manifest?.selection?.applied==='resume'
     &&context.manifest.budget.exceeded===false&&context.manifest.budget.requiredBytes<=context.manifest.budget.maxBytes;
-  if(!context.complete&&!selected)throw new ContextRetrievalRequiredError();
+  if(!context.complete&&!selected)throw Object.assign(new ContextRetrievalRequiredError(),{contextDelivery:contextDelivery(context,{provider:ownership.claude?'claude':'codex',reader:readerAvailable,materialBytes:materialBytes(materials)})});
+  return {text:promptText(task,materials,ownership,context,selected),context};
+}
+
+const materialBytes=materials=>materials.reduce((total,material)=>total+Buffer.byteLength(String(material?.text??'')),0);
+
+function promptText(task, materials, ownership, context, selected) {
   const plan = Array.isArray(task.plan)
     ? task.plan.map(item => `- ${item.role}: ${item.label} — ${item.instructions}`).join('\n')
     : '';
@@ -416,7 +427,7 @@ export function createCodexRunner({
     models: async()=>{const catalog=await readCatalog();const models=modelCatalogRows(Array.isArray(catalog)?catalog:catalog?.models);return Array.isArray(catalog)?models:{models,observedAt:catalog?.observedAt??null,status:catalog?.status==='fresh'?'fresh':'unavailable'};},
     sourceDelegationVersion:sourceDelegationVersion===1?1:0,
     async run({task, materials = [], reviewInputs = [], executionId, generation, signal, executionBudgetVersion, sourceDelegationVersion:negotiatedSourceVersion=sourceDelegationVersion}) {
-      let contextLease;
+      let contextLease,delivery;
       let deadline,processStartedMono=null,processClosedMono=null,rootProcessClosed=false,deadlineExceeded=false;
       const observation=()=>localExecutionObservation(processStartedMono,processClosedMono,{rootProcessClosed,deadlineExceeded});
       try {
@@ -479,16 +490,17 @@ export function createCodexRunner({
       ];
       const modelPolicy=deadline?'EVALUATION BUDGET EXECUTION: Work directly in this process. Do not use MCP tools, native subagents, delegation, or provider handoff. Return only the assigned result.':mode==='child'?codexChildPolicy(task,assignedRoute):mode==='review'?codexReviewPolicy(task):managedDelivery?delegationRoutingPolicy(models,{sourceDelegationVersion:sourceContext?1:0}):routingPolicy(models);
       const promptOptions={executionId, generation, managedDelivery, contextGuidance, contextReaderAvailable:Boolean(localContextUrl), handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'};
-      let input=await taskPrompt(task, materials, promptOptions);
+      let {text:input,context}=await taskPromptWithContext(task, materials, promptOptions);
       if(localContextUrl){
         try{contextLease=contextAccess.open(task,signal);}
         catch(error){
           if(error?.code!==SNAPSHOT_UNAVAILABLE)throw error;
           // No snapshot: rebuild as complete full text, or stop before spawn.
           localContextUrl=undefined;
-          input=await taskPrompt(task, materials, {...promptOptions, contextGuidance:'', contextReaderAvailable:false});
+          ({text:input,context}=await taskPromptWithContext(task, materials, {...promptOptions, contextGuidance:'', contextReaderAvailable:false}));
         }
       }
+      delivery=contextDelivery(context,{provider:'codex',promptBytes:Buffer.byteLength(input),materialBytes:materialBytes(materials),reader:Boolean(localContextUrl)});
       if(localContextUrl){
         runEnv.INNO_CONTEXT_URL=localContextUrl;
         runEnv.INNO_CONTEXT_TOKEN=contextLease.token;
@@ -557,6 +569,7 @@ export function createCodexRunner({
         checkpoint: structured?.checkpoint ?? (parsed.threadId ? `Codex thread ${parsed.threadId} completed.` : 'Codex execution completed.'),
         artifacts,
         usage: parsed.usage,
+        contextDelivery:delivery,
         executionEvidence:{provider:'codex',source:'cli_arguments',requestedModel:mode==='child'?task.assignment.requestedModel:null,requestedEffort:mode==='child'?task.assignment.effort:null,cliAppliedModel,cliAppliedEffort,actualModelVersion:null,processElapsedMs},
         ...(deadline?{localExecution:observation()}:{}),
         ...(managedDelivery && mode==='root' && structured?.handoff ? {handoff:structured.handoff} : {}),
@@ -571,6 +584,7 @@ export function createCodexRunner({
       }
       } catch(error) {
         if(task?.evaluationBudget)error.localExecution=observation();
+        if(delivery&&error&&typeof error==='object'&&error.contextDelivery===undefined)error.contextDelivery=delivery;
         throw error;
       } finally {contextLease?.revoke();}
     },

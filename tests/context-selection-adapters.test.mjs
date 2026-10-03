@@ -44,7 +44,7 @@ async function codex(task,{configured=true,failOpen=false,evaluation=false,snaps
    child.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Done'}})+'\n');child.stdout.end();child.emit('close',0,null);
   })().catch(error=>child.emit('error',error));});return child;
  }});
- try{await runner.run({task,executionId:'execution',generation:1,...(evaluation?{executionBudgetVersion:1}:{})});return capture;}catch(error){error.capture=capture;throw error;}finally{registry.close();}
+ try{capture.result=await runner.run({task,executionId:'execution',generation:1,...(evaluation?{executionBudgetVersion:1}:{})});return capture;}catch(error){error.capture=capture;throw error;}finally{registry.close();}
 }
 async function cloud(t,task){
  const DB=new TestD1();t.after(()=>DB.close());const store=new D1TaskStore(DB,{id:()=>task.id});
@@ -140,4 +140,16 @@ test('required context over the soft budget but within the hard cap runs with co
  task.checkpoint.resumeState.basis=(await createContextBasis(task,{messageCount:5})).basis;
  const local=await codex(task);assert.equal(local.spawns,1);assert.ok(local.prompt.includes(task.prompt));assert.ok(local.prompt.includes(oldText));
  const remote=await cloud(t,task);assert.equal(remote.fires,1);assert.ok(remote.prompt.includes('OVER_END'));assert.ok(remote.prompt.includes(oldText));
+});
+
+test('Codex results and context refusals carry the delivered context outcome in bytes',async()=>{
+ const sel=await codex(await sourceTask());const d=sel.result.contextDelivery;
+ assert.equal(d.provider,'codex');assert.equal(d.readiness,'selected_ready');assert.equal(d.reader,true);assert.ok(d.omittedMessages>=1);
+ assert.equal(d.promptBytes,Buffer.byteLength(sel.prompt));assert.equal(d.materialBytes,0);assert.equal(d.inputTokens,null);
+ const fallback=await codex(await sourceTask(),{snapshotLimit:1000});
+ assert.equal(fallback.result.contextDelivery.readiness,'full_ready');assert.equal(fallback.result.contextDelivery.reader,false);
+ const over=await sourceTask();over.prompt='y'.repeat(150000);over.checkpoint.resumeState.basis=(await createContextBasis(over,{messageCount:5})).basis;
+ assert.equal((await codex(over)).result.contextDelivery.readiness,'full_over_budget');
+ const big=await sourceTask();big.prompt='가'.repeat(150000);big.checkpoint.resumeState.basis=(await createContextBasis(big,{messageCount:5})).basis;
+ await assert.rejects(()=>codex(big),error=>error.code==='CONTEXT_RETRIEVAL_REQUIRED'&&error.contextDelivery?.readiness==='blocked'&&error.contextDelivery.promptBytes===null);
 });
