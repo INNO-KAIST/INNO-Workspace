@@ -49,3 +49,9 @@ INNO 시험 작업의 실행권으로 read_task → checkpoint_task → artifact
 모델 배정은 [MODEL-ROUTING.md](MODEL-ROUTING.md)를 따릅니다. 새 실행 payload에 제공되는 Claude 배정 계약은 위임 전 계획 체크포인트와 완료 후 별도 배정 보고서를 요구합니다. 저장소의 `.claude/agents` 정의를 사용하되 런타임 지원·치환 경고를 확인합니다. 기존 Routine의 마스터 모델과 인증은 유지합니다.
 
 병렬 배정은 delegate_task, 검토 재시도는 retry_delegation을 사용한다. 서버가 이미 배정한 child 또는 review 실행은 추가 역할 트리를 만들지 않는다. 최종 검토는 모든 acceptanceCriteria의 근거가 담긴 reviewReport를 checkpoint_task에 전달해야 완료할 수 있다. 최신 helper가 필요하므로 저장소의 최신 코드를 사용한다.
+
+## 재생성 기록 (2026-10-03)
+- 기존 Routine이 실수로 삭제되어 Claude Code RemoteTrigger로 다시 만들었다: `INNO Workspace 실행기`(trig_01JqQA1ENd9B2yKpeZVLvx3J), 모델 Opus 5.5, 환경 INNO Workspace, 저장소 INNO-KAIST/INNO-Workspace, 위 작업 계약 전문, 계정 커넥터 미부착.
+- 실행은 **API 트리거로만** 한다. 생성 API가 일정을 요구해 2월 29일 placeholder 일정이 있으며, 작업 정보 없이 시작되면 지침상 아무것도 만들지 않는다.
+- API 트리거 URL과 토큰은 웹 화면(Edit → Add another trigger → API → Generate token)에서만 발급되며 Worker 비밀값 `CLAUDE_ROUTINE_URL`, `CLAUDE_ROUTINE_TOKEN`에 사용자가 직접 넣는다. 토큰은 한 번만 표시된다.
+- **이 Routine을 삭제하면 INNO의 Claude 실행이 인증 실패로 멈춘다.** 데스크톱 앱의 로컬 예약 작업과 구분한다.
