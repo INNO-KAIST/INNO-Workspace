@@ -37,10 +37,12 @@ function serialize(state){
 }
 function expected(value){if(!Number.isSafeInteger(value)||value<0)fail('expectedStateVersion');return value;}
 function sameCandidate(a,b){return !!a&&a.id===b?.id&&a.provider===b?.provider&&a.model===b?.model&&a.modelVersion===b?.modelVersion&&a.effort===b?.effort;}
+// A row stored before execution routes existed stays as stored; a replay of that execution
+// that now carries a route is the same execution, not a conflicting one.
 function sameObservation(a,b){
  const usage=b.usage?{source:b.usage.source,inputTokens:b.usage.inputTokens??null,outputTokens:b.usage.outputTokens??null,latencyMs:b.usage.latencyMs??null}:null;
  const p=normalizedProfile(b.profile),profileSame=a.profile?.family===p.family&&a.profile?.requirementsVersion===p.requirementsVersion&&a.profile?.evaluationVersion===p.evaluationVersion&&a.profile?.contextClass===p.contextClass&&JSON.stringify(a.profile?.criteria)===JSON.stringify(p.criteria)&&JSON.stringify(a.profile?.requiredCapabilities)===JSON.stringify(p.requiredCapabilities);
- return !!a&&a.source===b.source&&a.observedAt===b.observedAt&&a.provider===b.provider&&a.executionId===b.executionId&&a.generation===b.generation&&a.id===b.id&&a.candidateId===b.candidateId&&a.comparisonId===b.comparisonId&&a.modelVersion===(b.modelVersion??null)&&profileSame&&JSON.stringify(a.quality)===JSON.stringify(b.quality??null)&&JSON.stringify(a.usage)===JSON.stringify(usage);
+ return !!a&&a.source===b.source&&a.observedAt===b.observedAt&&a.provider===b.provider&&a.executionId===b.executionId&&a.generation===b.generation&&a.id===b.id&&a.candidateId===b.candidateId&&a.comparisonId===b.comparisonId&&a.modelVersion===(b.modelVersion??null)&&(a.route===undefined||JSON.stringify(a.route)===JSON.stringify(b.route??null))&&profileSame&&JSON.stringify(a.quality)===JSON.stringify(b.quality??null)&&JSON.stringify(a.usage)===JSON.stringify(usage);
 }
 
 // `verifyObservation` and `getAvailability` are trusted server callbacks, never request payloads.
@@ -107,7 +109,7 @@ export function createModelPolicyMethods(adapter,{now=Date.now,getAvailability=(
    expected(expectedStateVersion);const {key,state}=await loaded(profile);
    if(state.stateVersion!==expectedStateVersion)conflict();
    const at=clock(),rows=await availability();
-   const unverified=state.activeId===state.baselineId&&state.policyVersion===1&&state.previousId===null&&state.activeEvidenceIds.length===0&&state.candidates.find(x=>x.id===state.activeId)?.modelVersion===null;
+   const unverified=state.activeId===state.baselineId&&state.previousId===null&&state.activeEvidenceIds.length===0&&state.candidates.find(x=>x.id===state.activeId)?.modelVersion===null;
    const allowed=unverified&&typeof validateUnverifiedBaseline==='function'&&await validateUnverifiedBaseline(state);
    const result=pinCandidate(state,candidateId,{now:at,availability:rows,allowUnverifiedBaseline:allowed});
    return {...result,state:await write(key,state,result.state)};

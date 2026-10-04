@@ -175,7 +175,8 @@ test('rollback does not reactivate a prior promoted route after its evidence exp
  state=registerCandidate(state,{id:'new2',provider:'claude',model:'candidate2',modelVersion:'v3',effort:'medium'});
  for(let i=0;i<3;i++){
   state=recordObservation(state,observation(`xb${i}`,'base',`xp${i}`),{now}).state;
-  state=recordObservation(state,observation(`xc${i}`,'new2',`xp${i}`,{modelVersion:'v3'}),{now}).state;
+  state=recordObservation(state,observation(`xn${i}`,'new',`xp${i}`),{now}).state;
+  state=recordObservation(state,observation(`xc${i}`,'new2',`xp${i}`,{modelVersion:'v3',usage:{source:'executor_report',inputTokens:60,outputTokens:20,latencyMs:800}}),{now}).state;
  }
  const all=[...availability(),{provider:'claude',model:'candidate2',modelVersion:'v3',efforts:['medium'],capabilities:['tools','long_context'],contextClasses:['large'],observedAt:now,expiresAt:now+60_000,source:'account_catalog'}];
  state=promoteCandidate(state,'new2',{now,availability:all}).state;
@@ -190,7 +191,8 @@ test('expired evidence IDs reused by new executions cannot restore prior promote
  state=registerCandidate(state,{id:'new2',provider:'claude',model:'candidate2',modelVersion:'v3',effort:'medium'});
  for(let i=0;i<3;i++){
   state=recordObservation(state,observation(`yb${i}`,'base',`yp${i}`),{now}).state;
-  state=recordObservation(state,observation(`yc${i}`,'new2',`yp${i}`,{modelVersion:'v3'}),{now}).state;
+  state=recordObservation(state,observation(`yn${i}`,'new',`yp${i}`),{now}).state;
+  state=recordObservation(state,observation(`yc${i}`,'new2',`yp${i}`,{modelVersion:'v3',usage:{source:'executor_report',inputTokens:60,outputTokens:20,latencyMs:800}}),{now}).state;
  }
  const all=[...availability(),{provider:'claude',model:'candidate2',modelVersion:'v3',efforts:['medium'],capabilities:['tools','long_context'],contextClasses:['large'],observedAt:now,expiresAt:now+60_000,source:'account_catalog'}];
  state=promoteCandidate(state,'new2',{now,availability:all}).state;
@@ -274,4 +276,17 @@ test('legacy null-version baseline critical cannot bypass wait through unverifie
  const choice=selectAssignment(unknown,{profile,availability:availability(),now});
  assert.equal(choice.status,'wait');
  assert.equal(unverifiedBaselineRoute(unknown,choice,'codex'),null);
+});
+
+test('a versioned candidate also needs direct evidence against the promoted current route',()=>{
+ let state=promoteCandidate(paired(registerCandidate(fresh(),candidate)),'new',{now,availability:availability()}).state;
+ state=registerCandidate(state,{id:'new2',provider:'claude',model:'candidate2',modelVersion:'v3',effort:'medium'});
+ const lean={source:'executor_report',inputTokens:60,outputTokens:20,latencyMs:800};
+ for(let i=0;i<3;i++)state=recordObservation(recordObservation(state,observation(`zb${i}`,'base',`zp${i}`),{now}).state,observation(`zc${i}`,'new2',`zp${i}`,{modelVersion:'v3',usage:lean}),{now}).state;
+ const all=[...availability(),{provider:'claude',model:'candidate2',modelVersion:'v3',efforts:['medium'],capabilities:['tools','long_context'],contextClasses:['large'],observedAt:now,expiresAt:now+60_000,source:'account_catalog'}];
+ assert.equal(promoteCandidate(state,'new2',{now,availability:all}).reason,'insufficient_current_route_evidence');
+ for(let i=0;i<3;i++)state=recordObservation(state,observation(`zn${i}`,'new',`zp${i}`),{now}).state;
+ const result=promoteCandidate(state,'new2',{now,availability:all});
+ assert.equal(result.promoted,true);assert.equal(result.state.candidates.find(x=>x.id==='new2').comparedWithId,'new');
+ assert.equal(selectAssignment(result.state,{profile,availability:all,now}).candidateId,'new2');
 });

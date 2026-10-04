@@ -4,8 +4,8 @@
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
 - 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP, Task3h 복구 UI·client·local proxy 연결 및 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
 - 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. Task3l 복구 서비스 루프·스크립트 배선 검증 완료(기본0). Task3m 해시 확인 명시 전달 HTTP 검증 완료. Task3n 로컬 복구 UI 구현·독립 리뷰·실제 브라우저 검증 완료. 전체1010건 중1009통과/0실패/기존symlink1skip. 이후 legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화는 2026-10-01 승인·PRD 반영 완료. CONTEXT-EFFICIENCY-IMPLEMENTATION.md Stage1 공통 조립/제공자 연결 검증 완료. Stage2A 범위 제한 원문 조회 검증 완료. Stage2B1 재개 상태 저장·출처 검증 완료. Stage2B2 일반 결과 전달·저장 연결 검증 완료. Stage2C 제공자별 실제 조회 helper 연결 완료. Stage2D1 선택적 문맥 전달·전체1097pass 검증 완료. 사용자 요청으로 현재 단계 종료 후 Claude handoff. 다음 최초 oversize 처리·전체 prompt 예산·관측 UI·실제 구독 환경 검증; 상세 HANDOFF-CLAUDE.md.
-- **Claude 재개 지점(2026-10-01 저녁 갱신, 이 줄이 위 두 줄보다 우선):** Claude 독립 총괄 검토 후 WU1(renew 일시 오류 허용·v0 결과 저장 실패 차단), WU2(데스크톱 fail/renew의 complete 정합), WU3(Claude 선택 조회 version-only 충돌 연속성), WU4(snapshot 불가 시 전문 대체·v0 정지 안내), WU5(사용자 결정: 96KB 초과~384KB 전문 전달, 상한 초과만 차단)를 구현·독립검증·기록했다. 사용자 요청으로 로컬 커밋 d1da52d(codex/source-release, push 안 함)에 담았으며 main/Worker/Pages 미배포. 2026-10-03: WU6(문맥 전달 관측)·WU7(문서) 완료, CR-006/007 승인·CR-004 A 결정. 2026-10-03 릴리스 완료(main/Worker ebc60186/Pages/데스크톱 6125c11, Claude·Codex 실구독 최소 시험 통과, INNO Claude Routine 재생성 trig_01JqQA1ENd9B2yKpeZVLvx3J). 2026-10-03: CR-006 S1 제공자 레지스트리 완료(WU0~WU7, 커밋 전·사용자 확인 대기, 계획 docs/superpowers/plans/2026-10-03-provider-registry.md). CR-007 S3 플러그인 등록부 완료(P1~P5, 커밋 전, 계획 docs/superpowers/plans/2026-10-03-plugin-registry.md, 문서 docs/PLUGINS.md). 다음: CR-004A → H4 journal(+ receipt v1 사용자 중단 후 데스크톱 차단). (이전 2026-10-01 예약 재개 계획은 이 세션에서 직접 진행으로 대체)
-- CR004 실행 경로 기반 모델 평가 선택은 계속 대기. 기존 승인 범위의 복구 작업은 독립적으로 계속 가능하다.
+- **Claude 재개 지점(2026-10-01 저녁 갱신, 이 줄이 위 두 줄보다 우선):** Claude 독립 총괄 검토 후 WU1(renew 일시 오류 허용·v0 결과 저장 실패 차단), WU2(데스크톱 fail/renew의 complete 정합), WU3(Claude 선택 조회 version-only 충돌 연속성), WU4(snapshot 불가 시 전문 대체·v0 정지 안내), WU5(사용자 결정: 96KB 초과~384KB 전문 전달, 상한 초과만 차단)를 구현·독립검증·기록했다. 사용자 요청으로 로컬 커밋 d1da52d(codex/source-release, push 안 함)에 담았으며 main/Worker/Pages 미배포. 2026-10-03: WU6(문맥 전달 관측)·WU7(문서) 완료, CR-006/007 승인·CR-004 A 결정. 2026-10-03 릴리스 완료(main/Worker ebc60186/Pages/데스크톱 6125c11, Claude·Codex 실구독 최소 시험 통과, INNO Claude Routine 재생성 trig_01JqQA1ENd9B2yKpeZVLvx3J). 2026-10-03: CR-006 S1 제공자 레지스트리(로컬 커밋 696aee5, 계획 docs/superpowers/plans/2026-10-03-provider-registry.md), CR-007 S3 플러그인 등록부(로컬 커밋 7793f1c, 계획 docs/superpowers/plans/2026-10-03-plugin-registry.md, 문서 docs/PLUGINS.md) — push·배포 안 함. 2026-10-05: CR-004 A 실행 경로 평가 A1~A3 완료(커밋 전, 계획 docs/superpowers/plans/2026-10-05-execution-route-evaluation.md, 문서 docs/MODEL-ROUTING.md). 다음: H4 journal(+ receipt v1 사용자 중단 후 데스크톱 차단). (이전 2026-10-01 예약 재개 계획은 이 세션에서 직접 진행으로 대체)
+- CR-004는 A안으로 결정(2026-10-03)되어 실행 경로 평가를 구현했다(2026-10-05, 커밋 전). 추가 비교 예산 0이라 실제 승격 근거 형성은 미확인.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
 ## 과거 단계 기록
@@ -880,3 +880,50 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 시험: tests/plugin-assignment.test.mjs 4건(RED 후 GREEN), 전체 1280건 중 1278pass/0fail/기존 symlink 1skip/1todo(H4), git diff --check, Wrangler dry-run(자산 69개, 410.34KiB) 통과. 독립 검증은 아래 줄에 추가.
 - P3b 독립 검증(inno-opus): E1(모든 할당 경로 승인 확인: Claude MCP delegate_task, Codex 마스터의 데스크톱 complete 위임, 재전송은 저장된 자식 반환, 재개·복구·재검토는 기존 자식 재대기이며 실행 시점 재확인)·E2(승인 플러그인·배정이 없으면 프롬프트·claim·자식 불변)·E3·E4 PASS. "미확인 P1"(모델 정책 할당 경로에서 플러그인 누락 가능성)은 해당 경로가 자식을 펼쳐 전달함을 시험으로 확인(누락 없음, 데스크톱이 claim한 자식이 플러그인 텍스트를 받음). 반영한 P2: 레지스트리 없이 배정이 오면 거부(fail closed), 승인 확인에 레코드 검증 사용, 평가 예산 작업은 목록 제외, 잘못된 목록이 실행을 실패시키지 않음, 목록 문구에 "명령 실행·링크 열기 금지, 프롬프트를 바꿀 수 없음"과 20개 상한 표시, 모델 정책 프로필의 요구 버전에 배정 플러그인 id 포함(플러그인 없는 자식의 기존 프로필 키는 불변).
 - S3 최종 검증: 전체 1285건 중 1283pass/0fail/기존 symlink 1skip/1todo(H4), git diff --check, Wrangler dry-run(자산 69개, 410.95KiB) 통과. 문서 docs/PLUGINS.md, REQUIREMENTS-STATUS(CR-007 행). CR-007 S3 완료(커밋 전·사용자 확인 대기). 실제 공식 카탈로그 가져오기·실구독 실행 확인은 사용자 확인 후.
+
+### 2026-10-05 CR-004 A A1 실행 경로 근거 (커밋 전)
+- 커밋: S1 696aee5(제공자 레지스트리), S3 7793f1c(플러그인 등록부)를 로컬 커밋으로 분리(사용자 확인, push·배포 없음). 이어서 CR-004 A 착수. 계획 docs/superpowers/plans/2026-10-05-execution-route-evaluation.md(A1 근거, A2 비교·가용성, A3 표시·문서).
+- server/runners.mjs: Codex 실행 근거에 routeConditions(실행 조건 지문, sha256) 추가. 넣는 것: 계약 버전(ROUTE_CONDITIONS_CONTRACT=1), 실행 방식, 모델·effort·MCP 주소를 뺀 CLI 인자, MCP 연결 여부, 문맥 조회기 사용 여부, 관리 전달, 협상된 원본 위임 버전, 평가 예산 실행 여부, 실제 전달된 플러그인 id·해시(전달 순서 포함). 모델·effort는 경로 자체라서, 시작마다 바뀌는 loopback MCP 주소는 비교 가능성을 깨므로 제외.
+- public/core/execution-evidence.mjs: routeConditions는 없음/null(필드 생략, 이전 근거 형태 그대로) 또는 64자리 소문자 hex만 허용. worker/review-observation.mjs: 근거의 CLI 적용 model/effort가 배정과 같고 조건 지문이 있을 때만 관측에 route {basis:'cli_arguments', model, effort, conditions}를 기록. 적용값이 배정과 다르거나 저장된 지문 형식이 깨졌으면 not_attributable(execution_evidence_mismatch). 모델 자기보고·serving version은 쓰지 않음(계속 null).
+- public/core/model-selection.mjs validObservation: route는 정확한 키, basis, 후보와 같은 model/effort, hex 지문일 때만 저장하고 버전 있는 관측에는 거부. worker/model-policies.mjs 재처리 비교에 route 포함(다른 route는 충돌, route 도입 전에 저장된 행에 route가 붙은 재처리는 같은 실행으로 보고 저장값 유지 — 배포 되돌림 호환).
+- 프롬프트 계약 고정: 조건 지문은 프롬프트 문구를 보지 못하므로 tests/execution-route.test.mjs가 표준 자식 프롬프트(플러그인 없음·있음)의 sha256을 계약 버전별로 고정한다(기계별 도우미 경로는 자리표시로 치환). 프롬프트를 바꾸면 계약 버전을 올리고 새 항목을 추가해야 CI가 통과한다.
+- 독립 검증(inno-opus): P0/P1 없음, 승인(수정 조건). 반영: P2 프롬프트 문구 변경이 지문에 반영되지 않음(위 고정 시험), P3 저장 지문 형식 검사, 배포 되돌림 시 재처리 충돌, 누락 시험(관리 전달·원본 위임 버전 지문 변화, SQLite 저장, outbox 보존, 이전 행 재처리). 문서화할 한계(A3): Codex CLI 자체 버전 미포함(90일 근거 만료로만 재검토), --ignore-user-config가 전역 지시 파일까지 막는지 미확인, 플러그인 순서가 지문에 포함됨(짝짓지 않는 쪽으로 보수적).
+- 검증: tests/execution-route.test.mjs 13건(RED 후 GREEN), 기존 실행 근거 시험 2건 기대값 갱신. A2 포함 전체 1307건 중 1305pass/0fail/기존 symlink 1skip/1todo(H4), git diff --check, Wrangler dry-run(자산 69개, 415.70KiB) 통과.
+
+### 2026-10-05 CR-004 A A2 실행 경로 비교·가용성·배정 (커밋 전)
+- public/core/model-selection.mjs: 버전 없는 경로의 근거 = 같은 model/effort의 route 관측. 쌍은 같은 comparisonId·같은 실행 조건일 때만, comparisonId당 한 쌍. route 관측과 route 없는 관측은 짝짓지 않음. 버전 없는 후보는 route 관측이 하나도 없으면 기존 사유 unobserved_model_version으로 보류. 가용성 근거 수준 분리: 버전 있는 경로·기준 경로는 기존 account_catalog 행(버전·능력·문맥), 버전 없는 비기준 경로는 신선한 account_exposure 행(계정 목록 노출만, 능력·문맥 주장 없음).
+- 승격: 기존 최소 표본·독립 검토 전부 통과·실측 토큰 감소·지연 비악화에 더해, 이미 승격된 경로가 사용 중이면 그 경로와의 직접 비교 쌍도 같은 기준으로 요구(insufficient_current_route_evidence, 제안 A의 "이미 승격된 모델 간 전환" 조건, 버전 있는 경로에도 적용 — 기존 시험 2건에 직접 비교 쌍 추가). 근거 id·참조는 중복 제거 후 저장하고 비교 대상(comparedWithId)을 남김. 근거 유효성은 저장된 쌍 자체를 다시 확인(나중 관측이 쌍을 밀어내지 못함).
+- 철회·배정: 버전 미확인 기준 경로는 가용성 행 없이 복구. 미검증 기준 경로 우회(배정 때 계정 목록으로 재확인)에서 policyVersion===1·activeId===기준 조건을 빼고, 다른 경로 고정이 없으면 허용(버전 있는 기준 경로의 기존 대체 규칙과 같음). 그래서 2단계 철회, 이전 경로 미노출 중 철회·중대 회귀, 승격 경로의 근거 만료·계정 노출 상실 때도 배정이 기준 경로로 간다(이유 active_route_not_current). 고정한 경로는 기다린다. 철회·중대 회귀 기준 경로는 계속 제외.
+- worker/allocation-policy.mjs: availabilitySnapshot이 신선한 데스크톱 계정 목록(account_catalog 종류 제공자)에서 account_exposure 행을 만든다(만료 = 보고 시각+2시간, desktop_models 가드가 값·만료를 고정). 버전 없는 선택은 account_exposure 행으로만 확인.
+- 독립 검증(inno-opus): 승인(수정 조건). 반영: P1 버전 없는 기준 경로 프로필이 2단계 철회·이전 경로 미노출 때 영구 대기, P2 승격 경로 근거 만료·노출 상실 때 배정 실패(위 우회 확장), P2 버전 있는 후보와 버전 없는 기준 경로 비짝짓기를 의도로 기록·시험, P3 나중 관측의 근거 밀어내기(저장 쌍 재확인). 미반영(도달 불가·기록만): 핵심 함수 직접 호출에서만 생기는 null 버전 account_catalog 기준 대체와 배정 확인 기준 차이(스냅샷이 null 버전 정책 행을 버림), 노출 만료 가드 키가 model_policy_availability인 점(desktop_models 가드로 충분), 프롬프트 해시 표를 계약 증가 없이 고칠 수 있는 절차 위험(시험 주석으로 금지).
+- 남은 한계: 사용 중 승격 경로의 근거를 같은 경로로 갱신하는 절차는 없다(already_active, 철회는 영구). 새 비교 사례가 필요하며 추가 비교 예산 0에서는 생기지 않는다.
+- 검증: tests/execution-route-policy.test.mjs 14건, model-selection 버전 있는 직접 비교 시험 추가(RED 후 GREEN). 전체 1314건 중 1312pass/0fail/기존 symlink 1skip/1todo(H4), git diff --check, Wrangler dry-run(자산 69개, 416.78KiB) 통과.
+
+### 2026-10-05 CR-004 A A3 표시·문서 (커밋 전) — CR-004 A 완료
+- public/model-policy-ui.mjs:
+  - CLI 근거가 있는 제공자에는 "이 실행 경로의 관측 결과(실행기가 CLI로 적용한 모델·검토 강도, 동일한 실행 조건, 같은 입력의 독립 검토)" 비교 범위와 한계(내부 버전·다른 작업 동등 품질 미보장, 추가 비교 예산 0이라 승격 검토가 근거 부족으로 보류될 수 있음)를 표시한다.
+  - CLI 근거가 없는 제공자(Claude Routine)에는 승격 대상이 아님을 표시한다.
+  - 선택된 버전 없는 경로에 "(내부 버전 미확인)" 접미사를 붙인다(CLI 근거 제공자만).
+  - 새 사유 라벨: insufficient_current_route_evidence, active_route_not_current, profile_mismatch.
+  - 이전 경로 복구가 불가한 철회 안내를 기준 경로 재확인 동작에 맞게 수정했다.
+  - 자산 버전 app.mjs?v=execution-route-20261005.
+- 문서:
+  - PRD MOD-01/03/04/05에 실행 경로 평가의 의미·한계를 반영했다.
+  - docs/MODEL-ROUTING.md: 비교 규칙, 가용성 수준, 승격 경로 근거 만료 때 기준 경로 배정, 고정 경로 대기, 한계 목록.
+  - REQUIREMENTS-STATUS의 CR-004 A 행과 다음 순서, CHANGE_REQUESTS의 CR-004 상태를 갱신했다.
+  - 오래된 "결정 대기" 표기(HANDOFF-CLAUDE H5·표·재개 문구, MODEL-ROUTE-EVIDENCE-PROPOSAL 상태, PROVIDER-PLUGIN-PROPOSAL)와 PROGRESS 재개 지점을 갱신했다.
+  - 승격은 사용자의 "승격 검토"로만 요청되므로 새 문구에서 "자동 승격" 표현을 쓰지 않는다.
+- 독립 검증(inno-opus): 승인(수정 조건). 반영:
+  - P2: 손상된 고정 상태(고정된 기준 경로가 active가 아님)는 우회 불가. 작업군 불일치(profile_mismatch) 대기도 우회 불가.
+  - P2: HANDOFF-CLAUDE의 CR-004 미결정 표기.
+  - P3: 이전 경로 없는 철회 뒤 사유를 active_route_not_current로 통일(activeId≠기준), 경로 접미사 제공자 제한, 철회 안내와 경로 표시 불일치, 한국어 문구, profile_mismatch 라벨, "자동 승격" 과장 표현.
+  - 수정분은 시험으로 확인했고 재검토는 하지 않았다.
+- 미반영(기록만):
+  - 정책 화면 HTTP 시험에서 active_route_not_current 직접 확인은 없다. 배정과 화면이 같은 함수를 쓰고, 핵심·배정 시험으로 확인했다.
+  - 실제 브라우저 확인 없음. 기존 대화상자의 문구 변경이라 렌더링 단위 시험으로 대신했다.
+- 검증: tests/model-policy-ui.test.mjs와 tests/execution-route-policy.test.mjs 추가·갱신(RED 후 GREEN). 전체 1315건 중 1313pass/0fail/기존 symlink 1skip/1todo(H4), git diff --check, Wrangler dry-run(자산 69개, 416.84KiB) 통과.
+- 한계 요약:
+  - 정상 작업만으로는 같은 입력·같은 조건 비교 쌍이 거의 생기지 않고 추가 비교 예산이 0이라, 실제 승격 근거 형성은 확인하지 못했다.
+  - 평가 예산 실행은 모델 인자를 적용하지 않아 실행 경로 근거를 만들지 않는다.
+  - 내부 버전·Codex CLI 버전·전역 지시 파일 변화는 구분하지 못한다.
+  - 사용 중 승격 경로의 근거를 같은 경로로 갱신하는 절차가 없다.

@@ -1,7 +1,7 @@
 import {D1ModelPolicies,MAX_MODEL_POLICY_PROFILES,profileKey} from './model-policies.mjs';
 import {ValidationError} from '../public/core/tasks.mjs';
 import {baselineExcluded,createSelectionState} from '../public/core/model-selection.mjs';
-import {providerModels} from '../public/core/providers.mjs';
+import {ASSIGNABLE_PROVIDER_IDS,providerModels} from '../public/core/providers.mjs';
 
 const hex=bytes=>Array.from(bytes,x=>x.toString(16).padStart(2,'0')).join('');
 const digest=async value=>hex(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))));
@@ -21,13 +21,26 @@ export async function availabilitySnapshot(store,catalog){
  try{observations=JSON.parse(row?.value??'[]');}catch{}
  const now=instant(store.now());
  const rows=Array.isArray(observations)?observations.filter(x=>x?.source==='account_catalog'&&providerModels(x.provider)?.catalog==='account_catalog'&&typeof x.modelVersion==='string'&&x.modelVersion.length>0&&catalog.availability==='fresh'&&catalog.codex.some(m=>m.model===x.model&&x.efforts?.every(e=>m.efforts.includes(e)))&&Number.isSafeInteger(x.observedAt)&&x.observedAt<=now&&x.expiresAt>now&&x.expiresAt-x.observedAt<=7_200_000):[];
- return {rows:rows.slice(0,100),raw:row?.value??null};
+ // Account exposure says only that the fresh desktop account list offers this model and
+ // effort. It carries no serving version, capability or context-fit claim, and it is
+ // guarded by the desktop_models row that every allocation already pins.
+ const reportedAt=catalog.reportedAt;
+ const exposure=catalog.availability==='fresh'&&Number.isSafeInteger(reportedAt)&&reportedAt<=now?ASSIGNABLE_PROVIDER_IDS.filter(provider=>providerModels(provider)?.catalog==='account_catalog').flatMap(provider=>(Array.isArray(catalog[provider])?catalog[provider]:[]).filter(m=>typeof m?.model==='string'&&Array.isArray(m.efforts)).map(m=>({source:'account_exposure',provider,model:m.model,modelVersion:null,efforts:[...m.efforts],observedAt:reportedAt,expiresAt:reportedAt+7_200_000}))):[];
+ return {rows:[...rows,...exposure].slice(0,100),raw:row?.value??null};
 }
 
+// Mirrors the versioned-baseline fallback in selectAssignment: unless another route is pinned,
+// an unversioned baseline that is not withdrawn or regressed stays usable, and every
+// assignment re-checks it against the account catalog. A pinned route waits instead.
 export function unverifiedBaselineRoute(state,choice,provider){
  const baseline=state?.candidates.find(x=>x.id===state.baselineId);
- return choice?.status==='wait'&&!baselineExcluded(state)&&(!state?.pin||state.pin.candidateId===state.activeId)&&state?.policyVersion===1&&state?.previousId===null&&state?.activeEvidenceIds.length===0&&state?.activeId===state?.baselineId&&baseline?.status==='active'&&baseline.modelVersion===null&&baseline.provider===provider?baseline:null;
+ const pinAllows=!state?.pin||state.pin.candidateId===state.baselineId&&state.activeId===state.baselineId&&baseline?.status==='active';
+ return choice?.status==='wait'&&choice.reason!=='profile_mismatch'&&!!baseline&&!baselineExcluded(state)&&pinAllows&&baseline.status!=='withdrawn'&&baseline.modelVersion===null&&baseline.provider===provider?baseline:null;
 }
+// Why an unverified-baseline assignment was used: never promoted, or a promoted route is no
+// longer current (its evidence expired, the account no longer lists it, or it was withdrawn
+// with no earlier route to restore, which leaves no active route).
+export const unverifiedBaselineReason=state=>state?.activeId!==state?.baselineId?'active_route_not_current':'baseline_version_unverified';
 
 export async function resolveAllocationPolicy(store,catalog,assignments){
  const account=await catalog.read(),availability=await availabilitySnapshot(store,account);
@@ -47,7 +60,7 @@ export async function resolveAllocationPolicy(store,catalog,assignments){
   if(choice?.provider&&choice.provider!==child.provider)throw new ValidationError('Policy provider differs from fixed child provider');
   const promoted=choice?.status==='selected';
   if(choice?.status==='selected'||choice?.status==='fallback'){
-   const matched=availability.rows.find(x=>x.provider===choice.provider&&x.model===choice.model&&x.modelVersion===choice.modelVersion&&x.efforts.includes(choice.effort)&&profile.requiredCapabilities.every(c=>x.capabilities.includes(c))&&x.contextClasses.includes(profile.contextClass));
+   const matched=availability.rows.find(x=>x.provider===choice.provider&&x.model===choice.model&&x.modelVersion===choice.modelVersion&&x.efforts.includes(choice.effort)&&(choice.modelVersion===null?x.source==='account_exposure':profile.requiredCapabilities.every(c=>x.capabilities.includes(c))&&x.contextClasses.includes(profile.contextClass)));
    if(!matched)throw new ValidationError('Policy route lost trusted availability');
    guards.push({key:'model_policy_availability',value:availability.raw,expiresAt:matched.expiresAt});
   }
@@ -67,7 +80,7 @@ export async function resolveAllocationPolicy(store,catalog,assignments){
   }
   const selection=promoted
    ?{status:'selected',policyVersion:choice.policyVersion,evidenceIds:[...choice.evidenceIds],reason:choice.reason,modelVersion:choice.modelVersion,profile}
-   :{status:'fallback',policyVersion:state?.policyVersion??(initializing?1:null),evidenceIds:[],reason:unverifiedBaseline||initializing?'baseline_version_unverified':choice?.reason??'policy_capacity_unavailable',modelVersion:null,profile,confidence:'unvalidated_fallback'};
+   :{status:'fallback',policyVersion:state?.policyVersion??(initializing?1:null),evidenceIds:[],reason:unverifiedBaseline?unverifiedBaselineReason(state):initializing?'baseline_version_unverified':choice?.reason??'policy_capacity_unavailable',modelVersion:null,profile,confidence:'unvalidated_fallback'};
   resolved.push({...child,requestedModel:model,effort,selection});
  }
  return {assignments:resolved,guards,initialPolicies};

@@ -82,11 +82,16 @@ export async function verifyReviewObservation(store,evidenceRef,state){
  const evidence=owner.executionEvidence;
  if(evidence){
   if(evidence.source!=='cli_arguments')return no('unsupported_model_evidence_source');
-  if(evidence.provider!==owner.provider||(evidence.executionId!==undefined&&evidence.executionId!==owner.executionId)||(evidence.generation!==undefined&&evidence.generation!==owner.generation)||(evidence.requestedModel&&evidence.requestedModel!==targetAssignment.requestedModel)||(evidence.requestedEffort&&evidence.requestedEffort!==targetAssignment.effort))return no('execution_evidence_mismatch');
+  if(evidence.provider!==owner.provider||(evidence.executionId!==undefined&&evidence.executionId!==owner.executionId)||(evidence.generation!==undefined&&evidence.generation!==owner.generation)||(evidence.requestedModel&&evidence.requestedModel!==targetAssignment.requestedModel)||(evidence.requestedEffort&&evidence.requestedEffort!==targetAssignment.effort)||(evidence.cliAppliedModel&&evidence.cliAppliedModel!==targetAssignment.requestedModel)||(evidence.cliAppliedEffort&&evidence.cliAppliedEffort!==targetAssignment.effort))return no('execution_evidence_mismatch');
+  if(evidence.routeConditions!==undefined&&evidence.routeConditions!==null&&(typeof evidence.routeConditions!=='string'||!/^[0-9a-f]{64}$/.test(evidence.routeConditions)))return no('execution_evidence_mismatch');
   if(evidence.actualModelVersion!==null&&evidence.actualModelVersion!==undefined)return no('unverified_model_version');
  }
  // Current durable CLI evidence has no serving-model attestation.
  const actualModelVersion=null;
+ // The evaluated route is what the runner applied through CLI arguments under recorded run
+ // conditions, never a model's own claim. Evidence without conditions stays route-less.
+ const route=evidence&&typeof evidence.routeConditions==='string'&&evidence.cliAppliedModel===targetAssignment.requestedModel&&evidence.cliAppliedEffort===targetAssignment.effort
+  ?{basis:'cli_arguments',model:evidence.cliAppliedModel,effort:evidence.cliAppliedEffort,conditions:evidence.routeConditions}:null;
  const candidates=state?.candidates?.filter(x=>x.provider===targetAssignment.provider&&x.model===targetAssignment.requestedModel&&x.effort===targetAssignment.effort&&x.modelVersion===actualModelVersion)??[];
  if(candidates.length!==1)return no(actualModelVersion===null?'unverified_model_version':'candidate_route_mismatch');
  if(targetAssignment.selection?.modelVersion&&targetAssignment.selection.modelVersion!==actualModelVersion)return no('saved_selection_version_mismatch');
@@ -98,7 +103,7 @@ export async function verifyReviewObservation(store,evidenceRef,state){
  const inputTokens=count(ownedUsage?.inputTokens),outputTokens=count(ownedUsage?.outputTokens);
  const observation={
   id:'ro_'+await digest([parent.id,child.id,review.executionId,review.generation,owner.executionId,owner.generation]),
-  provider:owner.provider,executionId:owner.executionId,generation:owner.generation,candidateId:candidates[0].id,modelVersion:actualModelVersion,
+  provider:owner.provider,executionId:owner.executionId,generation:owner.generation,candidateId:candidates[0].id,modelVersion:actualModelVersion,...(route?{route}:{}),
   comparisonId:'pair_'+await digest(signature),profile,observedAt,source:'normal_execution',
   quality:{source:'independent_review',critical:false,criteria:profile.criteria.map((id,i)=>({id,status:targetStatuses[i]}))},
   usage:{source:ownedUsage?'executor_report':'server_metered',inputTokens,outputTokens,latencyMs},

@@ -161,3 +161,31 @@ test('pin conflict refreshes the projection and stale pin completion cannot alte
  assert.equal(view.notice.textContent,'');assert.equal(writes,2);
  ui.close();
 });
+
+test('unversioned routes are described as execution-route observations with their limits',async()=>{
+ assert.match(modelPolicyOutcome('promote',{reason:'insufficient_current_route_evidence'}),/현재 사용 중인 경로와의 직접 비교 근거 부족/);
+ assert.match(modelPolicyOutcome('promote',{reason:'unobserved_model_version'}),/실제 적용 실행 경로 관측 없음/);
+ const response=policyResponse();response.policy.activeId='next';response.policy.candidates[0].status='testing';response.policy.candidates[1].status='active';
+ response.route={status:'selected',candidateId:'next',model:'gpt-next',effort:'low',modelVersion:null,reason:'matched_quality_and_measured_efficiency'};
+ const client={remote:true,readModelPolicy:async()=>response},view=fakeDialog(),ui=createModelPolicyUI({dialog:view.dialog,getContext:()=>policyContext(client)});
+ await ui.open('child');
+ assert.match(view.content.innerHTML,/이 실행 경로의 관측 결과/);
+ assert.match(view.content.innerHTML,/추가 비교 예산이 0/);
+ assert.doesNotMatch(view.content.innerHTML,/자동 승격/);
+ assert.match(modelPolicyOutcome('withdraw',{reason:'safe_fallback_required'}),/기준 경로를 계정 목록에서 다시 확인/);
+ assert.doesNotMatch(view.content.innerHTML,/실제 모델 버전과 동일 조건의 비교 근거를 더 연결해야/);
+ ui.close();
+ const claude=policyResponse();claude.assignment.provider='claude';claude.route={status:'selected',candidateId:'next',model:'haiku',effort:'low',modelVersion:null,reason:'matched_quality_and_measured_efficiency'};
+ claude.accountAvailability={source:'built_in_catalog',status:'static_supported_models_unverified',observedAt:null,expiresAt:null,models:[{model:'haiku',efforts:['low']}]};
+ const claudeClient={remote:true,readModelPolicy:async()=>claude},claudeView=fakeDialog(),claudeUI=createModelPolicyUI({dialog:claudeView.dialog,getContext:()=>policyContext(claudeClient)});
+ await claudeUI.open('child');
+ assert.match(claudeView.content.innerHTML,/실행 경로 근거가 없어 승격 대상이 아닙니다/);
+ assert.doesNotMatch(claudeView.content.innerHTML,/이 실행 경로의 관측 결과/);
+ claudeUI.close();
+ const lapsed=policyResponse();lapsed.policy.activeId='next';lapsed.policy.candidates[1].status='active';
+ lapsed.route={status:'fallback',candidateId:'baseline',model:'gpt-old',effort:'low',modelVersion:null,reason:'active_route_not_current'};
+ const lapsedClient={remote:true,readModelPolicy:async()=>lapsed},lapsedView=fakeDialog(),lapsedUI=createModelPolicyUI({dialog:lapsedView.dialog,getContext:()=>policyContext(lapsedClient)});
+ await lapsedUI.open('child');
+ assert.match(lapsedView.content.innerHTML,/사용 중 경로의 근거가 만료됐거나 계정 목록에 없어 기준 경로로 배정/);
+ lapsedUI.close();
+});

@@ -1,5 +1,5 @@
 import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
-import {delegationProfile,availabilitySnapshot,unverifiedBaselineRoute} from './allocation-policy.mjs';
+import {delegationProfile,availabilitySnapshot,unverifiedBaselineReason,unverifiedBaselineRoute} from './allocation-policy.mjs';
 import {D1ModelPolicies} from './model-policies.mjs';
 import {providerModels} from '../public/core/providers.mjs';
 
@@ -56,7 +56,7 @@ export function createTaskPolicyManagement(store,catalog){
   if(baseline){
    try{
     await catalog.validate([{provider:baseline.provider,requestedModel:baseline.model,effort:baseline.effort}]);
-    route={status:'fallback',candidateId:baseline.id,provider:baseline.provider,model:baseline.model,modelVersion:null,effort:baseline.effort,policyVersion:state.policyVersion,evidenceIds:[],confidence:'unvalidated_fallback',reason:'baseline_version_unverified'};
+    route={status:'fallback',candidateId:baseline.id,provider:baseline.provider,model:baseline.model,modelVersion:null,effort:baseline.effort,policyVersion:state.policyVersion,evidenceIds:[],confidence:'unvalidated_fallback',reason:unverifiedBaselineReason(state)};
    }catch(error){if(!(error instanceof ValidationError))throw error;route={status:'wait',policyVersion:state.policyVersion,evidenceIds:[],reason:'account_model_unavailable'};}
   }
   const provider=ctx.child.assignment.provider;

@@ -5,6 +5,7 @@ const cliEvidence = provider => providerHas(provider, 'executionEvidence', 'cli_
 
 const MODEL=/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/;
 const EFFORTS=new Set(['none','minimal','low','medium','high','xhigh','max','ultra']);
+const CONDITIONS=/^[0-9a-f]{64}$/;
 
 export function boundedExecutionEvidence(value){
  if(value==null)return null;
@@ -21,8 +22,11 @@ export function boundedExecutionEvidence(value){
  };
  if(!cliEvidence(value.provider)||value.source!=='cli_arguments'||value.actualModelVersion!==null)throw new ValidationError('execution evidence provenance is invalid');
  const elapsed=value.processElapsedMs;
+ // Older desktops send no run-condition fingerprint; their evidence keeps its original shape.
+ const conditions=value.routeConditions??null;
+ if(conditions!==null&&(typeof conditions!=='string'||!CONDITIONS.test(conditions)))throw new ValidationError('execution evidence route conditions are invalid');
  if(elapsed!==null&&(!Number.isSafeInteger(elapsed)||elapsed<0))throw new ValidationError('execution evidence process time is invalid');
- return {provider:value.provider,source:'cli_arguments',requestedModel:model('requestedModel'),requestedEffort:effort('requestedEffort'),cliAppliedModel:model('cliAppliedModel'),cliAppliedEffort:effort('cliAppliedEffort'),actualModelVersion:null,processElapsedMs:elapsed};
+ return {provider:value.provider,source:'cli_arguments',requestedModel:model('requestedModel'),requestedEffort:effort('requestedEffort'),cliAppliedModel:model('cliAppliedModel'),cliAppliedEffort:effort('cliAppliedEffort'),actualModelVersion:null,processElapsedMs:elapsed,...(conditions?{routeConditions:conditions}:{})};
 }
 
 export function validateOwnedExecutionEvidence(task,value){

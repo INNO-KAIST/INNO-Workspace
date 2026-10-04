@@ -19,6 +19,7 @@ import {createEventCollector,createTailCollector} from './process-output.mjs';
 import {runnerError} from '../public/core/failures.mjs';
 import {validateExecutionDeadline,remainingExecutionMs,localExecutionObservation} from './execution-deadline.mjs';
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { readFile, realpath, stat, rmdir } from 'node:fs/promises';
 import path from 'node:path';
@@ -356,6 +357,22 @@ function executionMode(task){
   return 'root';
 }
 
+// Conditions two route observations must share before they are compared. The applied
+// model and effort are the route itself, and the loopback MCP address changes per start,
+// so both are left out. Raise the contract when the prompt or tool contract changes;
+// tests/execution-route.test.mjs pins the canonical child prompt to each contract value.
+export const ROUTE_CONDITIONS_CONTRACT=1;
+function routeConditions({mode,args,mcp,contextReader,managedDelivery,sourceDelegationVersion,evaluationBound,pluginDelivery}){
+  const kept=[];
+  for(let i=0;i<args.length;i++){
+    if(args[i]==='-m'){i++;continue;}
+    if(args[i]==='-c'&&String(args[i+1]).startsWith('model_reasoning_effort=')){i++;continue;}
+    kept.push(args[i]);
+  }
+  const plugins=(pluginDelivery?.applied??[]).map(({id,contentHash})=>({id,contentHash}));
+  return createHash('sha256').update(JSON.stringify({contract:ROUTE_CONDITIONS_CONTRACT,runner:'codex_exec',mode,args:kept,mcp,contextReader,managedDelivery,sourceDelegationVersion,evaluationBound,plugins})).digest('hex');
+}
+
 function codexChildPolicy(task,route){
   return [
     'FIXED CODEX CHILD ASSIGNMENT:',
@@ -480,7 +497,7 @@ export function createCodexRunner({
           '-c', 'mcp_servers.inno.bearer_token_env_var="INNO_MCP_TOKEN"',
         );
       }
-      const codexArgs = [
+      const cliArgs = [
         'exec',
         '--json',
         '--color', 'never',
@@ -493,9 +510,8 @@ export function createCodexRunner({
           : mode==='review'||managedDelivery
             ? ['--disable','multi_agent']
             : models.length ? ['--enable','multi_agent','-c','agents.max_concurrent_threads_per_session=2'] : ['--disable','multi_agent']),
-        ...mcpArguments,
-        '-',
       ];
+      const codexArgs = [...cliArgs, ...mcpArguments, '-'];
       const modelPolicy=deadline?'EVALUATION BUDGET EXECUTION: Work directly in this process. Do not use MCP tools, native subagents, delegation, or provider handoff. Return only the assigned result.':mode==='child'?codexChildPolicy(task,assignedRoute):mode==='review'?codexReviewPolicy(task):managedDelivery?delegationRoutingPolicy(models,{sourceDelegationVersion:sourceContext?1:0}):routingPolicy(models);
       const promptOptions={plugins, pluginCatalog, executionId, generation, managedDelivery, contextGuidance, contextReaderAvailable:Boolean(localContextUrl), handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'};
       let {text:input,context}=await taskPromptWithContext(task, materials, promptOptions);
@@ -541,6 +557,7 @@ export function createCodexRunner({
       const effortArg=codexArgs.find(arg=>typeof arg==='string'&&arg.startsWith('model_reasoning_effort='));
       const cliAppliedModel=modelArg>=0?codexArgs[modelArg+1]:null;
       const cliAppliedEffort=effortArg?JSON.parse(effortArg.slice('model_reasoning_effort='.length)):null;
+      const conditions=routeConditions({mode,args:cliArgs,mcp:mcpArguments.length>0,contextReader:Boolean(localContextUrl),managedDelivery:Boolean(managedDelivery),sourceDelegationVersion:sourceVersion,evaluationBound:Boolean(deadline),pluginDelivery});
       let observedUsage;
       try {
       const parsed = parseCodexEvents(result.stdout);
@@ -579,7 +596,7 @@ export function createCodexRunner({
         usage: parsed.usage,
         contextDelivery:delivery,
         ...(pluginDelivery?{pluginDelivery}:{}),
-        executionEvidence:{provider:'codex',source:'cli_arguments',requestedModel:mode==='child'?task.assignment.requestedModel:null,requestedEffort:mode==='child'?task.assignment.effort:null,cliAppliedModel,cliAppliedEffort,actualModelVersion:null,processElapsedMs},
+        executionEvidence:{provider:'codex',source:'cli_arguments',requestedModel:mode==='child'?task.assignment.requestedModel:null,requestedEffort:mode==='child'?task.assignment.effort:null,cliAppliedModel,cliAppliedEffort,actualModelVersion:null,processElapsedMs,routeConditions:conditions},
         ...(deadline?{localExecution:observation()}:{}),
         ...(managedDelivery && mode==='root' && structured?.handoff ? {handoff:structured.handoff} : {}),
         ...(delegation ? {delegation} : {}),
