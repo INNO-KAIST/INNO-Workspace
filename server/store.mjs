@@ -6,6 +6,7 @@ import {sanitizeArtifactChecks} from '../public/core/artifact-checks.mjs';
 import {executionUsage,usageHistory} from '../public/core/execution-usage.mjs';
 import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execution-evidence.mjs';
 import {ownedContextDelivery} from '../public/core/context-delivery.mjs';
+import {assertProviderId,providerHas} from '../public/core/providers.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
 import {assertEvaluationAttachable,assertEvaluationBindingPreserved,evaluationBinding,reserveClaimBudget} from '../public/core/evaluation-claim.mjs';
 import {encodeStoredEvaluationBudget,parseStoredEvaluationBudget} from '../worker/evaluation-budgets.mjs';
@@ -212,7 +213,7 @@ export class SqliteTaskStore {
 
   claimExecution(id, input) {
     const {provider, expectedVersion, leaseMs = 15 * 60_000, executionBudgetVersion} = input;
-    if (!['codex', 'claude'].includes(provider)) throw new ValidationError('provider must be codex or claude');
+    assertProviderId(provider);
     if (!Number.isFinite(leaseMs) || leaseMs < 1_000 || leaseMs > 60 * 60_000) {
       throw new ValidationError('leaseMs must be between 1000 and 3600000');
     }
@@ -222,7 +223,7 @@ export class SqliteTaskStore {
     const task = this.replaceTask(id, expectedVersion, current => {
       let budget;
       if(current.evaluationBudget){
-        if(executionBudgetVersion!==1||provider!=='codex')throw new ValidationError('evaluation execution requires Codex budget capability version 1');
+        if(executionBudgetVersion!==1||!providerHas(provider,'evaluationBudget',true))throw new ValidationError('evaluation execution requires Codex budget capability version 1');
         const key='evaluation_budget:'+current.evaluationBudget.jobId;
         const raw=this.db.prepare('SELECT value FROM metadata WHERE key=?').get(key)?.value;
         budget={key,raw,state:parseStoredEvaluationBudget(raw,current.evaluationBudget.jobId)};

@@ -1,5 +1,8 @@
 import {reserveEvaluation, validateEvaluationBudget} from './evaluation-budget.mjs';
 import {ConflictError, ValidationError} from './tasks.mjs';
+import {PROVIDER_IDS, providerHas} from './providers.mjs';
+
+const budgeted = provider => providerHas(provider, 'evaluationBudget', true);
 
 const PHASES = new Set(['master', 'baseline', 'candidate', 'review', 'retry', 'handoff']);
 const ID = /^[A-Za-z0-9._:-]{1,128}$/;
@@ -10,12 +13,12 @@ export function evaluationBinding(input, state) {
     throw new ValidationError('invalid evaluation budget binding');
   if (typeof input.jobId !== 'string' || !ID.test(input.jobId) || !PHASES.has(input.phase) ||
       !Number.isSafeInteger(input.maxDurationMs) || input.maxDurationMs < 1 ||
-      input.provider !== undefined && input.provider !== 'codex')
+      input.provider !== undefined && !budgeted(input.provider))
     throw new ValidationError('invalid evaluation budget binding');
   validateEvaluationBudget(state);
   if (state.jobId !== input.jobId || input.maxDurationMs > state.totalDurationMs)
     throw new ValidationError('evaluation budget binding does not match ledger');
-  return {jobId: input.jobId, phase: input.phase, maxDurationMs: input.maxDurationMs, provider: 'codex'};
+  return {jobId: input.jobId, phase: input.phase, maxDurationMs: input.maxDurationMs, provider: input.provider ?? PROVIDER_IDS.find(budgeted)};
 }
 
 export function assertEvaluationAttachable(task) {
@@ -36,8 +39,8 @@ export function reserveClaimBudget(task, input, claim, rawState, nowMs) {
     if (input.executionBudgetVersion !== undefined) throw new ValidationError('unsupported execution budget option');
     return null;
   }
-  if (input.executionBudgetVersion !== 1 || input.provider !== 'codex' ||
-      task.evaluationBudget.provider !== 'codex')
+  if (input.executionBudgetVersion !== 1 || !budgeted(input.provider) ||
+      task.evaluationBudget.provider !== input.provider)
     throw new ValidationError('evaluation execution requires Codex budget capability version 1');
   const binding = evaluationBinding(task.evaluationBudget, rawState);
   if (task.status === 'running') throw new ConflictError('Previous evaluation execution is still owned', task.version);

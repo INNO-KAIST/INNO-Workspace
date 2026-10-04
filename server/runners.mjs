@@ -11,7 +11,7 @@ import {sanitizeArtifactChecks} from '../public/core/artifact-checks.mjs';
 import {deliveryPolicy} from '../public/core/delivery.mjs';
 import {sourceCoverageContext,verifyMaterialViews} from '../public/core/source-coverage.mjs';
 import {prepareHandoffInputs,prepareReviewInputs} from './handoff-inputs.mjs';
-import {handoffContext,CODEX_HANDOFF_POLICY,handoffTask} from '../public/core/provider-handoff.mjs';
+import {handoffContext,handoffTask} from '../public/core/provider-handoff.mjs';
 import {claudeTaskRoutingPolicy} from '../public/core/claude-routing.mjs';
 import {assignedCodexModel,delegationRoutingPolicy,modelCatalogRows,routingPolicy,routingReport,validateDelegationResult,withRoutingArtifact} from './model-routing.mjs';
 import {createEventCollector,createTailCollector} from './process-output.mjs';
@@ -21,6 +21,9 @@ import { spawn } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { readFile, realpath, stat, rmdir } from 'node:fs/promises';
 import path from 'node:path';
+
+// Codex adapter prompt: when a sequential handoff to the cloud provider is allowed.
+const CODEX_HANDOFF_POLICY='On the managed cloud bridge only, a useful sequential handoff to Claude is supported for tasks with NO source attachments. Do not hand off trivial work or evade quota/authentication limits. At most two provider transitions per task. First understand the request, choose why the other provider is needed and its acceptance checks. To hand off, return final JSON with summary (verified generated progress, max 12000 chars), artifacts, routing, and handoff:{provider:"claude",instructions:"bounded next stage, max 12000 chars",reason:"why",acceptance:"checks"}. Stop after returning it; this is progress, not task completion. Do not archive originals in this handoff. If already two transitions, finish directly. The receiving master chooses its own supported subagent models.';
 
 const API_ENVIRONMENT_KEYS = new Set([
   'OPENAI_API_KEY',

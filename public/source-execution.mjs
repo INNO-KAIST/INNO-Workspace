@@ -1,4 +1,6 @@
 import {prepareTaskMaterials} from './core/source-materials.mjs';
+import {usesTransport} from './core/providers.mjs';
+import {providerAvailable} from './provider-ui.mjs';
 
 export function sourceExecutionReadiness(task,state,connected){
  const no=reason=>({ready:false,reason});
@@ -15,8 +17,8 @@ export function sourceExecutionReadiness(task,state,connected){
  }
  const c=state.capabilities||{};
  if(c.sourceDelegationVersion!==1)return no('unsupported');
- if(provider==='claude'){if(!c.claudeRoutine)return no('provider_unavailable');}
- else if(provider==='codex'){
+ if(usesTransport(provider,'routine_fire')){if(!providerAvailable(provider,c))return no('provider_unavailable');}
+ else if(usesTransport(provider,'desktop_bridge')){
   if(!c.desktopSources||c.desktopSourceDelegationVersion!==1)return no('provider_unavailable');
   const desktop=state.localDesktop;
   if(!desktop||desktop.busy||desktop.stopped||desktop.pending)return no('desktop_waiting');

@@ -1,7 +1,7 @@
 import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
 import {delegationProfile,availabilitySnapshot,unverifiedBaselineRoute} from './allocation-policy.mjs';
 import {D1ModelPolicies} from './model-policies.mjs';
-import {CLAUDE_ROLE_MODELS} from '../public/core/claude-routing.mjs';
+import {providerModels} from '../public/core/providers.mjs';
 
 const own=(value,allowed,label)=>{
  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!allowed.includes(key)))throw new ValidationError(`Invalid ${label}`);
@@ -22,7 +22,8 @@ const projection=state=>state?{
  candidates:state.candidates.map(candidateSummary),
 }:null;
 const accountChoices=(provider,account,assignment)=>{
- if(provider==='claude')return {provider,source:'built_in_catalog',status:'static_supported_models_unverified',observedAt:null,expiresAt:null,effortSource:'assignment_planning_intent',models:CLAUDE_ROLE_MODELS.map(model=>({model,efforts:[assignment.effort]}))};
+ const declared=providerModels(provider);
+ if(declared?.catalog==='built_in_roles')return {provider,source:'built_in_catalog',status:'static_supported_models_unverified',observedAt:null,expiresAt:null,effortSource:'assignment_planning_intent',models:declared.roles.map(model=>({model,efforts:[assignment.effort]}))};
  const observedAt=Number.isFinite(account.reportedAt)&&account.reportedAt>=0?account.reportedAt:null;
  return {provider,source:'desktop_account_catalog',status:account.availability,observedAt,expiresAt:observedAt===null?null:observedAt+7_200_000,effortSource:'account_catalog',
   models:account.codex.map(({model,efforts})=>({model,efforts:[...efforts]}))};

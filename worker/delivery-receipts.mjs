@@ -1,5 +1,6 @@
 import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
 import {prepareReceiptReservation} from './delivery-reservations.mjs';
+import {providerHas} from '../public/core/providers.mjs';
 
 const workspaceUuid=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const hex=/^[0-9a-f]{64}$/;
@@ -28,15 +29,15 @@ async function sha256(text){
 }
 function acceptedTransition(receipt,current,next,delegation){
  const old=current.checkpoint??{},after=next.checkpoint??{};
- if(old.provider!=='codex'||!sameOwner(old,receipt)||!['running','paused'].includes(current.status))return false;
+ if(!providerHas(old.provider,'deliveryReceipts',1)||!sameOwner(old,receipt)||!['running','paused'].includes(current.status))return false;
  if(current.status==='paused'&&(old.interruptedBy!=='lease_expiry'||old.interruptedVersion!==current.version))return false;
  if(receipt.action==='fail')return !delegation&&['failed','waiting_quota','waiting_connection'].includes(next.status)
-  &&after.provider==='codex'&&after.status===next.status&&after.failure&&typeof after.failure==='object'&&!after.confirmationRequired&&sameOwner(after,receipt);
+  &&after.provider===old.provider&&after.status===next.status&&after.failure&&typeof after.failure==='object'&&!after.confirmationRequired&&sameOwner(after,receipt);
  if(receipt.action!=='complete')return false;
- if(!delegation&&next.status==='completed')return after.provider==='codex'&&after.status==='completed'&&sameOwner(after,receipt);
+ if(!delegation&&next.status==='completed')return after.provider===old.provider&&after.status==='completed'&&sameOwner(after,receipt);
  if(!delegation&&next.status==='queued')return after.status==='queued'
-  &&sameOwner(after.handoff,receipt)&&after.handoff.from==='codex'&&after.provider!==old.provider;
- if(!delegation&&next.status==='waiting_user')return after.provider==='codex'&&after.status==='waiting_user'
+  &&sameOwner(after.handoff,receipt)&&after.handoff.from===old.provider&&after.provider!==old.provider;
+ if(!delegation&&next.status==='waiting_user')return after.provider===old.provider&&after.status==='waiting_user'
   &&sameOwner(after,receipt)&&current.delegation?.state==='reviewing'
   &&next.decision&&typeof next.decision==='object'&&typeof next.decision.prompt==='string'
   &&Array.isArray(next.decision.options)&&next.decision.options.length>=2&&next.decision.options.length<=5;

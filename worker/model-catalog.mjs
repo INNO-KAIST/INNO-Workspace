@@ -1,4 +1,6 @@
 import {ValidationError} from '../public/core/tasks.mjs';
+import {providerModels} from '../public/core/providers.mjs';
+import {CLAUDE_ROLE_MODELS} from '../public/core/claude-routing.mjs';
 const efforts=new Set(['none','minimal','low','medium','high','xhigh','max','ultra']);
 export class ModelCatalog {
  constructor(store){this.store=store;}
@@ -26,6 +28,6 @@ export class ModelCatalog {
   await this.store.db.prepare("INSERT INTO metadata(key,value) VALUES('desktop_models',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE COALESCE(CAST(json_extract(metadata.value,'$.reportedAt') AS INTEGER),-1)<?2").bind(JSON.stringify({models,reportedAt:observedAt,refreshStatus:'fresh'}),observedAt).run();
  }
  async stored(){const row=await this.store.db.prepare("SELECT value FROM metadata WHERE key='desktop_models'").first();if(!row)return null;try{return JSON.parse(row.value)}catch{return null}}
- async read(){const value=await this.stored(),age=value?.reportedAt==null?Infinity:Date.parse(this.store.now())-value.reportedAt,fresh=age>=0&&age<7200000;return {codex:fresh?value.models:[],lastGoodCodex:value?.reportedAt!=null?value.models:[],availability:value?.refreshStatus==='legacy_unverified'?'legacy_unverified':value?.reportedAt==null?'unavailable':!fresh?'expired':value.refreshStatus==='unavailable'?'refresh_failed':'fresh',reportedAt:value?.reportedAt??null,claude:['haiku','sonnet','opus'],source:'desktop_account_catalog',observedExecutionModels:false};}
- async validate(children){const catalog=await this.read();for(const child of children??[]){if(child.provider==='claude'&&!catalog.claude.includes(child.requestedModel))throw new ValidationError('Unsupported Claude role model');if(child.provider==='codex'&&!catalog.codex.some(m=>m.model===child.requestedModel&&m.efforts.includes(child.effort)))throw new ValidationError('Reconnect desktop to confirm the selected Codex model and effort before delegation');}}
+ async read(){const value=await this.stored(),age=value?.reportedAt==null?Infinity:Date.parse(this.store.now())-value.reportedAt,fresh=age>=0&&age<7200000;return {codex:fresh?value.models:[],lastGoodCodex:value?.reportedAt!=null?value.models:[],availability:value?.refreshStatus==='legacy_unverified'?'legacy_unverified':value?.reportedAt==null?'unavailable':!fresh?'expired':value.refreshStatus==='unavailable'?'refresh_failed':'fresh',reportedAt:value?.reportedAt??null,claude:[...CLAUDE_ROLE_MODELS],source:'desktop_account_catalog',observedExecutionModels:false};}
+ async validate(children){const catalog=await this.read();for(const child of children??[]){const declared=providerModels(child.provider);if(declared?.catalog==='built_in_roles'&&!declared.roles.includes(child.requestedModel))throw new ValidationError('Unsupported Claude role model');if(declared?.catalog==='account_catalog'&&!catalog.codex.some(m=>m.model===child.requestedModel&&m.efforts.includes(child.effort)))throw new ValidationError('Reconnect desktop to confirm the selected Codex model and effort before delegation');}}
 }

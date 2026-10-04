@@ -7,6 +7,7 @@ import {handoffTask,isHandoffReplay} from '../public/core/provider-handoff.mjs';
 import {executionUsage,usageHistory} from '../public/core/execution-usage.mjs';
 import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execution-evidence.mjs';
 import {ownedContextDelivery} from '../public/core/context-delivery.mjs';
+import {assertProviderId,providerHas,usesTransport} from '../public/core/providers.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
 import {assertEvaluationAttachable,assertEvaluationBindingPreserved,evaluationBinding,reserveClaimBudget} from '../public/core/evaluation-claim.mjs';
 import {encodeStoredEvaluationBudget,parseStoredEvaluationBudget} from './evaluation-budgets.mjs';
@@ -283,7 +284,7 @@ export class D1TaskStore {
     return this.replaceTask(id, input?.expectedVersion, current => {
       if(current.parentTaskId)throw new ValidationError('Child user mutations require the parent delegation coordinator');
       const next=applyAction(current,input,{now:this.now,id:this.id});
-      if(input.action==='pause'&&current.status==='running'&&(current.checkpoint?.provider==='claude'||current.delegation?.state==='reviewing'))next.checkpoint={...next.checkpoint,status:'paused',confirmationRequired:{reason:'parent_pause',executionId:current.checkpoint.executionId,generation:current.checkpoint.generation,createdAt:next.updatedAt}};
+      if(input.action==='pause'&&current.status==='running'&&(providerHas(current.checkpoint?.provider,'cancellation','confirmation_required')||current.delegation?.state==='reviewing'))next.checkpoint={...next.checkpoint,status:'paused',confirmationRequired:{reason:'parent_pause',executionId:current.checkpoint.executionId,generation:current.checkpoint.generation,createdAt:next.updatedAt}};
       return next;
     });
   }
@@ -327,10 +328,10 @@ export class D1TaskStore {
     const {provider, expectedVersion, leaseMs = 15 * 60_000, sourceBound = false, executionBudgetVersion} = input;
     if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>!['deliveryReceiptVersion','workspaceId'].includes(key)))throw new ValidationError('Invalid desktop claim options');
     const deliveryReceiptVersion=options.deliveryReceiptVersion;
-    if(deliveryReceiptVersion!==undefined&&(deliveryReceiptVersion!==1||provider!=='codex'||typeof options.workspaceId!=='string'))throw new ValidationError('Invalid desktop claim reservation');
+    if(deliveryReceiptVersion!==undefined&&(deliveryReceiptVersion!==1||!providerHas(provider,'deliveryReceipts',1)||typeof options.workspaceId!=='string'))throw new ValidationError('Invalid desktop claim reservation');
     if(deliveryReceiptVersion===undefined&&options.workspaceId!==undefined)throw new ValidationError('Invalid desktop claim reservation');
     if(typeof sourceBound!=='boolean')throw new ValidationError('sourceBound must be boolean');
-    if (!['codex', 'claude'].includes(provider)) throw new ValidationError('provider must be codex or claude');
+    assertProviderId(provider);
     if (!Number.isFinite(leaseMs) || leaseMs < 1_000 || leaseMs > 60 * 60_000) throw new ValidationError('invalid execution lease');
     if(Object.keys(input).some(key=>key!=='executionBudgetVersion'&&(/budget|grant|reservation/i.test(key)||['jobId','phase','maxDurationMs','deadlineAtMs','deliveryReceiptVersion','workspaceId'].includes(key))))throw new ValidationError('unsupported execution budget option');
     const authorization={};
@@ -339,14 +340,14 @@ export class D1TaskStore {
     return this.replaceTask(id, expectedVersion, async current => {
       let budget;
       if(current.evaluationBudget){
-        if(executionBudgetVersion!==1||provider!=='codex')throw new ValidationError('evaluation execution requires Codex budget capability version 1');
+        if(executionBudgetVersion!==1||!providerHas(provider,'evaluationBudget',true))throw new ValidationError('evaluation execution requires Codex budget capability version 1');
         const key='evaluation_budget:'+current.evaluationBudget.jobId;
         const raw=(await this.db.prepare('SELECT value FROM metadata WHERE key=?1').bind(key).first())?.value;
         budget={key,raw,state:parseStoredEvaluationBudget(raw,current.evaluationBudget.jobId)};
       }else if(executionBudgetVersion!==undefined)throw new ValidationError('unsupported execution budget option');
       if(current.checkpoint?.confirmationRequired)throw new ConflictError('Confirm the previous remote execution before claiming',current.version);
       if(current.delegation && current.delegation.state!=='superseded' && (current.status!=='queued_for_review'||current.delegation.state!=='queued_for_review'))throw new ConflictError('Master can only claim the queued review phase',current.version);
-      if(current.status==='running'&&current.checkpoint?.provider==='claude')throw new ConflictError('Remote execution is still owned; confirm its outcome before reclaiming',current.version);
+      if(current.status==='running'&&providerHas(current.checkpoint?.provider,'cancellation','confirmation_required'))throw new ConflictError('Remote execution is still owned; confirm its outcome before reclaiming',current.version);
       if(current.parentTaskId && current.status!=='queued')throw new ConflictError('Child must be queued by the delegation retry coordinator',current.version);
       if(current.delegation && current.delegation.state!=='superseded' && provider!==current.delegation.masterProvider)throw new ValidationError('Review provider must match the master provider');
       if(current.parentTaskId && provider !== current.assignment.provider)throw new ValidationError('Child provider cannot change');
@@ -492,7 +493,7 @@ export class D1TaskStore {
     }
     return this.replaceTask(id,input.expectedVersion,current=>{
       const checkpoint=current.checkpoint??{},confirmation=checkpoint.confirmationRequired;
-      if(!['waiting_connection','paused'].includes(current.status)||!(checkpoint.provider==='claude'||(checkpoint.provider==='codex'&&review&&confirmation?.reason==='parent_pause'))||!confirmation||confirmation.executionId!==input.executionId||confirmation.generation!==input.generation||checkpoint.executionId!==input.executionId||checkpoint.generation!==input.generation)throw new ConflictError('Remote recovery owner or confirmation state changed',current.version);
+      if(!['waiting_connection','paused'].includes(current.status)||!(providerHas(checkpoint.provider,'cancellation','confirmation_required')||(usesTransport(checkpoint.provider,'desktop_bridge')&&review&&confirmation?.reason==='parent_pause'))||!confirmation||confirmation.executionId!==input.executionId||confirmation.generation!==input.generation||checkpoint.executionId!==input.executionId||checkpoint.generation!==input.generation)throw new ConflictError('Remote recovery owner or confirmation state changed',current.version);
       const now=this.now(),status=review?'queued_for_review':'ready';
       return {...current,status,version:current.version+1,updatedAt:now,...(review?{delegation:{...current.delegation,state:'queued_for_review'}}:{}),checkpoint:{...checkpoint,provider:review?current.delegation.masterProvider:checkpoint.provider,status,confirmationRequired:undefined,failure:undefined,executionId:undefined,expiresAt:undefined,sessionUrl:undefined,claimedAt:undefined,interruptedBy:undefined,interruptedVersion:undefined,updatedAt:now}};
     },REMOTE_RECOVERY);
@@ -515,7 +516,7 @@ export class D1TaskStore {
     const snapshot=await this.requireTask(id);
     return this.replaceTask(id,snapshot.version,current=>{
       this.assertExecution(current,input);
-      if(current.checkpoint?.provider!=='claude')throw new ValidationError('Only remote Claude executions require fire confirmation');
+      if(!usesTransport(current.checkpoint?.provider,'routine_fire'))throw new ValidationError('Only remote Claude executions require fire confirmation');
       const now=this.now();
       if(input.reason==='lease_expiry'&&!(Date.parse(current.checkpoint.expiresAt)<=Date.parse(now)))throw new ConflictError('Remote execution lease is still active',current.version);
       return {...current,status:'waiting_connection',version:current.version+1,updatedAt:now,checkpoint:{...current.checkpoint,status:'waiting_connection',confirmationRequired:{reason:input.reason,executionId:input.executionId,generation:input.generation,createdAt:now},failure:failureRecord({failure:{kind:'connection'}},now),updatedAt:now}};

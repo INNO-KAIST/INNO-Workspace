@@ -1,6 +1,7 @@
 import {D1ModelPolicies,MAX_MODEL_POLICY_PROFILES,profileKey} from './model-policies.mjs';
 import {ValidationError} from '../public/core/tasks.mjs';
 import {baselineExcluded,createSelectionState} from '../public/core/model-selection.mjs';
+import {providerModels} from '../public/core/providers.mjs';
 
 const hex=bytes=>Array.from(bytes,x=>x.toString(16).padStart(2,'0')).join('');
 const digest=async value=>hex(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))));
@@ -19,7 +20,7 @@ export async function availabilitySnapshot(store,catalog){
  let observations=[];
  try{observations=JSON.parse(row?.value??'[]');}catch{}
  const now=instant(store.now());
- const rows=Array.isArray(observations)?observations.filter(x=>x?.source==='account_catalog'&&x.provider==='codex'&&typeof x.modelVersion==='string'&&x.modelVersion.length>0&&catalog.availability==='fresh'&&catalog.codex.some(m=>m.model===x.model&&x.efforts?.every(e=>m.efforts.includes(e)))&&Number.isSafeInteger(x.observedAt)&&x.observedAt<=now&&x.expiresAt>now&&x.expiresAt-x.observedAt<=7_200_000):[];
+ const rows=Array.isArray(observations)?observations.filter(x=>x?.source==='account_catalog'&&providerModels(x.provider)?.catalog==='account_catalog'&&typeof x.modelVersion==='string'&&x.modelVersion.length>0&&catalog.availability==='fresh'&&catalog.codex.some(m=>m.model===x.model&&x.efforts?.every(e=>m.efforts.includes(e)))&&Number.isSafeInteger(x.observedAt)&&x.observedAt<=now&&x.expiresAt>now&&x.expiresAt-x.observedAt<=7_200_000):[];
  return {rows:rows.slice(0,100),raw:row?.value??null};
 }
 

@@ -1,4 +1,5 @@
 import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
+import {providerHas} from '../public/core/providers.mjs';
 
 export const MAX_DESKTOP_DELIVERIES=1024;
 const workspaceUuid=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -19,7 +20,7 @@ export async function reservationKey({workspaceId,taskId,executionId,generation}
 
 export async function prepareReceiptReservation(db,receipt,current){
  const checkpoint=current.checkpoint;
- if(checkpoint?.deliveryReceiptVersion!==1||checkpoint?.provider!=='codex'
+ if(checkpoint?.deliveryReceiptVersion!==1||!providerHas(checkpoint?.provider,'deliveryReceipts',1)
   ||checkpoint.executionId!==receipt.executionId||checkpoint.generation!==receipt.generation)
   throw new ConflictError('Desktop result requires a versioned execution reservation',current.version);
  const key=await reservationKey(receipt),row=await db.prepare('SELECT value FROM metadata WHERE key=?1').bind(key).first();
@@ -55,7 +56,7 @@ export async function prepareClaimReservation(db,intent,current,next){
   throw new ValidationError('Invalid desktop workspace identity');
  const checkpoint=next.checkpoint;
  if(next.id!==current.id||next.version!==current.version+1||next.status!=='running'
-  ||checkpoint?.provider!=='codex'||checkpoint.status!=='running'||checkpoint.deliveryReceiptVersion!==1
+  ||!providerHas(checkpoint?.provider,'deliveryReceipts',1)||checkpoint.status!=='running'||checkpoint.deliveryReceiptVersion!==1
   ||typeof checkpoint.executionId!=='string'||!checkpoint.executionId||!Number.isSafeInteger(checkpoint.generation)||checkpoint.generation<1
   ||typeof checkpoint.claimedAt!=='string'||!Number.isFinite(Date.parse(checkpoint.claimedAt)))
   throw new ValidationError('Invalid desktop claim reservation');

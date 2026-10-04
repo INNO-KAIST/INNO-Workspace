@@ -1,5 +1,6 @@
 import {sanitizeResumeState} from '../public/core/context-resume.mjs';
 import {ConflictError} from '../public/core/tasks.mjs';
+import {ASSIGNABLE_PROVIDER_IDS,PROVIDER_IDS} from '../public/core/providers.mjs';
 import {readTaskContext} from '../public/core/task-context-read.mjs';
 const CONTEXT_DIGEST={type:'string',pattern:'^[0-9a-f]{64}$'};
 const RESUME_STATE={description:'Optional derived resume state, at most 32768 UTF-8 bytes. Omit to preserve; null clears. source_matched verifies source hashes only, never semantic completeness, quality or approval authority. Accepted on running or completed checkpoints. Completed replay may only repeat an identical stored state; null matches only an absent state.',anyOf:[{type:'null'},{type:'object',required:['version','taskId','mode','basis','items'],additionalProperties:false,properties:{
@@ -18,7 +19,7 @@ const RENEW_TOOL={name:'renew_execution',description:'Extend the current live ex
 const MODELS_TOOL={name:'available_models',description:'Read the current desktop account model catalog and supported Claude role aliases before cross-provider allocation. Empty Codex catalog means reconnect the desktop; do not guess.',inputSchema:{type:'object',properties:{},additionalProperties:false}};
 const OWNER={taskId:{type:'string'},executionId:{type:'string'},generation:{type:'integer'}};
 const REVIEW={type:'array',minItems:2,maxItems:2,items:{type:'object',required:['childTaskId','criteria'],additionalProperties:false,properties:{childTaskId:{type:'string'},criteria:{type:'array',minItems:1,maxItems:8,items:{type:'object',required:['criterion','status','evidence'],additionalProperties:false,properties:{criterion:{type:'string'},status:{enum:['pass','fail','unverifiable']},evidence:{type:'string',maxLength:2000}}}}}}};
-const DELEGATE_TOOL={name:'delegate_task',description:'After understanding the request, select sufficient supported models and delegate exactly two independent source-free assignments, one Codex and one Claude. Durable dispatch replaces this master lease; stop writing afterward.',inputSchema:{type:'object',required:['taskId','executionId','generation','independent','children'],additionalProperties:false,properties:{...OWNER,usage:OBSERVED_USAGE,independent:{const:true},content:{type:'string',maxLength:12000},children:{type:'array',minItems:2,maxItems:2,items:{type:'object',required:['role','provider','requestedModel','effort','sufficientReason','acceptanceCriteria','instructions'],additionalProperties:false,properties:{role:{type:'string',maxLength:100},provider:{enum:['codex','claude']},requestedModel:{type:'string',maxLength:100},effort:{enum:['none','minimal','low','medium','high','xhigh','max']},sufficientReason:{type:'string',maxLength:1000},acceptanceCriteria:{type:'array',minItems:1,maxItems:8,items:{type:'string',maxLength:1000}},instructions:{type:'string',maxLength:12000}}}}}}};
+const DELEGATE_TOOL={name:'delegate_task',description:'After understanding the request, select sufficient supported models and delegate exactly two independent source-free assignments, one Codex and one Claude. Durable dispatch replaces this master lease; stop writing afterward.',inputSchema:{type:'object',required:['taskId','executionId','generation','independent','children'],additionalProperties:false,properties:{...OWNER,usage:OBSERVED_USAGE,independent:{const:true},content:{type:'string',maxLength:12000},children:{type:'array',minItems:2,maxItems:2,items:{type:'object',required:['role','provider','requestedModel','effort','sufficientReason','acceptanceCriteria','instructions'],additionalProperties:false,properties:{role:{type:'string',maxLength:100},provider:{enum:[...ASSIGNABLE_PROVIDER_IDS]},requestedModel:{type:'string',maxLength:100},effort:{enum:['none','minimal','low','medium','high','xhigh','max']},sufficientReason:{type:'string',maxLength:1000},acceptanceCriteria:{type:'array',minItems:1,maxItems:8,items:{type:'string',maxLength:1000}},instructions:{type:'string',maxLength:12000}}}}}}};
 function delegationTool(sourceDelegationVersion){
  if(sourceDelegationVersion!==1)return DELEGATE_TOOL;
  const tool=structuredClone(DELEGATE_TOOL);
@@ -31,7 +32,7 @@ const HANDOFF_TOOL={
  name:'handoff_task',description:'Sequentially hand off to the other subscription provider, with no source attachments and at most two transitions. Save generated progress, then stop writing under the old lease.',
  inputSchema:{type:'object',required:['taskId','executionId','generation','content','handoff'],additionalProperties:false,properties:{
   taskId:{type:'string'},executionId:{type:'string'},generation:{type:'integer'},usage:OBSERVED_USAGE,content:{type:'string',maxLength:12000},
-  handoff:{type:'object',required:['provider','instructions','reason','acceptance'],additionalProperties:false,properties:{provider:{enum:['codex','claude']},instructions:{type:'string',maxLength:12000},reason:{type:'string',maxLength:1000},acceptance:{type:'string',maxLength:2000}}}
+  handoff:{type:'object',required:['provider','instructions','reason','acceptance'],additionalProperties:false,properties:{provider:{enum:[...ASSIGNABLE_PROVIDER_IDS]},instructions:{type:'string',maxLength:12000},reason:{type:'string',maxLength:1000},acceptance:{type:'string',maxLength:2000}}}
  }}
 };
 const TOOLS = Object.freeze([
@@ -71,7 +72,7 @@ const TOOLS = Object.freeze([
     inputSchema: {
       type: 'object', required: ['taskId', 'provider', 'expectedVersion'], additionalProperties: false,
       properties: {
-        taskId: {type: 'string'}, provider: {enum: ['codex', 'claude']},
+        taskId: {type: 'string'}, provider: {enum: [...PROVIDER_IDS]},
         expectedVersion: {type: 'integer'}, leaseMs: {type: 'integer', minimum: 1000, maximum: 3600000},
       },
     },

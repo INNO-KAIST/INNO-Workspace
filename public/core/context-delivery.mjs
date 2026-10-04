@@ -1,9 +1,9 @@
 import {ValidationError} from './tasks.mjs';
+import {isProviderId} from './providers.mjs';
 
 // Per-execution record of how task context was delivered. Byte counts only:
 // providers do not report per-part tokens here, so token fields stay null.
 const READINESS = new Set(['full_ready', 'full_over_budget', 'selected_ready', 'blocked']);
-const PROVIDERS = new Set(['codex', 'claude']);
 const KEYS = ['version','provider','unit','readiness','contextBytes','originalBytes','selectionSavedBytes','omittedMessages','maxBytes','hardMaxBytes','reader','promptBytes','materialBytes','inputTokens','cachedTokens'];
 
 export function contextDelivery(packet, {provider, promptBytes = null, materialBytes = null, reader = false} = {}) {
@@ -29,7 +29,7 @@ export function boundedContextDelivery(value) {
     return n;
   };
   if (value.version !== 1) fail('version');
-  if (!PROVIDERS.has(value.provider)) fail('provider');
+  if (!isProviderId(value.provider)) fail('provider');
   if (value.unit !== 'utf8_bytes') fail('unit');
   if (!READINESS.has(value.readiness)) fail('readiness');
   if (typeof value.reader !== 'boolean') fail('reader');

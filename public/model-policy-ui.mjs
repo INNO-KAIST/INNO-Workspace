@@ -1,5 +1,6 @@
+import {providerLabel,providerModels} from './core/providers.mjs';
 const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
-const providerName=value=>value==='claude'?'Claude':value==='codex'?'Codex':value||'미확인';
+const providerName=value=>providerLabel(value)??(value||'미확인');
 const time=value=>{if(value==null)return '확인 불가';const date=new Date(value);return Number.isNaN(+date)?'확인 불가':date.toLocaleString('ko-KR');};
 const reasonNames={baseline_version_unverified:'기준 모델의 실제 버전 미확인',policy_capacity_unavailable:'정책 저장 한도로 기준 정책 미등록',baseline_critical_regression:'기준 모델의 중대한 품질 문제로 새 배정·승격 보류',account_model_unavailable:'계정에서 모델 사용 가능 여부 미확인',unobserved_model_version:'후보의 실제 모델 버전 미관측',candidate_unavailable:'계정 가용성 확인 필요',candidate_quality_regression:'필수 품질 기준 미충족',insufficient_comparable_evidence:'비교 가능한 검토 근거 부족',missing_measured_efficiency:'실측 토큰 또는 지연 기록 부족',no_measured_efficiency_gain:'실측 효율 개선 미확인',already_active:'이미 사용 중',withdrawn:'후보 철회됨',existing_route_pending_evidence:'기준 경로에서 추가 근거 대기',no_fresh_eligible_route:'현재 사용 가능한 경로 없음',profile_scoped_observation:'이 작업군에서 검증된 관측',policy_missing_evidence_insufficient:'정책의 비교 근거 부족',policy_missing:'정책 미등록',matched_quality_and_measured_efficiency:'필수 품질 기준과 실측 효율 확인',manual_pin_active_route:'현재 정책 고정 중: 후보 승격 보류',manual_pin_selected:'고정된 현재 정책 경로',manual_pin_existing_route_pending_evidence:'고정된 기준 경로: 검토 근거 대기',pinned_route_unavailable:'고정한 경로를 사용할 수 없어 다음 배정 대기',pinned_evidence_expired:'고정한 경로의 검토 근거가 만료되어 다음 배정 대기'};
 const routeText=route=>!route?'정책 경로가 아직 없습니다.':`${route.status==='selected'?'정책 선택':route.status==='wait'?'다음 배정 대기':'기준 경로'} · ${route.model||'모델 미확인'}${route.effort?' · '+route.effort:''} · ${reasonNames[route.reason]||route.reason||'선택 이유 미제공'}`;
@@ -37,7 +38,7 @@ export function createModelPolicyUI({dialog,getContext}){
   const assignment=data.assignment||{},policy=data.policy,availability=data.accountAvailability||{},route=data.route;
   const supportedChoices=modelPolicyChoices(availability);
   choices=supportedChoices.filter(choice=>!policy?.candidates?.some(candidate=>candidate.model===choice.model&&candidate.effort===choice.effort));
-  const isClaude=assignment.provider==='claude';
+  const isClaude=providerModels(assignment.provider)?.catalog==='built_in_roles';
   const accountStatus=availability.status==='fresh'?'최근 계정 목록 확인':availability.status==='static_supported_models_unverified'?'내장 목록 · 계정 사용 가능성 미확인':availability.status==='expired'?'계정 목록 만료':availability.status==='refresh_failed'?'최근 조회 실패':availability.status==='legacy_unverified'?'기존 보고 · 시각 미확인':availability.status||'확인 불가';
   const source=availability.source==='desktop_account_catalog'?'데스크톱 계정 목록':availability.source==='built_in_catalog'?'앱 내장 목록':availability.source||'출처 미확인';
   const pinned=policy?.pin?.candidateId!=null;

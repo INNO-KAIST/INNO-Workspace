@@ -1,6 +1,7 @@
 import {delegationAttachments,validateDelegationSourceIds} from './delegation-sources.mjs';
 import {usageHistory} from './execution-usage.mjs';
 import {ConflictError,ValidationError,createTask} from './tasks.mjs';
+import {isAssignableProvider} from './providers.mjs';
 const bounded=(value,label,max)=>{if(typeof value!=='string'||!value.trim()||value.length>max)throw new ValidationError(`Invalid delegation ${label}`);return value.trim();};
 export function validateAssignments(parent,input,options={}){
  if(!input||typeof input!=='object'||Array.isArray(input))throw new ValidationError('Delegation input is required');
@@ -15,7 +16,7 @@ export function validateAssignments(parent,input,options={}){
  const children=input.children.map(c=>{
   if(!c||typeof c!=='object'||c.attachments?.length||c.materials?.length||c.dependencies?.length)throw new ValidationError('Independent source-free children are required');
   if(sourceUrl(c.instructions))throw new ValidationError('Source URLs are not supported in delegated instructions');
-  if(!['codex','claude'].includes(c.provider))throw new ValidationError('Invalid delegation provider');
+  if(!isAssignableProvider(c.provider))throw new ValidationError('Invalid delegation provider');
   const sourceIds=validateDelegationSourceIds(c.sourceIds,options);
   delegationAttachments(parent,sourceIds,options);
   const requestedModel=bounded(c.requestedModel,'requestedModel',100);

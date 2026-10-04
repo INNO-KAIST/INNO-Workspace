@@ -1,8 +1,9 @@
 import {validateDelegationSourceIds,SOURCE_DELEGATION_POLICY} from '../public/core/delegation-sources.mjs';
 import {spawn} from 'node:child_process';
+import {isAssignableProvider,providerModels} from '../public/core/providers.mjs';
+import {CLAUDE_ROLE_MODELS} from '../public/core/claude-routing.mjs';
 const EFFORTS=new Set(['none','minimal','low','medium','high','xhigh','max','ultra']);
 const DELEGATION_EFFORTS=new Set(['none','minimal','low','medium','high','xhigh','max']);
-const CLAUDE_ROLE_MODELS=new Set(['haiku','sonnet','opus']);
 export function modelCatalogRows(rows){
  return (Array.isArray(rows)?rows:[]).slice(0,100).filter(m=>typeof m?.model==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,99}$/.test(m.model)&&!m.hidden).map(m=>({model:m.model,efforts:(m.efforts??m.supportedReasoningEfforts?.map(e=>e.reasoningEffort)??[]).filter(e=>EFFORTS.has(e)),isDefault:m.isDefault===true}));
 }
@@ -87,7 +88,7 @@ function boundedAssignmentText(value,label,max){
 export function validateDelegationResult(value,rows,options={}){
  if(!value||typeof value!=='object'||Array.isArray(value)||value.independent!==true||!Array.isArray(value.children)||value.children.length!==2)throw new Error('Invalid delegation: exactly two independent children are required');
  const children=value.children.map(child=>{
-  if(!child||typeof child!=='object'||!['codex','claude'].includes(child.provider))throw new Error('Invalid delegation provider');
+  if(!child||typeof child!=='object'||!isAssignableProvider(child.provider))throw new Error('Invalid delegation provider');
   if(!DELEGATION_EFFORTS.has(child.effort))throw new Error(`Invalid delegation effort: ${child.effort??''}`);
   if(!Array.isArray(child.acceptanceCriteria)||child.acceptanceCriteria.length<1||child.acceptanceCriteria.length>8)throw new Error('Invalid delegation acceptance criteria');
   const sourceIds=validateDelegationSourceIds(child.sourceIds,options);
@@ -100,8 +101,9 @@ export function validateDelegationResult(value,rows,options={}){
    instructions:boundedAssignmentText(child.instructions,'instructions',12000),
   };
   if(new Set(normalized.acceptanceCriteria).size!==normalized.acceptanceCriteria.length)throw new Error('Invalid delegation: duplicate acceptance criteria');
-  if(child.provider==='codex')assignedCodexModel(normalized,rows);
-  if(child.provider==='claude'&&!CLAUDE_ROLE_MODELS.has(normalized.requestedModel))throw new Error(`Assigned Claude role model is not supported: ${normalized.requestedModel}`);
+  const declared=providerModels(child.provider);
+  if(declared.catalog==='account_catalog')assignedCodexModel(normalized,rows);
+  if(declared.catalog==='built_in_roles'&&!declared.roles.includes(normalized.requestedModel))throw new Error(`Assigned Claude role model is not supported: ${normalized.requestedModel}`);
   return normalized;
  });
  if(new Set(children.map(child=>child.provider)).size!==2||new Set(children.map(child=>child.role)).size!==2)throw new Error('Invalid delegation: one Codex and one Claude child with distinct roles are required');

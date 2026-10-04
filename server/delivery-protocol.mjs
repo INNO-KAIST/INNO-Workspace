@@ -1,5 +1,6 @@
 import {createDeliveryReceipt} from '../public/core/delivery-receipt.mjs';
 import {checkedDeliveryBinding} from './delivery-binding.mjs';
+import {providerHas} from '../public/core/providers.mjs';
 const fields=['version','id','workspaceId','taskId','executionId','generation','action','payloadDigest','acceptedAt'];
 export const protocolError=()=>Object.assign(Error('Desktop delivery protocol could not be verified. Preserve saved delivery for recovery.'),{status:409,code:'DELIVERY_UNVERIFIED'});
 function exact(value,keys){if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==keys.length||keys.some(key=>!Object.hasOwn(value,key)))throw protocolError();}
@@ -31,7 +32,7 @@ export function checkedClaim(response,binding,taskId){
  const claim=response.claim;if(claim===null&&!taskId)return null;
  const task=claim?.task,checkpoint=task?.checkpoint;
  const id=value=>typeof value==='string'&&!!value.trim()&&value.length<=200;
- if(!id(task?.id)||taskId&&task.id!==taskId||!id(claim?.executionId)||!Number.isSafeInteger(claim?.generation)||claim.generation<1||task.status!=='running'||checkpoint?.status!=='running'||checkpoint.provider!=='codex'||checkpoint.deliveryReceiptVersion!==1||checkpoint.executionId!==claim.executionId||checkpoint.generation!==claim.generation)throw protocolError();
+ if(!id(task?.id)||taskId&&task.id!==taskId||!id(claim?.executionId)||!Number.isSafeInteger(claim?.generation)||claim.generation<1||task.status!=='running'||checkpoint?.status!=='running'||!providerHas(checkpoint.provider,'deliveryReceipts',1)||checkpoint.deliveryReceiptVersion!==1||checkpoint.executionId!==claim.executionId||checkpoint.generation!==claim.generation)throw protocolError();
  return claim;
 }
 export async function checkedAck(response,record){

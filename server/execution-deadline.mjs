@@ -1,3 +1,5 @@
+import {providerHas} from '../public/core/providers.mjs';
+
 const PHASES = new Set(['master','baseline','candidate','review','retry','handoff']);
 const ID = /^[A-Za-z0-9._:-]{1,128}$/;
 
@@ -18,7 +20,7 @@ export function validateExecutionDeadline(task, {executionId,generation,executio
       task.parentTaskId || task.assignment || task.delegation ||
       !executionId || checkpoint?.executionId !== executionId ||
       !Number.isSafeInteger(generation) || generation < 1 || checkpoint?.generation !== generation ||
-      checkpoint?.provider !== 'codex' || binding.provider !== 'codex' ||
+      !providerHas(checkpoint?.provider, 'evaluationBudget', true) || binding.provider !== checkpoint.provider ||
       typeof binding.jobId !== 'string' || !ID.test(binding.jobId) || !PHASES.has(binding.phase) ||
       !Number.isSafeInteger(binding.maxDurationMs) || binding.maxDurationMs < 1 || binding.maxDurationMs > 86_400_000 ||
       budget?.jobId !== binding.jobId || budget?.phase !== binding.phase ||

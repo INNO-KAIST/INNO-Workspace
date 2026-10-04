@@ -5,6 +5,7 @@ import {timingSafeEqual} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {checkedDeliveryBinding,deliveryBindingConflict} from './delivery-binding.mjs';
+import {usesTransport} from '../public/core/providers.mjs';
 const MIME={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json','.svg':'image/svg+xml','.webmanifest':'application/manifest+json'};
 const json=(res,status,data)=>{res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(data));};
 async function body(req,maxBytes=750000){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>maxBytes)throw Object.assign(Error('Request exceeds supported byte limit'),{status:413});chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');}catch{throw Object.assign(Error('Invalid JSON'),{status:400});}}
@@ -90,7 +91,7 @@ export function createDesktopServer({token,publicDir,request,bridge,localRecords
     }
     if(req.method==='POST'&&p==='/api/imports')return json(res,200,await request(p,await body(req)));
     const run=p.match(/^\/api\/tasks\/([^/]+)\/run$/);
-    if(req.method==='POST'&&run){const input=await body(req);if(input.provider==='codex')return json(res,202,{task:await bridge.startTask(decodeURIComponent(run[1]),input)});if(input.provider==='claude')return json(res,202,await request(p,input));return json(res,400,{error:'Invalid provider'});}
+    if(req.method==='POST'&&run){const input=await body(req);if(usesTransport(input.provider,'desktop_bridge'))return json(res,202,{task:await bridge.startTask(decodeURIComponent(run[1]),input)});if(usesTransport(input.provider,'routine_fire'))return json(res,202,await request(p,input));return json(res,400,{error:'Invalid provider'});}
     if(req.method==='POST'&&/^\/api\/tasks\/[^/]+\/(?:delegation\/(?:resume|recover)|execution\/recover)$/.test(p))return json(res,200,await request(p,await body(req)));
     if(/^\/api\/tasks\/[^/]+\/model-policy$/.test(p)&&['GET','POST'].includes(req.method))return json(res,200,await request(p,req.method==='POST'?await body(req):undefined));
     if(/^\/api\/tasks\/[^/]+\/review-observations$/.test(p)&&['GET','POST'].includes(req.method))return json(res,200,await request(p,req.method==='POST'?await body(req):undefined));

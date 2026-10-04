@@ -2,6 +2,7 @@ import {usageCounts} from '../public/core/execution-usage.mjs';
 import {parseRevision} from '../public/core/sync.mjs';
 import {failureInput,runnerError} from '../public/core/failures.mjs';
 import {boundedContextDelivery} from '../public/core/context-delivery.mjs';
+import {assertProviderId,providerHas} from '../public/core/providers.mjs';
 // Optional evidence: drop invalid delivery records rather than failing a result.
 const deliveryOf=value=>{try{const delivery=boundedContextDelivery(value);return delivery?{contextDelivery:delivery}:{};}catch{return {};}};
 import { createReadStream } from 'node:fs';
@@ -110,7 +111,7 @@ export function createInnoServer({
   }
 
   async function runTask(request, response, taskId, provider, input, cors) {
-    if (!['codex', 'claude'].includes(provider)) throw new ValidationError('provider must be codex or claude');
+    assertProviderId(provider);
     if (!Number.isInteger(input.expectedVersion)) throw new ValidationError('expectedVersion is required');
     const materials = sanitizeMaterials(input.materials);
     const runner = runners[provider];
@@ -153,7 +154,7 @@ export function createInnoServer({
             usage: result?.usage,
             executionEvidence:result?.executionEvidence,
             ...deliveryOf(result?.contextDelivery),
-          },{allowDesktopEvidence:provider==='codex'});
+          },{allowDesktopEvidence:providerHas(provider,'executionEvidence','cli_arguments')});
         }
       } catch (error) {
         const current = store.requireTask(taskId);

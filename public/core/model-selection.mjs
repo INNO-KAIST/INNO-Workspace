@@ -1,4 +1,5 @@
 // Pure policy core. The caller must authenticate independent_review provenance before ingestion.
+import {isAssignableProvider} from './providers.mjs';
 const DAY=86_400_000, EVIDENCE_MS=90*DAY, AVAILABILITY_MS=2*60*60_000, MAX_OBSERVATIONS=1000, MAX_CANDIDATES=32;
 const IDENTIFIER=/^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 const EFFORTS=new Set(['none','minimal','low','medium','high','xhigh','max','ultra']);
@@ -15,7 +16,7 @@ function profileOf(value){
 }
 function route(value){
  if(!value||typeof value!=='object'||Array.isArray(value))fail('route');
- const provider=value.provider;if(!['codex','claude'].includes(provider))fail('provider');
+ const provider=value.provider;if(!isAssignableProvider(provider))fail('provider');
  const modelVersion=value.modelVersion===null?null:id(value.modelVersion,'model version');
  const effort=value.effort;if(!EFFORTS.has(effort))fail('effort');
  return {id:id(value.id,'route id'),provider,model:id(value.model,'model'),modelVersion,effort};

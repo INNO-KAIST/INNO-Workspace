@@ -1,6 +1,15 @@
 import {sanitizeResumeState} from '../public/core/context-resume.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
 import {ConflictError,ValidationError,DESKTOP_EXECUTION_LEASE_MS} from '../public/core/tasks.mjs';
+import {providerHas,providersByTransport} from '../public/core/providers.mjs';
+
+const DESKTOP_PROVIDERS=providersByTransport('desktop_bridge'),DESKTOP_PROVIDER_LIST=JSON.stringify(DESKTOP_PROVIDERS);
+// Desktops that predate provider selection omit it and run the first desktop provider.
+function desktopProvider(value){
+  if(value===undefined)return DESKTOP_PROVIDERS[0];
+  if(!DESKTOP_PROVIDERS.includes(value))throw new ValidationError('provider does not run on the desktop bridge');
+  return value;
+}
 
 // Retry only a concurrent task write (a newer version than the one read).
 // Owner, lease and receipt conflicts report the read version and stay definitive.
@@ -24,27 +33,28 @@ export class CloudBridge {
     if(t.attachments.some(a=>a.source==='url'))throw new ValidationError('URL references are not source content. Connect the required document before direct execution.');
     const names=t.attachments.filter(a=>a.source!=='url').map(a=>a.path||a.name).sort();
     if(!Array.isArray(input.sourceNames)||input.sourceNames.length>20||input.sourceNames.some(n=>typeof n!=='string')||JSON.stringify([...input.sourceNames].sort())!==JSON.stringify(names))throw new ValidationError('Reconnect every required source on this desktop.');
-    const claim=await this.store.claimExecution(id,{provider:'codex',expectedVersion:input.expectedVersion,leaseMs:DESKTOP_EXECUTION_LEASE_MS,sourceBound:input.sourceNames.length>0},claimOptions);
+    const claim=await this.store.claimExecution(id,{provider:desktopProvider(input.provider),expectedVersion:input.expectedVersion,leaseMs:DESKTOP_EXECUTION_LEASE_MS,sourceBound:input.sourceNames.length>0},claimOptions);
     await this.seen();return {...claim,sourceDelegationVersion:sourceVersion};
   }
   async enqueue(id,input){
+    const provider=desktopProvider(input.provider);
     if(input.materials?.length)throw new ValidationError('Desktop source transfer is not connected. Reconnect sources on the desktop; source content is never queued.');
     return this.store.replaceTask(id,input.expectedVersion,t=>{
       if(!['ready','failed','waiting_connection','waiting_quota'].includes(t.status))throw new ConflictError('Task must be ready before queueing.',t.version);
       if(t.attachments.length)throw new ValidationError('This task needs source reconnection before desktop execution.');
-      const now=this.store.now();return {...t,status:'queued',version:t.version+1,updatedAt:now,checkpoint:{...t.checkpoint,provider:'codex',status:'queued',updatedAt:now}};
+      const now=this.store.now();return {...t,status:'queued',version:t.version+1,updatedAt:now,checkpoint:{...t.checkpoint,provider,status:'queued',updatedAt:now}};
     });
   }
   async claim(claimOptions){
     await this.seen();
-    const expired=await this.store.db.prepare("SELECT body FROM tasks WHERE json_extract(body,'$.status')='running' AND json_extract(body,'$.checkpoint.provider')='codex' AND json_extract(body,'$.checkpoint.expiresAt') < ?1 ORDER BY updated_at ASC LIMIT 1").bind(this.store.now()).first();
+    const expired=await this.store.db.prepare("SELECT body FROM tasks WHERE json_extract(body,'$.status')='running' AND json_extract(body,'$.checkpoint.provider') IN (SELECT value FROM json_each(?2)) AND json_extract(body,'$.checkpoint.expiresAt') < ?1 ORDER BY updated_at ASC LIMIT 1").bind(this.store.now(),DESKTOP_PROVIDER_LIST).first();
     if(expired){const t=JSON.parse(expired.body);try{await this.store.replaceTask(t.id,t.version,current=>({...current,status:'paused',version:current.version+1,updatedAt:this.store.now(),checkpoint:{...current.checkpoint,status:'paused',interruptedBy:'lease_expiry',interruptedVersion:current.version+1,failure:failureRecord({failure:{kind:'interrupted'}},this.store.now())}}));}catch(e){if(!(e instanceof ConflictError))throw e;}}
-    const row=await this.store.db.prepare("SELECT q.body FROM tasks q WHERE json_extract(q.body,'$.status') IN ('queued','queued_for_review') AND json_extract(q.body,'$.checkpoint.provider')='codex' AND COALESCE(json_array_length(q.body,'$.attachments'),0)=0 AND (json_extract(q.body,'$.parentTaskId') IS NULL OR EXISTS (SELECT 1 FROM tasks p WHERE p.id=json_extract(q.body,'$.parentTaskId') AND json_extract(p.body,'$.status')='waiting_children' AND json_extract(p.body,'$.delegation.state')='waiting_children' AND json_extract(p.body,'$.delegation.batchId')=json_extract(q.body,'$.batchId') AND json_extract(p.body,'$.delegation.epoch')=json_extract(q.body,'$.parentEpoch'))) ORDER BY q.updated_at ASC LIMIT 1").first();
+    const row=await this.store.db.prepare("SELECT q.body FROM tasks q WHERE json_extract(q.body,'$.status') IN ('queued','queued_for_review') AND json_extract(q.body,'$.checkpoint.provider') IN (SELECT value FROM json_each(?1)) AND COALESCE(json_array_length(q.body,'$.attachments'),0)=0 AND (json_extract(q.body,'$.parentTaskId') IS NULL OR EXISTS (SELECT 1 FROM tasks p WHERE p.id=json_extract(q.body,'$.parentTaskId') AND json_extract(p.body,'$.status')='waiting_children' AND json_extract(p.body,'$.delegation.state')='waiting_children' AND json_extract(p.body,'$.delegation.batchId')=json_extract(q.body,'$.batchId') AND json_extract(p.body,'$.delegation.epoch')=json_extract(q.body,'$.parentEpoch'))) ORDER BY q.updated_at ASC LIMIT 1").bind(DESKTOP_PROVIDER_LIST).first();
     if(!row)return null;
     const t=JSON.parse(row.body);
-    if(t.checkpoint?.provider!=='codex')return null;
+    if(!DESKTOP_PROVIDERS.includes(t.checkpoint?.provider))return null;
     if(t.attachments.length)return null;
-    try{return await this.store.claimExecution(t.id,{provider:'codex',expectedVersion:t.version,leaseMs:DESKTOP_EXECUTION_LEASE_MS},claimOptions);}catch(e){if(e instanceof ConflictError&&e.code!=='DESKTOP_DELIVERY_CAPACITY')return null;throw e;}
+    try{return await this.store.claimExecution(t.id,{provider:t.checkpoint.provider,expectedVersion:t.version,leaseMs:DESKTOP_EXECUTION_LEASE_MS},claimOptions);}catch(e){if(e instanceof ConflictError&&e.code!=='DESKTOP_DELIVERY_CAPACITY')return null;throw e;}
   }
   async seen(){
     const now=Date.parse(this.store.now());
@@ -85,7 +95,7 @@ export class CloudBridge {
         }
         return t;
       }
-      if(input.executionEvidence&&t.checkpoint?.provider!=='codex')throw new ValidationError('execution evidence provider does not match owner');
+      if(input.executionEvidence&&!providerHas(t.checkpoint?.provider,'executionEvidence','cli_arguments'))throw new ValidationError('execution evidence provider does not match owner');
       try{return await this.store.finishExecution(id,input,{recoverInterrupted:true,allowDesktopEvidence:true,deliveryReceipt});}
       catch(e){if(!(e instanceof ConflictError)||attempt===2)throw e;}
     }
