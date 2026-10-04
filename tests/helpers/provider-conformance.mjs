@@ -23,6 +23,8 @@ import {boundedContextDelivery} from '../../public/core/context-delivery.mjs';
 //   launchFailing(task) -> owner   a definitive provider rejection after the prompt was sent
 //   terminated(owner) -> boolean   only for cancellation 'process_terminate'
 //   read(taskId) -> task;  dump() -> string   everything the store persisted
+//   installPlugin(name) -> {id, contentHash, marker}   an approved plugin whose text contains marker
+//   selectPlugins(taskId, selection);  disablePlugin(id)   the user's plugin actions
 export const SOURCE_SENTINEL = 'conformance-source-7f3a9c-original-excerpt';
 const SOURCE = 'conformance-source.txt';
 
@@ -116,6 +118,18 @@ export const CONFORMANCE_CHECKS = Object.freeze({
     assert.deepEqual(boundedContextDelivery(delivery), delivery);
     assert.equal(delivery.promptBytes, Buffer.byteLength(owner.prompt), 'recorded prompt bytes match what was sent');
     assert.deepEqual([delivery.inputTokens, delivery.cachedTokens], [null, null]);
+  },
+
+  async pluginDelivery(h) {
+    const kept = await h.installPlugin('conformance-kept'), dropped = await h.installPlugin('conformance-dropped');
+    const task = await h.create('Conformance plugins');
+    await h.selectPlugins(task.id, [{id: kept.id, reason: 'Applies to this task'}, {id: dropped.id, reason: 'Withdrawn before launch'}]);
+    await h.disablePlugin(dropped.id);
+    const owner = await h.launch(await h.read(task.id), {content: 'Conformance answer'});
+    assert.ok(h.outbound().some(value => value.includes(kept.marker)), 'an approved plugin reaches the provider');
+    assert.equal(h.outbound().some(value => value.includes(dropped.marker)), false, 'a withdrawn plugin never reaches the provider');
+    assert.equal((await h.deliver(owner)).accepted, true);
+    assert.deepEqual((await h.read(task.id)).checkpoint.pluginDelivery, {version: 1, applied: [{id: kept.id, contentHash: kept.contentHash, reason: 'Applies to this task'}], skipped: [{id: dropped.id, reason: 'not_approved'}]}, 'plugin delivery is recorded');
   },
 
   async failurePath(h) {

@@ -10,6 +10,7 @@ import {validateOfficeContainer} from '../public/core/office-container.mjs';
 import {sanitizeArtifactChecks} from '../public/core/artifact-checks.mjs';
 import {deliveryPolicy} from '../public/core/delivery.mjs';
 import {sourceCoverageContext,verifyMaterialViews} from '../public/core/source-coverage.mjs';
+import {boundedOfferedPlugins,boundedPluginCatalog,boundedPluginDelivery,pluginCatalogContext,pluginDeliveryRecord,pluginPromptSection} from '../public/core/plugins.mjs';
 import {prepareHandoffInputs,prepareReviewInputs} from './handoff-inputs.mjs';
 import {handoffContext,handoffTask} from '../public/core/provider-handoff.mjs';
 import {claudeTaskRoutingPolicy} from '../public/core/claude-routing.mjs';
@@ -177,6 +178,7 @@ function promptText(task, materials, ownership, context, selected) {
     'Role plan suggestions (the master decides whether each static role is relevant):',
     plan || '- Use a single executor role.',
     '',
+    ...(ownership.plugins?.length?[pluginPromptSection(ownership.plugins)]:[]),
     deliveryPolicy(task),
     'For generated Office/PDF files, an optional local verification helper is available at '+JSON.stringify(fileURLToPath(new URL('../scripts/verify-deliverable.py',import.meta.url)))+'. Run with an available Python interpreter and the generated file path; --render-dir inside this isolated run directory generates PDF previews when pypdfium2 is available. Inspect previews visually. Attach actual JSON checks to the artifact. If unavailable, report not_run; do not install paid tools.',
     sourceCoverageContext(materials),
@@ -186,6 +188,7 @@ function promptText(task, materials, ownership, context, selected) {
     ownership.managedDelivery ? 'The desktop bridge manages cloud checkpoints and delivery. Do not call remote INNO tools. Return the final answer and generated artifacts to the bridge.' : '',
     ownership.modelPolicy && !ownership.claude ? 'Return one JSON object with summary, checkpoint, artifacts (at most 9), and routing as specified above. Shape before adding routing:' : 'Return either a plain final answer or one JSON object with this shape:',
     '{"summary":"user-facing answer","checkpoint":"verified progress","artifacts":[{"name":"file.ext","mime":"type/subtype","path":"relative/output/path"}]}',
+    ...(ownership.allowDelegation&&ownership.pluginCatalog?.length?[pluginCatalogContext(ownership.pluginCatalog)]:[]),
     ownership.allowDelegation ? 'When managed parallel allocation is useful, add delegation:{"independent":true,"children":[{"role":"...","provider":"codex|claude","requestedModel":"...","effort":"...","sufficientReason":"...","acceptanceCriteria":["..."],"instructions":"..."}, {"...":"..."}]}. Exactly one child must use each provider.' : '',
     ownership.mode === 'review' ? 'For review completion, add reviewReport:[{"childTaskId":"...","criteria":[{"criterion":"exact assigned string","status":"pass|fail|unverifiable","evidence":"concrete evidence"}]}]. Include every child and every assigned criterion exactly once.' : '',
     'For generated files, return a relative path inside this isolated run directory. Small text may instead use content plus encoding utf-8.',
@@ -429,7 +432,9 @@ export function createCodexRunner({
     available: () => availability ? availability() : defaultCodexAvailability(spawnProcess, env),
     models: async()=>{const catalog=await readCatalog();const models=modelCatalogRows(Array.isArray(catalog)?catalog:catalog?.models);return Array.isArray(catalog)?models:{models,observedAt:catalog?.observedAt??null,status:catalog?.status==='fresh'?'fresh':'unavailable'};},
     sourceDelegationVersion:sourceDelegationVersion===1?1:0,
-    async run({task, materials = [], reviewInputs = [], executionId, generation, signal, executionBudgetVersion, sourceDelegationVersion:negotiatedSourceVersion=sourceDelegationVersion}) {
+    async run({task, materials = [], reviewInputs = [], executionId, generation, signal, executionBudgetVersion, sourceDelegationVersion:negotiatedSourceVersion=sourceDelegationVersion, plugins:offeredPlugins, pluginsSkipped=[], pluginCatalog:catalogInput}) {
+      // Plugins come from the claim: verified text of still-approved selections (S3).
+      const plugins=boundedOfferedPlugins(offeredPlugins),pluginDelivery=boundedPluginDelivery(pluginDeliveryRecord(plugins,pluginsSkipped)),pluginCatalog=(()=>{try{return boundedPluginCatalog(catalogInput);}catch{return [];}})();
       let contextLease,delivery;
       let deadline,processStartedMono=null,processClosedMono=null,rootProcessClosed=false,deadlineExceeded=false;
       const observation=()=>localExecutionObservation(processStartedMono,processClosedMono,{rootProcessClosed,deadlineExceeded});
@@ -492,7 +497,7 @@ export function createCodexRunner({
         '-',
       ];
       const modelPolicy=deadline?'EVALUATION BUDGET EXECUTION: Work directly in this process. Do not use MCP tools, native subagents, delegation, or provider handoff. Return only the assigned result.':mode==='child'?codexChildPolicy(task,assignedRoute):mode==='review'?codexReviewPolicy(task):managedDelivery?delegationRoutingPolicy(models,{sourceDelegationVersion:sourceContext?1:0}):routingPolicy(models);
-      const promptOptions={executionId, generation, managedDelivery, contextGuidance, contextReaderAvailable:Boolean(localContextUrl), handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'};
+      const promptOptions={plugins, pluginCatalog, executionId, generation, managedDelivery, contextGuidance, contextReaderAvailable:Boolean(localContextUrl), handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'};
       let {text:input,context}=await taskPromptWithContext(task, materials, promptOptions);
       if(localContextUrl){
         try{contextLease=contextAccess.open(task,signal);}
@@ -573,6 +578,7 @@ export function createCodexRunner({
         artifacts,
         usage: parsed.usage,
         contextDelivery:delivery,
+        ...(pluginDelivery?{pluginDelivery}:{}),
         executionEvidence:{provider:'codex',source:'cli_arguments',requestedModel:mode==='child'?task.assignment.requestedModel:null,requestedEffort:mode==='child'?task.assignment.effort:null,cliAppliedModel,cliAppliedEffort,actualModelVersion:null,processElapsedMs},
         ...(deadline?{localExecution:observation()}:{}),
         ...(managedDelivery && mode==='root' && structured?.handoff ? {handoff:structured.handoff} : {}),
@@ -588,6 +594,7 @@ export function createCodexRunner({
       } catch(error) {
         if(task?.evaluationBudget)error.localExecution=observation();
         if(delivery&&error&&typeof error==='object'&&error.contextDelivery===undefined)error.contextDelivery=delivery;
+        if(delivery&&pluginDelivery&&error&&typeof error==='object'&&error.pluginDelivery===undefined)error.pluginDelivery=pluginDelivery;
         throw error;
       } finally {contextLease?.revoke();}
     },

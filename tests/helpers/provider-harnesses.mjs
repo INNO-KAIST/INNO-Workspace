@@ -11,6 +11,7 @@ import {createDesktopBridge} from '../../server/desktop-bridge.mjs';
 import {createCloudRequest} from '../../server/delivery-binding.mjs';
 import {createFileOutbox} from '../../server/file-outbox.mjs';
 import {prepareRequest} from '../../scripts/inno-mcp.mjs';
+import {approvePlugin, buildPluginRecord} from '../../public/core/plugins.mjs';
 import {TestD1} from './d1.mjs';
 
 // Conformance harnesses (contract in tests/helpers/provider-conformance.mjs):
@@ -62,6 +63,23 @@ function workerHarness(t, {fetchFn = noNetwork, env = {}, deliveryReceiptVersion
     },
     read: id => store.requireTask(id),
     pause: id => action(id, 'pause'),
+    // Plugins are seeded as already reviewed and approved; selection and disabling use the user API.
+    async installPlugin(name) {
+      const marker = `conformance-plugin-marker-${name}`;
+      const files = [{path: 'SKILL.md', text: `---\nname: ${name}\ndescription: Conformance plugin.\n---\n\n${marker}\n`}];
+      const built = await buildPluginRecord({source: {catalog: 'anthropics', path: `skills/${name}`, commit: '0'.repeat(40)}, files, now: store.now()});
+      const record = approvePlugin(built, {contentHash: built.contentHash, now: store.now()});
+      await store.db.batch([
+        store.db.prepare('INSERT INTO metadata(key,value) VALUES(?1,?2)').bind('plugin:' + record.id, JSON.stringify(record)),
+        store.db.prepare('INSERT INTO metadata(key,value) VALUES(?1,?2)').bind('plugin_content:' + record.id, JSON.stringify({contentHash: record.contentHash, files})),
+      ]);
+      return {id: record.id, contentHash: record.contentHash, marker};
+    },
+    async selectPlugins(id, plugins) {
+      const task = await store.requireTask(id);
+      assert.equal((await call(`/api/tasks/${id}/plugins`, {expectedVersion: task.version, plugins})).status, 200);
+    },
+    async disablePlugin(id) { assert.equal((await call('/api/plugins/disable', {id})).status, 200); },
     async dump() {
       const rows = [];
       for (const table of ['tasks', 'usage', 'metadata']) rows.push(...(await DB.prepare(`SELECT * FROM ${table}`).all()).results);

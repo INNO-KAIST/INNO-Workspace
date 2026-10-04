@@ -6,8 +6,10 @@ import {checkedDeliveryBinding,deliveryBindingConflict} from './delivery-binding
 import {protocolBinding,checkedRecord,checkedReceipt,checkedClaim,checkedAck,protocolError} from './delivery-protocol.mjs';
 import {retryableStatus} from './bridge-runtime.mjs';
 import {boundedContextDelivery} from '../public/core/context-delivery.mjs';
+import {boundedPluginDelivery} from '../public/core/plugins.mjs';
 // Delivery evidence is optional: invalid evidence is dropped, never the result.
 const deliveryOf=value=>{try{const delivery=boundedContextDelivery(value);return delivery?{contextDelivery:delivery}:{};}catch{return {};}};
+const pluginsOf=value=>{try{const delivery=boundedPluginDelivery(value);return delivery?{pluginDelivery:delivery}:{};}catch{return {};}};
 const leaseUnconfirmed=()=>Object.assign(Error('Execution lease renewal was not confirmed before the lease ended. The run was stopped and its output was not uploaded.'),{code:'DESKTOP_LEASE_UNCONFIRMED'});
 const resultNotSaved=(cause,delivered)=>Object.assign(Error(delivered?'The result reached the cloud but could not be saved locally. New executions are stopped; check disk space and permissions, then restart the desktop bridge.':'The result could not be saved locally or sent to the cloud. New executions are stopped; check disk space, permissions and the desktop run folder, then restart the desktop bridge.'),{status:409,code:'OUTBOX_WRITE_FAILED',delivered,cause});
 export function createDesktopBridge({request,runner,outbox,heartbeatMs=15000,leaseMs=DESKTOP_EXECUTION_LEASE_MS,beforeClaim=async()=>{},readDeliveryBinding,onError=()=>{},deliveryReceiptVersion=0}){
@@ -84,13 +86,13 @@ export function createDesktopBridge({request,runner,outbox,heartbeatMs=15000,lea
    renewal=request(`/api/desktop/${encodeURIComponent(task.id)}/renew`,owner,options(binding)).then(()=>{confirmedAt=Math.max(confirmedAt,sentAt);},e=>{if(!retryableStatus(e?.status)){monitorError??=e;controller.abort();}}).finally(()=>{renewal=null;});
   },heartbeatMs);
   let result,runError;
-  try{result=await runner.run({task,...owner,materials,reviewInputs:claim.reviewInputs,sourceDelegationVersion:runner.sourceDelegationVersion===1&&claim.sourceDelegationVersion===1?1:0,signal:controller.signal});}catch(e){runError=e;}
+  try{result=await runner.run({task,...owner,materials,reviewInputs:claim.reviewInputs,...(claim.plugins?{plugins:claim.plugins,pluginsSkipped:claim.pluginsSkipped??[]}:{}),...(claim.pluginCatalog?{pluginCatalog:claim.pluginCatalog}:{}),sourceDelegationVersion:runner.sourceDelegationVersion===1&&claim.sourceDelegationVersion===1?1:0,signal:controller.signal});}catch(e){runError=e;}
   finally{clearInterval(timer);if(renewal)await renewal;}
   if(!versioned&&monitorError)throw monitorError;
   if(!versioned&&controller.signal.aborted)throw Error('Desktop execution stopped');
   let record,built=false;
   try{
-   record={taskId:task.id,action:runError?'fail':'complete',...(binding?{binding}:{}),input:runError?{...owner,usage:usageCounts(runError.usage),...failureInput(runError.code?runError:runnerError(runError)),...deliveryOf(runError.contextDelivery)}:{...owner,content:result.content,checkpoint:result.checkpoint,artifacts:result.artifacts,usage:usageCounts(result.usage),...deliveryOf(result.contextDelivery),...(result.executionEvidence?{executionEvidence:boundedExecutionEvidence(result.executionEvidence)}:{}),...(result.handoff?{handoff:result.handoff}:{}),...(result.delegation?{delegation:result.delegation,...(models!==undefined?{models}:{})}:{}),...(result.reviewReport?{reviewReport:result.reviewReport}:{}),...(Object.hasOwn(result,'resumeState')?{resumeState:result.resumeState}:{})}};
+   record={taskId:task.id,action:runError?'fail':'complete',...(binding?{binding}:{}),input:runError?{...owner,usage:usageCounts(runError.usage),...failureInput(runError.code?runError:runnerError(runError)),...deliveryOf(runError.contextDelivery),...pluginsOf(runError.pluginDelivery)}:{...owner,content:result.content,checkpoint:result.checkpoint,artifacts:result.artifacts,usage:usageCounts(result.usage),...deliveryOf(result.contextDelivery),...pluginsOf(result.pluginDelivery),...(result.executionEvidence?{executionEvidence:boundedExecutionEvidence(result.executionEvidence)}:{}),...(result.handoff?{handoff:result.handoff}:{}),...(result.delegation?{delegation:result.delegation,...(models!==undefined?{models}:{})}:{}),...(result.reviewReport?{reviewReport:result.reviewReport}:{}),...(Object.hasOwn(result,'resumeState')?{resumeState:result.resumeState}:{})}};
    if(versioned){record=JSON.parse(JSON.stringify({...record,version:1,phase:'pending'}));await checkedRecord(record);}
    built=true;await outbox.write(record);
   }catch(error){if(versioned){deliveryUnsafe=true;throw error;}throw built?await unsavedResult(record,error):error;}

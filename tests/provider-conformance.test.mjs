@@ -63,6 +63,8 @@ const DEFECTS = [
   }},
   {check: 'contextDelivery', detectedBy: 'context delivery is recorded for the provider', defect: afterDelivery(() => current => ({checkpoint: {...current.checkpoint, contextDelivery: undefined}}))},
   {check: 'contextDelivery', detectedBy: 'recorded prompt bytes match what was sent', defect: afterDelivery(() => current => ({checkpoint: {...current.checkpoint, contextDelivery: {...current.checkpoint.contextDelivery, promptBytes: current.checkpoint.contextDelivery.promptBytes + 1}}}))},
+  {check: 'pluginDelivery', detectedBy: 'a withdrawn plugin never reaches the provider', defect: h => ({...h, disablePlugin: async () => {}})},
+  {check: 'pluginDelivery', detectedBy: 'plugin delivery is recorded', defect: afterDelivery(() => current => ({checkpoint: {...current.checkpoint, pluginDelivery: undefined}}))},
   {check: 'failurePath', detectedBy: 'a failed launch records the context it sent', defect: h => ({...h, async launchFailing(task) {
     const owner = await h.launchFailing(task);
     await tamper(h, owner.taskId, current => ({checkpoint: {...current.checkpoint, contextDelivery: undefined}}));

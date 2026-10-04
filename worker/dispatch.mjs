@@ -3,9 +3,11 @@ import {ConflictError} from '../public/core/tasks.mjs';
 import {failureInput,runnerError} from '../public/core/failures.mjs';
 import {boundedContextDelivery} from '../public/core/context-delivery.mjs';
 import {usesTransport} from '../public/core/providers.mjs';
+import {boundedPluginDelivery} from '../public/core/plugins.mjs';
 import {ROUTINE_UNAVAILABLE,routineLaunch} from './claude-routine.mjs';
 // Optional evidence: an invalid record is dropped, never the launch outcome.
 const deliveryOf=value=>{try{const delivery=boundedContextDelivery(value);return delivery?{contextDelivery:delivery}:{};}catch{return {};}};
+const pluginsOf=value=>{try{const delivery=boundedPluginDelivery(value);return delivery?{pluginDelivery:delivery}:{};}catch{return {};}};
 const queued=t=>['queued','queued_for_review'].includes(t.status)&&usesTransport(t.checkpoint?.provider,'routine_fire');
 const owns=(task,claim)=>task.status==='running'&&task.checkpoint?.executionId===claim.executionId&&task.checkpoint?.generation===claim.generation;
 // A durable claim precedes the external side effect. Ambiguous outcomes require
@@ -37,7 +39,7 @@ export async function runRemoteClaim({store,claim,launch}){
     if(!owns(current,claim))return;
     try{
      const owner={executionId:claim.executionId,generation:claim.generation};
-     if(definitive)await store.failExecution(task.id,{...owner,...failure,...deliveryOf(error?.contextDelivery)});
+     if(definitive)await store.failExecution(task.id,{...owner,...failure,...deliveryOf(error?.contextDelivery),...pluginsOf(error?.pluginDelivery)});
      else await store.markExecutionUncertain(task.id,{...owner,reason:'uncertain_fire'});
      return;
     }catch(writeError){if(!(writeError instanceof ConflictError))throw writeError;}
@@ -50,7 +52,7 @@ export async function runRemoteClaim({store,claim,launch}){
    try{
     const current=await store.requireTask(task.id);
     if(!owns(current,claim))return;
-    await store.leaveExecutionRunning(task.id,{executionId:claim.executionId,generation:claim.generation,sessionUrl:started.sessionUrl,checkpoint:started.checkpoint,...deliveryOf(started.contextDelivery)});
+    await store.leaveExecutionRunning(task.id,{executionId:claim.executionId,generation:claim.generation,sessionUrl:started.sessionUrl,checkpoint:started.checkpoint,...deliveryOf(started.contextDelivery),...pluginsOf(started.pluginDelivery)});
     return;
    }catch{/* Retry only this local metadata write, never the external fire. */}
   }

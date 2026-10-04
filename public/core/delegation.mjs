@@ -2,6 +2,7 @@ import {delegationAttachments,validateDelegationSourceIds} from './delegation-so
 import {usageHistory} from './execution-usage.mjs';
 import {ConflictError,ValidationError,createTask} from './tasks.mjs';
 import {isAssignableProvider} from './providers.mjs';
+import {validatePluginSelection} from './plugins.mjs';
 const bounded=(value,label,max)=>{if(typeof value!=='string'||!value.trim()||value.length>max)throw new ValidationError(`Invalid delegation ${label}`);return value.trim();};
 export function validateAssignments(parent,input,options={}){
  if(!input||typeof input!=='object'||Array.isArray(input))throw new ValidationError('Delegation input is required');
@@ -25,7 +26,8 @@ export function validateAssignments(parent,input,options={}){
   if(!Array.isArray(c.acceptanceCriteria)||c.acceptanceCriteria.length<1||c.acceptanceCriteria.length>8)throw new ValidationError('Acceptance criteria require 1 to 8 items');
   const acceptanceCriteria=c.acceptanceCriteria.map(v=>bounded(v,'acceptance criterion',1000));
   if(new Set(acceptanceCriteria).size!==acceptanceCriteria.length)throw new ValidationError('Duplicate acceptance criteria');
-  return {...(sourceIds.length?{sourceIds}:{}),role:bounded(c.role,'role',100),provider:c.provider,requestedModel,effort:c.effort,sufficientReason:bounded(c.sufficientReason,'sufficientReason',1000),acceptanceCriteria,instructions:bounded(c.instructions,'instructions',12000)};
+  const plugins=c.plugins===undefined?[]:validatePluginSelection(c.plugins);
+  return {...(sourceIds.length?{sourceIds}:{}),...(plugins.length?{plugins}:{}),role:bounded(c.role,'role',100),provider:c.provider,requestedModel,effort:c.effort,sufficientReason:bounded(c.sufficientReason,'sufficientReason',1000),acceptanceCriteria,instructions:bounded(c.instructions,'instructions',12000)};
  });
  if(new Set(children.map(c=>c.provider)).size!==2||new Set(children.map(c=>c.role)).size!==2)throw new ValidationError('One Codex and one Claude child with distinct roles are required');
  return children;
@@ -40,7 +42,7 @@ export function allocateDelegation(parent,input,{now,id,sourceDelegationVersion=
  if(parent.status!=='running'||parent.checkpoint?.executionId!==input.executionId||parent.checkpoint?.generation!==input.generation)throw new ConflictError('Stale delegation execution owner',parent.version);
  const content=input.content===undefined?undefined:bounded(input.content,'master interpretation',12000);
  const batchId=id(),at=now();
- const children=assignments.map(assignment=>({...createTask({prompt:assignment.instructions,title:assignment.role,attachments:delegationAttachments(parent,assignment.sourceIds,options)},{now:()=>at,id}),status:'queued',parentTaskId:parent.id,batchId,parentEpoch:1,assignment,checkpoint:{provider:assignment.provider,status:'queued',generation:0,updatedAt:at}}));
+ const children=assignments.map(assignment=>({...createTask({prompt:assignment.instructions,title:assignment.role,attachments:delegationAttachments(parent,assignment.sourceIds,options)},{now:()=>at,id}),status:'queued',parentTaskId:parent.id,batchId,parentEpoch:1,assignment,...(assignment.plugins?.length?{plugins:assignment.plugins}:{}),checkpoint:{provider:assignment.provider,status:'queued',generation:0,updatedAt:at}}));
  return {parent:{...parent,...(content?{messages:[...parent.messages,{id:id(),role:'assistant',content,createdAt:at}]}:{}),status:'waiting_children',version:parent.version+1,updatedAt:at,delegation:{...(sourceDelegationVersion===1&&parent.attachments?.length?{sourceDelegationVersion:1}:{}),batchId,sourceExecutionId:input.executionId,sourceGeneration:input.generation,masterProvider:parent.checkpoint.provider,state:'waiting_children',epoch:1,retryCount:0,children:children.map(c=>({taskId:c.id,...c.assignment}))},checkpoint:{...parent.checkpoint,usageHistory:usageHistory(parent.checkpoint,input.usage,at,{task:parent,transition:'delegation'}),status:'waiting_children',executionId:undefined,expiresAt:undefined,updatedAt:at}},children};
 }
 export function buildReview(parent,children){

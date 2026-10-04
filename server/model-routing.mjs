@@ -2,6 +2,7 @@ import {validateDelegationSourceIds,SOURCE_DELEGATION_POLICY} from '../public/co
 import {spawn} from 'node:child_process';
 import {isAssignableProvider,providerModels} from '../public/core/providers.mjs';
 import {CLAUDE_ROLE_MODELS} from '../public/core/claude-routing.mjs';
+import {validatePluginSelection} from '../public/core/plugins.mjs';
 const EFFORTS=new Set(['none','minimal','low','medium','high','xhigh','max','ultra']);
 const DELEGATION_EFFORTS=new Set(['none','minimal','low','medium','high','xhigh','max']);
 export function modelCatalogRows(rows){
@@ -92,8 +93,10 @@ export function validateDelegationResult(value,rows,options={}){
   if(!DELEGATION_EFFORTS.has(child.effort))throw new Error(`Invalid delegation effort: ${child.effort??''}`);
   if(!Array.isArray(child.acceptanceCriteria)||child.acceptanceCriteria.length<1||child.acceptanceCriteria.length>8)throw new Error('Invalid delegation acceptance criteria');
   const sourceIds=validateDelegationSourceIds(child.sourceIds,options);
+  let plugins=[];
+  if(child.plugins!==undefined){try{plugins=validatePluginSelection(child.plugins);}catch{throw new Error('Invalid delegation plugins');}}
   const normalized={
-   ...(sourceIds.length?{sourceIds}:{}),
+   ...(sourceIds.length?{sourceIds}:{}),...(plugins.length?{plugins}:{}),
    role:boundedAssignmentText(child.role,'role',100),provider:child.provider,
    requestedModel:boundedAssignmentText(child.requestedModel,'requestedModel',100),effort:child.effort,
    sufficientReason:boundedAssignmentText(child.sufficientReason,'sufficientReason',1000),

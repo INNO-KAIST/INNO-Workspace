@@ -15,6 +15,7 @@ import {usesTransport} from './core/providers.mjs';
 import {contextDeliveryText} from './core/context-delivery.mjs';
 import {createRecordImportUI} from './record-import.mjs';
 import {createModelPolicyUI} from './model-policy-ui.mjs';
+import {createPluginUI,pluginDeliveryText} from './plugin-ui.mjs';
 import {createDeliveryRecoveryUI} from './delivery-recovery-ui.mjs';
 import {createModelDiagnosticsUI} from './model-diagnostics-ui.mjs';
 import {reviewObservationSection,createReviewObservationRecovery} from './review-observation-ui.mjs';
@@ -43,6 +44,7 @@ const recordImports=createRecordImportUI({getClient:()=>client,onDone:()=>refres
 const state=()=>client?.state||{tasks:[],capabilities:{},usage:[]};
 const current=()=>state().tasks.find(t=>t.id===activeId);
 const reviewObservationRecovery=createReviewObservationRecovery({getContext:()=>({client,task:current(),epoch:selectionEpoch,capabilities:state().capabilities}),onChange:()=>render(),onNotice:message=>toast(message)});
+const pluginUI=createPluginUI({dialog:$('plugin-dialog'),getContext:()=>({client,task:current(),afterChange:()=>{syncStatus();render();}})});
 const modelPolicyUI=createModelPolicyUI({dialog:$('model-policy-dialog'),getContext:()=>({client,activeTaskId:activeId,epoch:selectionEpoch,capabilities:state().capabilities,tasks:state().tasks})});
 const deliveryRecoveryUI=createDeliveryRecoveryUI({dialog:$('delivery-recovery-dialog'),getClient:()=>client,getState:()=>state(),getTask:()=>current(),getEpoch:()=>selectionEpoch,onChange:()=>refresh()});
 const modelDiagnosticsUI=createModelDiagnosticsUI({root:$('model-diagnostics'),getContext:()=>({client,capabilities:state().capabilities})});
@@ -118,6 +120,7 @@ function renderPlan(){
  $('checkpoint-card').innerHTML=checkpoint?`<span>↻</span><div><strong>저장된 재개 지점</strong><p>${esc(checkpoint)}</p></div>`:'<span>↻</span><div><strong>맥락은 계속 이어집니다</strong><p>작업 기록과 결정 사항을 저장합니다.<br>원본은 필요할 때 다시 연결하세요.</p></div>';
  const handoffs=t?.checkpoint?.handoffHistory||[];if(handoffs.length){const box=document.createElement('div');box.className='small-copy';const heading=document.createElement('strong');heading.textContent='제공자 인계 기록 ('+handoffs.length+'/2)';box.append(heading);for(const h of handoffs){const line=document.createElement('p');line.textContent=handoffLine(h);box.append(line);}if(t.status==='queued'){const pending=document.createElement('p');pending.textContent=queuedText(t.checkpoint.provider);box.append(pending);}$('checkpoint-card').lastElementChild.append(box);}
  const delivery=contextDeliveryText(t?.checkpoint?.contextDelivery);if(delivery){const line=document.createElement('p');line.className='small-copy';line.textContent=delivery;$('checkpoint-card').lastElementChild.append(line);}
+ const pluginLine=pluginDeliveryText(t?.checkpoint?.pluginDelivery);if(pluginLine){const line=document.createElement('p');line.className='small-copy';line.textContent=pluginLine;$('checkpoint-card').lastElementChild.append(line);}
  const recovery=failureGuidance(t);if(recovery){$('checkpoint-card').lastElementChild.insertAdjacentHTML('beforeend',`<div role="status"><strong>${esc(recovery.title)}</strong><p>${esc(recovery.detail)}${recovery.retryNotBefore?' 서버 재시도 안내: '+esc(date(recovery.retryNotBefore))+' (구독 한도 초기화 시각은 아닙니다).':''} 자동 재실행은 하지 않습니다. 원본이 필요하면 다시 연결하세요.</p></div>`);}
  const quality=t?(literatureAudits.has(t)?literatureAudits.get(t):auditLiterature(t)):null;if(t)literatureAudits.set(t,quality);let qualityPanel=$('literature-quality');if(!qualityPanel){qualityPanel=document.createElement('div');qualityPanel.id='literature-quality';$('artifacts').before(qualityPanel);}qualityPanel.replaceChildren();if(quality){const heading=document.createElement('strong');heading.textContent=quality.status==='passed'?'문헌 결과 형식 점검 통과':'문헌 결과 확인 필요';qualityPanel.append(heading);const detail=document.createElement('p');detail.className='small-copy';detail.textContent='실행 완료와 별도인 형식 점검입니다. 주장·수치의 정확성과 독립 검토 여부는 검증하지 않습니다.';qualityPanel.append(detail);const reviewButton=document.createElement('button');reviewButton.className='text-button';reviewButton.textContent='별도 검토 작업 준비';reviewButton.onclick=()=>guarded(prepareSeparateReview);qualityPanel.append(reviewButton);for(const issue of quality.issues){const item=document.createElement('p');item.className='small-copy';item.textContent=issue;qualityPanel.append(item);}if(quality.issues.length){const button=document.createElement('button');button.className='text-button';button.textContent='수정 요청 준비';button.onclick=()=>{if($('prompt').value.trim()){toast('작성 중인 요청을 먼저 기록하거나 비워 주세요.');return;}$('prompt').value=repairLiteraturePrompt(quality);$('prompt').focus();toast('수정 요청을 준비했습니다. 자료 연결을 확인하고 작업 기록 후 실행하세요.');};qualityPanel.append(button);}}
  const artifacts=t?.artifacts||[];$('artifact-count').textContent=artifacts.length;
@@ -140,6 +143,7 @@ function renderControls(){
  $('composer').querySelector('[type=submit]').disabled=controls.composerDisabled;
  const resume=$('delegation-resume');if(resume){resume.hidden=!controls.resumeVisible;resume.disabled=controls.resumeDisabled;resume.textContent=controls.resumeLabel;}
  const recover=$('execution-recover');recover.hidden=!executionRecovery.eligible;recover.disabled=busy;
+ const pluginButton=$('plugin-open');pluginButton.hidden=!(client?.remote&&c.pluginRegistry===true);pluginButton.disabled=busy;
  const policyButton=$('model-policy-open');policyButton.hidden=!(client?.remote&&c.modelPolicyManagement===true&&child&&t.assignment?.selection?.profile);policyButton.disabled=busy;
  const deliveryButton=$('delivery-recovery-open');deliveryButton.hidden=!(client?.remote&&c.desktopDeliveryRecovery===true&&t);deliveryButton.disabled=busy;deliveryRecoveryUI.sync();
 }
@@ -276,6 +280,7 @@ $('recovery-confirm').onchange=()=>{$('recovery-submit').disabled=!$('recovery-c
 $('recovery-form').onsubmit=e=>{e.preventDefault();if(!pendingRecovery||!$('recovery-confirm').checked)return;guarded(()=>performRecovery(pendingRecovery,true));};
  $('provider').replaceChildren(...providerOptions().map(option=>new Option(option.label,option.value)));$('provider').onchange=renderControls;$('run-button').onclick=()=>guarded(run);$('pause-button').onclick=()=>guarded(()=>act('pause'));$('cancel-button').onclick=()=>guarded(()=>act('cancel'));$('delegation-resume').onclick=()=>guarded(resumeDelegation);$('execution-recover').onclick=()=>guarded(beginExecutionRecovery);
 $('model-policy-open').onclick=()=>{if(current()?.id)void modelPolicyUI.open(current().id);};
+$('plugin-open').onclick=()=>void pluginUI.open();
 $('delivery-recovery-open').onclick=()=>{if(current()?.id)void deliveryRecoveryUI.open();};
 $('export-button').onclick=()=>exportRecords();$('settings-export').onclick=()=>exportRecords(true);
 $('settings-button').onclick=showSettings;$('connect-executor').onclick=showSettings;$('settings-form').onsubmit=configure;

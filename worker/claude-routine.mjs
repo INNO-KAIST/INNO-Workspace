@@ -8,6 +8,7 @@ import {handoffContext} from '../public/core/provider-handoff.mjs';
 import {claudeTaskRoutingPolicy} from '../public/core/claude-routing.mjs';
 import {runnerError} from '../public/core/failures.mjs';
 import {executionCapability} from './execution-scope.mjs';
+import {isRootMaster,pluginCatalogContext,pluginDeliveryRecord,pluginPromptSection} from '../public/core/plugins.mjs';
 
 // Claude cloud Routine adapter (CR-006 routine_fire transport): prompt, fire
 // request and the mapping of its session response to a remote launch result.
@@ -37,7 +38,7 @@ function cloudContextGuidance(task) {
   ].join('\n');
 }
 
-async function routineText(task, materials, ownership, catalog, capability, sourceDelegationVersion=0) {
+async function routineText(task, materials, ownership, catalog, capability, sourceDelegationVersion=0, offered=[], pluginCatalog=[]) {
   const mode=task.delegation?.state==='reviewing'?'review':task.parentTaskId||task.assignment?'child':'root';
   const readerAvailable=typeof capability==='string'&&capability.length>0;
   const context=await buildTaskContext(task,{mode,selection:readerAvailable?'resume':'full',readerAvailable});
@@ -60,6 +61,7 @@ async function routineText(task, materials, ownership, catalog, capability, sour
     'Do not claim another execution. Use renew_execution with taskId, executionId, generation and this capability before five minutes pass and between long steps; keep the current lease alive without repeating AI work. A long native role should return within the lease or explicitly report that safe continuation is needed.',
     sourceContext,
     !task.parentTaskId&&!task.delegation?.review&&((!materials.length&&!task.checkpoint?.sourceBound)||sourceContext) ? 'If delegate_task is advertised, independent '+(sourceContext?'source-scoped':'source-free')+' work can use one Codex and one Claude child. First interpret the request, choose sufficient supported models and effort, explain why each is sufficient, and set exact acceptanceCriteria. Use delegate_task with independent:true and two assignments; after successful allocation stop writing under the old lease. Do not also spawn local roles for the same work. If the Codex catalog is empty, work directly rather than guess. Catalog: '+JSON.stringify(catalog??{}) : '',
+    ...(pluginCatalog.length?[pluginCatalogContext(pluginCatalog)]:[]),
     task.assignment ? 'Fixed assignment and checks: '+JSON.stringify(task.assignment) : '',
     task.delegation?.state==='reviewing' ? 'Review manifest: '+JSON.stringify(task.delegation.review)+'. Read child generated artifacts with read_task as needed. Complete via checkpoint_task with reviewReport. For failed checks use retry_delegation once; for unverifiable checks or an exhausted retry use request_decision. Do not complete without every check passing.' : '',
     `Task ID: ${task.id}`,
@@ -75,6 +77,7 @@ async function routineText(task, materials, ownership, catalog, capability, sour
     handoffContext(task),
     'Role plan:',
     plan || '- Use a single executor role.',
+    ...(offered.length?[pluginPromptSection(offered)]:[]),
     deliveryPolicy(task),
     'The repository helper scripts/verify-deliverable.py can check generated Office XML/CRC and optionally render PDF pages with --render-dir in your working directory. Use an available Python interpreter. Inspect all previews before claiming visual QA. Attach returned checks to artifacts, keep visual inspection distinct, and report not_run when tools are missing.',
     sourceCoverageContext(materials),
@@ -84,7 +87,7 @@ async function routineText(task, materials, ownership, catalog, capability, sour
   return {text,delivery:contextDelivery(context,{provider:'claude',promptBytes:new TextEncoder().encode(text).byteLength,materialBytes,reader:readerAvailable})};
 }
 
-export async function fireRoutine(fetchFn, env, task, materials, ownership, signal, catalog, sourceDelegationVersion=0) {
+export async function fireRoutine(fetchFn, env, task, materials, ownership, signal, catalog, sourceDelegationVersion=0, plugins={offered:[],skipped:[]}, pluginCatalog=[]) {
   const capability=await executionCapability(env.ACCESS_TOKEN,{...ownership,task});
   let routine;
   const response = await fetchFn(env.CLAUDE_ROUTINE_URL, {
@@ -95,17 +98,17 @@ export async function fireRoutine(fetchFn, env, task, materials, ownership, sign
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
     },
-    body: JSON.stringify({text: (routine = await routineText(task, materials, ownership, catalog, capability, sourceDelegationVersion)).text}),
+    body: JSON.stringify({text: (routine = await routineText(task, materials, ownership, catalog, capability, sourceDelegationVersion, plugins.offered, pluginCatalog)).text}),
   });
   const result = await response.json().catch(() => null);
   if (!response.ok) {
     // The body was sent; a definitive rejection still records what was delivered.
-    throw Object.assign(runnerError(null,{status:response.status,retryAfter:response.headers.get('retry-after')}),{contextDelivery:routine.delivery});
+    throw Object.assign(runnerError(null,{status:response.status,retryAfter:response.headers.get('retry-after')}),{contextDelivery:routine.delivery,pluginDelivery:pluginDeliveryRecord(plugins.offered,plugins.skipped)});
   }
   if (!result?.claude_code_session_id || !result?.claude_code_session_url) {
     throw new Error('Claude Routine returned an invalid session response');
   }
-  return {...result,contextDelivery:routine.delivery};
+  return {...result,contextDelivery:routine.delivery,pluginDelivery:pluginDeliveryRecord(plugins.offered,plugins.skipped)};
 }
 
 // A launch either confirms a started remote session or throws; the generic
@@ -113,12 +116,12 @@ export async function fireRoutine(fetchFn, env, task, materials, ownership, sign
 export const routineLaunch=fire=>async(claim,options)=>{
  const fired=await fire(claim,options);
  if(typeof fired?.claude_code_session_url!=='string'||!fired.claude_code_session_url)throw Error('Unconfirmed routine response');
- return {sessionUrl:fired.claude_code_session_url,checkpoint:'Claude session started; results await verification.',contextDelivery:fired.contextDelivery};
+ return {sessionUrl:fired.claude_code_session_url,checkpoint:'Claude session started; results await verification.',contextDelivery:fired.contextDelivery,pluginDelivery:fired.pluginDelivery};
 };
 
-export function createClaudeRoutineAdapter({fetchFn=fetch,env={},sourceDelegationVersion=0,catalog}={}){
+export function createClaudeRoutineAdapter({fetchFn=fetch,env={},sourceDelegationVersion=0,catalog,plugins}={}){
  return {
   provider:'claude',configured:routineConfigured(env),unavailableReason:ROUTINE_UNAVAILABLE,
-  launch:routineLaunch(async(claim,{materials=[]}={})=>fireRoutine(fetchFn,env,claim.task,materials,claim,undefined,await catalog.read(),sourceDelegationVersion)),
+  launch:routineLaunch(async(claim,{materials=[]}={})=>fireRoutine(fetchFn,env,claim.task,materials,claim,undefined,await catalog.read(),sourceDelegationVersion,plugins?await plugins.resolve(claim.task):undefined,plugins&&isRootMaster(claim.task)?await plugins.approvedCatalog():[])),
  };
 }

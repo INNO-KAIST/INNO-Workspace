@@ -144,6 +144,17 @@ export class WorkspaceClient {
     if(!this.remote)throw new Error('모델 정책을 바꾸려면 서버 연결이 필요합니다.');
     return this.request(`/api/tasks/${encodeURIComponent(id)}/model-policy`,input);
   }
+  // CR-007 S3 plugin registry and per-task selection (cloud workspace only).
+  async pluginRequest(path,body){
+    if(!this.remote)throw new Error('플러그인을 관리하려면 서버 연결이 필요합니다.');
+    return this.request(path,body);
+  }
+  listPlugins(){return this.pluginRequest('/api/plugins');}
+  importPlugin(input){return this.pluginRequest('/api/plugins/import',input);}
+  approvePlugin(id,contentHash){return this.pluginRequest('/api/plugins/approve',{id,contentHash});}
+  disablePlugin(id){return this.pluginRequest('/api/plugins/disable',{id});}
+  removePlugin(id){return this.pluginRequest('/api/plugins/remove',{id,confirm:true});}
+  async selectTaskPlugins(id,expectedVersion,plugins){const result=await this.pluginRequest(`/api/tasks/${encodeURIComponent(id)}/plugins`,{expectedVersion,plugins});return result?.task?this.acceptWrite(result.task):result;}
   async recoverExecution(id,input){
     if(!this.remote)throw new Error('실행 복구에는 서버 연결이 필요합니다.');
     const {task}=await this.request(`/api/tasks/${encodeURIComponent(id)}/execution/recover`,input);

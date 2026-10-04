@@ -10,7 +10,7 @@ const instant=value=>Date.parse(value);
 // The request supplies task requirements, never a policy identity or evidence.
 export async function delegationProfile(child){
  const criteria=await Promise.all(child.acceptanceCriteria.map(async text=>'c'+(await digest(text.normalize('NFC'))).slice(0,32)));
- return {family:'delegation_'+child.provider,requirementsVersion:'r'+(await digest(JSON.stringify([child.role,child.instructions,child.sourceIds??[]]))).slice(0,32),evaluationVersion:'e'+(await digest(JSON.stringify(criteria))).slice(0,32),criteria,requiredCapabilities:child.sourceIds?.length?['text','source_view']:['text'],contextClass:`text_${Math.ceil(child.instructions.length/4000)}_sources_${Math.min(child.sourceIds?.length??0,20)}`};
+ return {family:'delegation_'+child.provider,requirementsVersion:'r'+(await digest(JSON.stringify([child.role,child.instructions,child.sourceIds??[],...(child.plugins?.length?[child.plugins.map(plugin=>plugin.id).sort()]:[])]))).slice(0,32),evaluationVersion:'e'+(await digest(JSON.stringify(criteria))).slice(0,32),criteria,requiredCapabilities:child.sourceIds?.length?['text','source_view']:['text'],contextClass:`text_${Math.ceil(child.instructions.length/4000)}_sources_${Math.min(child.sourceIds?.length??0,20)}`};
 }
 
 // This metadata is written only by trusted runtime ingestion, never from delegation input.

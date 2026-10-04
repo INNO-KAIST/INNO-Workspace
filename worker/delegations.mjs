@@ -6,7 +6,7 @@ import {validateAssignments} from '../public/core/delegation.mjs';
 import {resolveAllocationPolicy} from './allocation-policy.mjs';
 const mayStillRun=child=>child.status==='running'||(child.status==='paused'&&Boolean(child.checkpoint?.executionId));
 export class Delegations {
- constructor(store,{sourceDelegationVersion=0,catalog}={}){this.store=store;this.sourceDelegationVersion=sourceDelegationVersion===1?1:0;this.catalog=catalog;}
+ constructor(store,{sourceDelegationVersion=0,catalog,plugins}={}){this.store=store;this.sourceDelegationVersion=sourceDelegationVersion===1?1:0;this.catalog=catalog;this.plugins=plugins;}
  async children(parent){return Promise.all(parent.delegation.children.map(c=>this.store.requireTask(c.taskId)));}
  async pending(limit=20){
   if(!Number.isInteger(limit)||limit<1||limit>100)throw new ValidationError('Recovery limit must be 1 to 100');
@@ -22,6 +22,9 @@ export class Delegations {
     return {parent,children:await this.children(parent),replayed:true};
    }
    const validated=validateAssignments(parent,input,{sourceDelegationVersion:this.sourceDelegationVersion});
+   // A master may assign only plugins the user approved (resolution re-checks at dispatch).
+   const assigned=validated.flatMap(child=>child.plugins??[]);
+   if(assigned.length){if(!this.plugins)throw new ValidationError('Assigned plugins must be approved.');await this.plugins.requireApproved(assigned);}
    const resolved=this.catalog?await resolveAllocationPolicy(this.store,this.catalog,validated):null;
    const allocation=allocateDelegation(parent,input,{now:this.store.now,id:this.store.id,sourceDelegationVersion:this.sourceDelegationVersion,...(resolved?{assignments:resolved.assignments}:{})});
    try{await this.store.replaceDelegation(parent,allocation.parent,allocation.children.map(next=>({next})),resolved?{guards:resolved.guards,initialPolicies:resolved.initialPolicies}:[],{deliveryReceipt});return {...allocation,replayed:false};}

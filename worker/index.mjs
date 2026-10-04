@@ -3,6 +3,8 @@ import {sourceDelegationVersionFromEnvironment} from '../public/core/source-dele
 import {verifyMaterialViews} from '../public/core/source-coverage.mjs';
 import {runRemoteClaim} from './dispatch.mjs';
 import {createRemoteAdapters} from './remote-adapters.mjs';
+import {createPluginRegistry} from './plugins.mjs';
+import {isRootMaster} from '../public/core/plugins.mjs';
 import {authorizeExecution,scopedRead} from './execution-scope.mjs';
 import {ModelCatalog} from './model-catalog.mjs';
 import {OfficialModelDiscovery} from './model-discovery.mjs';
@@ -59,11 +61,21 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
   function runtime(env,context={}){
     const store=new D1TaskStore(env.DB),bridge=new CloudBridge(store,{sourceDelegationVersion});
     const catalog=new ModelCatalog(store),discovery=new OfficialModelDiscovery(store,{fetchFn});
-    const adapterFor=createRemoteAdapters({fetchFn,env,sourceDelegationVersion,catalog});
+    const plugins=createPluginRegistry(store,{fetchFn}),adapterFor=createRemoteAdapters({fetchFn,env,sourceDelegationVersion,catalog,plugins});
+    // Desktop claims carry the verified text of the task's still-approved plugins.
+    const hydrate=async claim=>{
+      const hydrated=await orchestration.hydrateClaim(claim);
+      if(!hydrated?.task)return hydrated;
+      const task=hydrated.task,extra={};
+      if(task.plugins?.length){const {offered,skipped}=await plugins.resolve(task);Object.assign(extra,{plugins:offered,pluginsSkipped:skipped});}
+      // A root master may assign approved plugins to the children it delegates.
+      if(isRootMaster(task)){const pluginCatalog=await plugins.approvedCatalog();if(pluginCatalog.length)extra.pluginCatalog=pluginCatalog;}
+      return {...hydrated,...extra};
+    };
     // State flags the UI reads for each cloud provider (manifest ui.availability).
     const remoteFlags=Object.fromEntries(providersByTransport('routine_fire').flatMap(id=>providerManifest(id).ui.availability.map(flag=>[flag,adapterFor(id).configured])));
     const reviewObservations=createReviewObservationPipeline(store),policyRetention=new D1ModelPolicies(store.db),policyManagement=createTaskPolicyManagement(store,catalog);
-    const orchestration=createOrchestration({store,delegations:new Delegations(store,{sourceDelegationVersion,catalog}),adapterFor,waitUntil:context.waitUntil?promise=>context.waitUntil(promise):undefined});
+    const orchestration=createOrchestration({store,delegations:new Delegations(store,{sourceDelegationVersion,catalog,plugins}),adapterFor,waitUntil:context.waitUntil?promise=>context.waitUntil(promise):undefined});
     const handoff=async(input,options)=>{const task=await store.handoffExecution(input.taskId,input,options);return orchestration.dispatch(task.id);};
     const afterComplete=async task=>{
       const recovery=orchestration.reconcileTask(task.id).catch(()=>null);
@@ -71,7 +83,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
       if(context.waitUntil){context.waitUntil(recovery);context.waitUntil(observation);}else await Promise.all([recovery,observation]);
     };
     const delegate=async(taskId,input,options)=>orchestration.allocate(taskId,input,options);
-    return {store,bridge,orchestration,adapterFor,remoteFlags,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement};
+    return {store,bridge,orchestration,hydrate,adapterFor,remoteFlags,plugins,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement};
   }
   return {
     async scheduled(event,env,context={}) {
@@ -104,8 +116,8 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
         if (pathname.startsWith('/api/') || pathname === '/mcp') {
           if (!authorized(request, env)) return responseJson({error: 'unauthorized'}, 401, {...headers, 'www-authenticate': 'Bearer'});
         }
-        const {store,bridge,orchestration,adapterFor,remoteFlags,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement}=runtime(env,context);
-        const capabilities = {desktopDeliveryRecovery:deliveryReceiptVersion===1,sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,reviewObservationRecovery:true,cloudCodex: true, localCodex: false, ...remoteFlags, cloud: true, connected: true};
+        const {store,bridge,orchestration,hydrate,adapterFor,remoteFlags,plugins,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement}=runtime(env,context);
+        const capabilities = {desktopDeliveryRecovery:deliveryReceiptVersion===1,sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,reviewObservationRecovery:true,cloudCodex: true, localCodex: false, ...remoteFlags, cloud: true, connected: true, pluginRegistry: true};
         const bridgeMatch=pathname.match(/^\/api\/desktop\/([^/]+)\/(start|renew|complete|fail|ack|reservations|discard)$/);
         const recoveryRoute=bridgeMatch&&['reservations','discard'].includes(bridgeMatch[2]);
         const receiptHeader=request.headers.get('x-inno-delivery-receipt-version');
@@ -156,6 +168,11 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
         if (request.method === 'POST' && pathname === '/api/tasks') {
           return responseJson({task: await store.createTask(await body(request))}, 201, headers);
         }
+        if (request.method === 'GET' && pathname === '/api/plugins') return responseJson({plugins: await plugins.list()}, 200, headers);
+        const pluginMatch = pathname.match(/^\/api\/plugins\/(import|approve|disable|remove)$/);
+        if (request.method === 'POST' && pluginMatch) return responseJson(await plugins[pluginMatch[1]](await body(request)), 200, headers);
+        const pluginSelectionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/plugins$/);
+        if (request.method === 'POST' && pluginSelectionMatch) return responseJson(await plugins.select(decodeURIComponent(pluginSelectionMatch[1]), await body(request)), 200, headers);
         if (request.method === 'POST' && pathname === '/mcp') {
           const message=await body(request),scope=await authorizeExecution(store,env.ACCESS_TOKEN,message);
           return responseJson(await handleMcp(store,message,{sourceDelegationVersion,handoff,models:()=>catalog.read(),listTasks:()=>scope?[scope.task]:[],readTask:id=>scopedRead(store,scope,id),delegate:args=>delegate(args.taskId,args),retryReview:args=>orchestration.retryReview(args.taskId,args),afterComplete}), 200, headers);
@@ -173,7 +190,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
         }
         if (request.method === 'POST' && pathname === '/api/desktop/poll') {
           const input=await body(request);if(input.models!==undefined)await catalog.report(input.models);
-          return responseJson({claim: await orchestration.hydrateClaim(await bridge.claim(claimOptions)),workspaceId:desktopWorkspaceId,...claimConfirmation}, 200, headers);
+          return responseJson({claim: await hydrate(await bridge.claim(claimOptions)),workspaceId:desktopWorkspaceId,...claimConfirmation}, 200, headers);
         }
         if(request.method==='POST'&&bridgeMatch){
           const id=decodeURIComponent(bridgeMatch[1]), input=await body(request);
@@ -205,7 +222,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
              (Array.isArray(input.reviewReport)&&input.reviewReport.some(row=>Array.isArray(row?.criteria)&&row.criteria.some(criterion=>criterion?.status!=='pass')))))
              throw new ValidationError('Resume state is not supported on handoff, delegation, or non-passing review transitions');
            if(input.models!==undefined)await catalog.report(input.models);
-           if(bridgeMatch[2]==='start')return responseJson({claim:await orchestration.hydrateClaim(await bridge.start(id,input,claimOptions)),workspaceId:desktopWorkspaceId,...claimConfirmation},200,headers);
+           if(bridgeMatch[2]==='start')return responseJson({claim:await hydrate(await bridge.start(id,input,claimOptions)),workspaceId:desktopWorkspaceId,...claimConfirmation},200,headers);
            if(bridgeMatch[2]==='complete'&&input.handoff)return await accepted(await handoff({...input,taskId:id},receiptOptions));
            if(bridgeMatch[2]==='complete'&&input.delegation){const result=await delegate(id,{...input.delegation,executionId:input.executionId,generation:input.generation,content:input.content,usage:input.usage},receiptOptions);return await accepted(result.parent);}
            if(bridgeMatch[2]==='complete'&&input.reviewReport){
@@ -231,7 +248,9 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
               }
             }
            }
-           const task=bridgeMatch[2]==='renew'?await bridge.renew(id,input):bridgeMatch[2]==='complete'?await bridge.complete(id,input,receiptOptions):await bridge.fail(id,input,receiptOptions);
+           // The receipt above binds the original body; only the stored plugin record is filtered.
+           const reported=input.pluginDelivery===undefined?input:{...input,pluginDelivery:(await plugins.verifyReport(input.pluginDelivery))??undefined};
+           const task=bridgeMatch[2]==='renew'?await bridge.renew(id,input):bridgeMatch[2]==='complete'?await bridge.complete(id,reported,receiptOptions):await bridge.fail(id,reported,receiptOptions);
            if(bridgeMatch[2]!=='renew')await afterComplete(task);
            return await accepted(task);
           }catch(error){
