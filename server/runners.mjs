@@ -126,7 +126,7 @@ async function taskPromptWithContext(task, materials = [], ownership = {}) {
   const readerAvailable=ownership.contextReaderAvailable===true;
   const context=await buildTaskContext(task,{mode:ownership.mode??executionMode(task),selection:readerAvailable?'resume':'full',readerAvailable});
   const selected=readerAvailable&&context.readiness==='selected_ready'&&context.manifest?.selection?.applied==='resume'
-    &&context.manifest.budget.exceeded===false&&context.manifest.budget.requiredBytes<=context.manifest.budget.maxBytes;
+    &&context.manifest.budget.blocked===false&&context.manifest.budget.requiredBytes<=context.manifest.budget.hardMaxBytes;
   if(!context.complete&&!selected)throw Object.assign(new ContextRetrievalRequiredError(),{contextDelivery:contextDelivery(context,{provider:ownership.claude?'claude':'codex',reader:readerAvailable,materialBytes:materialBytes(materials)})});
   return {text:promptText(task,materials,ownership,context,selected),context};
 }

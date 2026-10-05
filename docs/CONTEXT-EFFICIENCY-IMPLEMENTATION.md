@@ -80,3 +80,15 @@ Stage2D1 verified: selection is enabled only for a configured managed Codex scop
 ## WU5 — hard-cap full delivery (2026-10-01, user decision)
 - Readiness values are now full_ready, full_over_budget, selected_ready and blocked. Above the 96000-byte soft budget, complete original text is delivered up to FULL_CONTEXT_HARD_MAX_BYTES=384000 UTF-8 bytes (request+conversation+checkpoint) and marked manifest.budget.exceeded=true, blocked=false. Only above the cap is execution blocked (CONTEXT_RETRIEVAL_REQUIRED, no spawn/fire). Selection rule unchanged (smaller than full and within 96000). Coverage-tracked bootstrap was not adopted: required originals must be read in full anyway, so it saves no tokens.
 - Remaining (WU6/H2): persist and display this delivery outcome; whole wire budget including materials (up to 600000 bytes) and guidance; earlier warning when a single request alone exceeds the cap. Routine fire payload limits are unverified (H3).
+
+## H1 — selection past the hard cap and write-time refusal (2026-10-06, user decision 2026-10-05)
+- Split reading of required context above 384000 bytes was not adopted; blocking above the cap stays a product limit.
+- Selection past the cap: when the complete text exceeds FULL_CONTEXT_HARD_MAX_BYTES and a verified resume selection fits the cap, the selection is delivered.
+  - Reason `selected_over_budget`; readiness stays `selected_ready`; budget.exceeded=true, blocked=false.
+  - Complete text is still preferred whenever it fits the cap and the selection does not fit 96000 bytes.
+  - Adapters (server/runners.mjs, worker/claude-routine.mjs) now gate selection on blocked=false and requiredBytes<=hardMaxBytes. A working reader is still required.
+- Write-time refusal (public/core/tasks.mjs): createTask refuses a request when request + empty checkpoint/conversation placeholders exceed the cap. That sum is exact for a new task.
+  - message/decide refuse when request + current checkpoint + the new `[Message #N] user:` line exceed the cap. That sum is a lower bound of every run's inline context.
+  - Combined history that crosses the cap later is still blocked at run time.
+- Shared source: public/core/context-limits.mjs holds the cap, both placeholders and the message line format.
+- Not changed (follow-up): checkpoint content written by an execution and imported tasks are not byte-checked. Refusing a completion checkpoint risks losing results and needs its own design.

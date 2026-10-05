@@ -1,4 +1,6 @@
 import {verifyResumeState} from './context-resume.mjs';
+import {FULL_CONTEXT_HARD_MAX_BYTES,EMPTY_CHECKPOINT_TEXT,EMPTY_CONVERSATION_TEXT,messageLine} from './context-limits.mjs';
+export {FULL_CONTEXT_HARD_MAX_BYTES};
 
 /**
  * Pure, provider-independent task text assembly. Callers supply an already
@@ -8,8 +10,9 @@ import {verifyResumeState} from './context-resume.mjs';
  * Provider instructions/materials remain outside this budget.
  */
 // Above the soft budget (maxBytes) complete original text is still delivered up to
-// this fixed bound and reported as over budget; beyond it execution is blocked.
-export const FULL_CONTEXT_HARD_MAX_BYTES = 384_000;
+// this fixed bound and reported as over budget. When complete text exceeds it, a
+// verified selection that fits the bound is delivered instead; otherwise execution
+// is blocked. The bound itself lives in context-limits.mjs.
 export async function buildTaskContext(task, {mode = 'root', maxBytes = 96_000, hardMaxBytes = FULL_CONTEXT_HARD_MAX_BYTES, selection = 'full', readerAvailable = false} = {}) {
   if (!['root', 'child', 'review'].includes(mode)) throw new TypeError('Unsupported task context mode');
   if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new TypeError('maxBytes must be a nonnegative safe integer');
@@ -29,7 +32,7 @@ export async function buildTaskContext(task, {mode = 'root', maxBytes = 96_000, 
   const taskVersion = task?.version == null ? null : (typeof task.version === 'number' ? task.version : String(task.version));
   const request = String(task?.prompt ?? '');
   const checkpointContent = String((typeof task?.checkpoint === 'string' ? task.checkpoint : task?.checkpoint?.content) ?? '');
-  const checkpoint = checkpointContent || '- No checkpoint.';
+  const checkpoint = checkpointContent || EMPTY_CHECKPOINT_TEXT;
   const messages = (Array.isArray(task?.messages) ? task.messages : []).map(message => ({
     id: message?.id == null ? null : String(message.id),
     role: ['user', 'assistant', 'system'].includes(message?.role) ? message.role : 'system',
@@ -37,7 +40,7 @@ export async function buildTaskContext(task, {mode = 'root', maxBytes = 96_000, 
   }));
   // verifyResumeState snapshots scope metadata itself; never clone raw attachments.
   const verificationPending = selection === 'resume' && readerAvailable ? verifyResumeState(task) : null;
-  const originals = messages.map((message,index) => `[Message #${index + 1}] ${message.role}: ${message.content}`);
+  const originals = messages.map((message,index) => messageLine(index, message.role, message.content));
   const sourceEntries = [];
   for (const [index,message] of messages.entries()) sourceEntries.push({
     id: message.id ?? `index:${index}`, index, role: message.role, digest: await digest(message.content),
@@ -66,7 +69,7 @@ export async function buildTaskContext(task, {mode = 'root', maxBytes = 96_000, 
       }
       entries.push(entry);
     }
-    return {entries,conversation:rendered.join('\n\n') || '- No additional messages.'};
+    return {entries,conversation:rendered.join('\n\n') || EMPTY_CONVERSATION_TEXT};
   }
   const full = render();
   const fixedBytes = bytes(request) + bytes(checkpoint);
@@ -98,11 +101,14 @@ export async function buildTaskContext(task, {mode = 'root', maxBytes = 96_000, 
         ].join('\n');
         candidate.conversation = guidance+'\n\n'+candidate.conversation;
         const candidateBytes = fixedBytes + bytes(candidate.conversation);
+        // Complete text is preferred while it fits the hard cap; past it, a selection
+        // that fits replaces a block.
+        const fitsOnlySelected = fullInputBytes > hardMaxBytes && candidateBytes <= hardMaxBytes;
         if (candidateBytes >= fullInputBytes) selectionInfo.reason = 'not_smaller';
-        else if (candidateBytes > maxBytes) selectionInfo.reason = 'budget_exceeded';
+        else if (candidateBytes > maxBytes && !fitsOnlySelected) selectionInfo.reason = 'budget_exceeded';
         else {
           conversation = candidate.conversation; entries = candidate.entries;
-          selectionInfo.applied = 'resume'; selectionInfo.reason = 'selected';
+          selectionInfo.applied = 'resume'; selectionInfo.reason = candidateBytes > maxBytes ? 'selected_over_budget' : 'selected';
           selectionInfo.omittedMessageIndexes = [...eligible].sort((a,b)=>a-b);
           omissions = selectionInfo.omittedMessageIndexes.map(messageIndex => ({section:'message',messageIndex,digest:sourceEntries[messageIndex].digest,reason:'resume_reference'}));
         }
@@ -110,7 +116,7 @@ export async function buildTaskContext(task, {mode = 'root', maxBytes = 96_000, 
     }
   }
   const inputBytes = fixedBytes + bytes(conversation);
-  const uncompressedBytes = fixedBytes + bytes(originals.join('\n\n') || '- No additional messages.');
+  const uncompressedBytes = fixedBytes + bytes(originals.join('\n\n') || EMPTY_CONVERSATION_TEXT);
   const exceeded = inputBytes > maxBytes, blocked = inputBytes > hardMaxBytes, selected = selectionInfo.applied === 'resume';
   return {
     request, conversation, checkpoint, complete: !blocked && !selected,

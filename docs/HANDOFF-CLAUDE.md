@@ -102,8 +102,8 @@
 - request·모든 user/system·checkpoint·basis 이후 **모든** 메시지를 유지한다. pending 응답의 20개 목록을 전체 pending으로 잘못 취급하지 않는다.
 - state가 같은 task/mode/원문 prefix/범위 해시에 맞고 직접 참조한 과거 assistant만 후보다. 사용자 메시지 바로 앞의 assistant 제안은 보존한다. 엄격히 교대로 대화하는 경우 절감이 제한될 수 있다.
 - 중복 참조는 생략된 원문을 인라인 대상으로 가리키지 않는다. 생략 위치/인덱스/전체 SHA-256과 다시 읽는 방법을 본문에 표시한다.
-- 상태·안내·표식까지 합친 실제 UTF-8 입력이 기존 dedup 결과보다 작고 96000바이트 이내여야 선택한다.
-- 선택 패킷은 `complete:false`, `readiness:'selected_ready'`, `manifest.selection.applied:'resume'`, `retrievalRequired:true`, `budget.exceeded:false`다. 완전 원문이 없다는 의미와 실행 준비를 구분한다. 어댑터는 readiness뿐 아니라 reader/적용 상태/실제 예산도 확인한다.
+- 상태·안내·표식까지 합친 실제 UTF-8 입력이 기존 dedup 결과보다 작고 96000바이트 이내여야 선택한다. 2026-10-06부터는 전문이 384000바이트를 넘을 때 384000바이트 이내인 선택도 쓴다(사유 `selected_over_budget`).
+- 선택 패킷은 `complete:false`, `readiness:'selected_ready'`, `manifest.selection.applied:'resume'`, `retrievalRequired:true`, `budget.blocked:false`다. `budget.exceeded`는 96000바이트 이내 선택에서 false, `selected_over_budget`에서 true다. 완전 원문이 없다는 의미와 실행 준비를 구분한다. 어댑터는 readiness뿐 아니라 reader/적용 상태/실제 예산도 확인한다.
 - 첫 `offset:0` 조회에도 표식의 `expectedDigest`를 사용하고 반환 `contentDigest`를 확인한다. 버전/해시가 달라지면 오래된 선택 상태와 새 원문을 섞지 않는다.
 - 요약으로 권한을 얻지 않는다. 과거 제안에 대한 “네/진행해” 해석에 원문이 필요하면 먼저 조회한다. 해시 검증만으로 모델 이해·요약 품질을 보증하지 않는다.
 - 별도 AI 압축 호출은 추가하지 않았다. 정상 작업의 선택적 결과로 state를 갱신한다. 모델이 항상 완전한 state를 생성한다는 보장은 없다.
@@ -122,6 +122,8 @@
 
 ### H1. 최초 과대 문맥 처리 및 재개 연속성 (CTX-01~04,06 / 높음)
 
+> 2026-10-05 결정·2026-10-06 구현: 384KB를 넘는 필수 문맥을 나눠 읽는 기능은 채택하지 않고, 실행 전 차단을 제품 한계로 유지한다. 전문이 384KB를 넘어도 검증된 선택 전달이 384KB 이내이면 선택 전달로 실행한다. 상세는 docs/CONTEXT-EFFICIENCY-PROPOSAL.md "필수 문맥 상한 결정"에 있다. 아래 bootstrap 설계와 완료 증거 목록은 이력이다.
+>
 > 2026-10-01 갱신: 사용자 결정으로 WU5에서 96KB 초과~384KB는 전문 전달(예산 초과 표시), 384KB 초과만 차단으로 변경했다. 아래 bootstrap 설계는 채택하지 않았으며 이력으로 남긴다. 최신 상태는 PROGRESS.md 재개 지점 참조.
 
 **현상:** 유효 state가 없거나 필수 request/user/system/checkpoint/pending만으로 96KB를 넘으면 실행 전 `CONTEXT_RETRIEVAL_REQUIRED`로 멈춘다. reader가 있다고 무조건 실행하도록 바꾼 것은 아니다.

@@ -48,7 +48,9 @@ async function codex(task,{configured=true,failOpen=false,evaluation=false,snaps
 }
 async function cloud(t,task){
  const DB=new TestD1();t.after(()=>DB.close());const store=new D1TaskStore(DB,{id:()=>task.id});
- let stored=await store.createTask({prompt:task.prompt});stored=await store.replaceTask(stored.id,stored.version,current=>({...current,...task,version:current.version+1}));
+ // Seed with a small request, then store the case as-is: oversized cases stand for
+ // tasks stored before creation-time limits or grown past the cap.
+ let stored=await store.createTask({prompt:'seed'});stored=await store.replaceTask(stored.id,stored.version,current=>({...current,...task,version:current.version+1}));
  const env={DB,ACCESS_TOKEN:'test-selection-context-01234567890123456789',CLAUDE_ROUTINE_TOKEN:'fake',CLAUDE_ROUTINE_URL:'https://api.anthropic.com/v1/fire'},capture={fires:0};
  const worker=createWorker({fetchFn:async(_url,input)=>{
   capture.fires++;capture.prompt=JSON.parse(input.body).text;
@@ -140,6 +142,24 @@ test('required context over the soft budget but within the hard cap runs with co
  task.checkpoint.resumeState.basis=(await createContextBasis(task,{messageCount:5})).basis;
  const local=await codex(task);assert.equal(local.spawns,1);assert.ok(local.prompt.includes(task.prompt));assert.ok(local.prompt.includes(oldText));
  const remote=await cloud(t,task);assert.equal(remote.fires,1);assert.ok(remote.prompt.includes('OVER_END'));assert.ok(remote.prompt.includes(oldText));
+});
+
+test('full history over the hard cap runs selected on both adapters when the selection fits the cap',async t=>{
+ const big='BIG_OLD_BEGIN '+'w'.repeat(400000)+' BIG_OLD_END';
+ const make=async()=>{
+  const task=await sourceTask(big);
+  task.messages[4]={...task.messages[4],content:'KEEP_USER_CHANGE '+'u'.repeat(150000)+' USER_TAIL_END'};
+  task.checkpoint.resumeState.basis=(await createContextBasis(task,{messageCount:5})).basis;
+  return task;
+ };
+ const local=await codex(await make());
+ assert.equal(local.spawns,1);assert.ok(local.prompt.includes('USER_TAIL_END'));assert.ok(!local.prompt.includes('BIG_OLD_END'));
+ assert.ok(local.recovered.text.startsWith('BIG_OLD_BEGIN'));
+ const delivery=local.result.contextDelivery;
+ assert.equal(delivery.readiness,'selected_ready');assert.ok(delivery.contextBytes>delivery.maxBytes&&delivery.contextBytes<=delivery.hardMaxBytes);
+ const remote=await cloud(t,await make());
+ assert.equal(remote.fires,1);assert.ok(remote.prompt.includes('USER_TAIL_END'));assert.ok(!remote.prompt.includes('BIG_OLD_END'));
+ assert.ok(remote.recovered.text.startsWith('BIG_OLD_BEGIN'));
 });
 
 test('Codex results and context refusals carry the delivered context outcome in bytes',async()=>{

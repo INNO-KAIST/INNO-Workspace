@@ -52,7 +52,7 @@ export function contextDeliveryText(value) {
   const main = d.readiness === 'blocked'
     ? `문맥 전달 차단: 필수 문맥 ${kb(d.contextBytes)}가 상한 ${kb(d.hardMaxBytes)}를 넘어 실행하지 않았습니다.`
     : d.readiness === 'selected_ready'
-      ? `문맥 전달: 선택 ${kb(d.contextBytes)} (원문 ${d.omittedMessages}건 생략, ${kb(d.selectionSavedBytes)} 감소, 필요 시 원문 재조회).`
+      ? `문맥 전달: 선택 ${kb(d.contextBytes)} (원문 ${d.omittedMessages}건 생략, ${kb(d.selectionSavedBytes)} 감소, 필요 시 원문 재조회).${d.contextBytes > d.maxBytes ? ` 전문이 상한을 넘어 선택해 전달했습니다(예산 ${kb(d.maxBytes)} 초과, 상한 ${kb(d.hardMaxBytes)} 이내).` : ''}`
       : d.readiness === 'full_over_budget'
         ? `문맥 전달: 전문 ${kb(d.contextBytes)} — 예산 ${kb(d.maxBytes)} 초과, 상한 ${kb(d.hardMaxBytes)} 이내라 잘라내지 않고 전달했습니다.`
         : `문맥 전달: 전문 ${kb(d.contextBytes)} (예산 ${kb(d.maxBytes)} 이내).`;

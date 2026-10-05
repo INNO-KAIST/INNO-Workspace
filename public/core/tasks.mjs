@@ -2,8 +2,21 @@ import {sanitizeResumeState} from './context-resume.mjs';
 import {validateOfficeArtifact} from './office-container.mjs';
 import {sanitizeArtifactChecks} from './artifact-checks.mjs';
 import {sanitizeSourceView,sanitizeSourceCoverage} from './source-coverage.mjs';
+import {FULL_CONTEXT_HARD_MAX_BYTES,EMPTY_CHECKPOINT_TEXT,EMPTY_CONVERSATION_TEXT,messageLine} from './context-limits.mjs';
 const MAX_PLAN_ITEMS = 6;
 const MAX_TEXT = 200_000;
+
+// The request, the checkpoint and every user turn are always delivered inline. A
+// write that makes those alone exceed the context hard cap could never run, so it
+// is refused when written. For a new task the sum is exact; for a later turn it is
+// a lower bound of what every run must send.
+const utf8Bytes = value => new TextEncoder().encode(value).byteLength;
+function requireRunnable(bytes) {
+  if (bytes > FULL_CONTEXT_HARD_MAX_BYTES) {
+    throw new ValidationError(`요청·체크포인트와 이 입력만으로 한 번에 전달할 수 있는 상한(${FULL_CONTEXT_HARD_MAX_BYTES / 1000}KB, UTF-8 기준)을 넘어 실행할 수 없습니다. 긴 자료는 첨부로 연결하거나 새 작업으로 나누어 진행하세요.`);
+  }
+}
+const checkpointText = task => String((typeof task?.checkpoint === 'string' ? task.checkpoint : task?.checkpoint?.content) ?? '') || EMPTY_CHECKPOINT_TEXT;
 
 export const TERMINAL_STATUSES = Object.freeze(['completed', 'cancelled']);
 export const TASK_STATUSES = Object.freeze([
@@ -192,6 +205,7 @@ export function createTask(input, overrides = {}) {
   const deps = dependencies(overrides);
   const now = deps.now();
   const prompt = text(input.prompt, 'prompt');
+  requireRunnable(utf8Bytes(prompt) + utf8Bytes(EMPTY_CHECKPOINT_TEXT) + utf8Bytes(EMPTY_CONVERSATION_TEXT));
   const type = typeof input.type === 'string' && input.type.trim() ? input.type.trim().slice(0, 100) : 'general';
   return {
     id: deps.id(),
@@ -261,6 +275,10 @@ export function applyAction(task, input, overrides = {}) {
     case 'message':
     case 'decide': {
       const content = text(input.content, `${input.action} content`);
+      const request = String(task.prompt ?? '');
+      // A first message equal to the request is sent as a reference to it.
+      const line = next.messages.length === 0 && content === request ? EMPTY_CONVERSATION_TEXT : messageLine(next.messages.length, 'user', content);
+      requireRunnable(utf8Bytes(request) + utf8Bytes(checkpointText(task)) + utf8Bytes(line));
       next.messages.push({id: deps.id(), role: 'user', content, createdAt: now});
       if (task.status === 'waiting_user' || task.status === 'completed') next.status = 'ready';
       if (task.status === 'running') {

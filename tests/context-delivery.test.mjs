@@ -40,6 +40,8 @@ test('the delivery notice states bytes, budget and outcome without claiming toke
  assert.match(contextDeliveryText({...base,readiness:'full_over_budget'}),/120\.5KB.*96KB 초과.*384KB 이내.*잘라내지 않고/);
  assert.match(contextDeliveryText({...base,readiness:'full_ready',contextBytes:5000}),/전문 5KB/);
  assert.match(contextDeliveryText({...base,readiness:'selected_ready',contextBytes:40000,selectionSavedBytes:20000,omittedMessages:2,reader:true}),/선택 40KB.*2건.*20KB/);
+ assert.doesNotMatch(contextDeliveryText({...base,readiness:'selected_ready',contextBytes:40000,selectionSavedBytes:20000,omittedMessages:2,reader:true}),/예산.*초과/);
+ assert.match(contextDeliveryText({...base,readiness:'selected_ready',contextBytes:150000,selectionSavedBytes:400000,omittedMessages:1,reader:true}),/선택 150KB.*1건.*400KB.*예산 96KB 초과.*상한 384KB 이내/);
  assert.match(contextDeliveryText({...base,readiness:'blocked',contextBytes:400000,promptBytes:null}),/차단.*400KB.*384KB/);
  assert.match(contextDeliveryText({...base,readiness:'full_ready'}),/전체 프롬프트 150KB/);
  assert.doesNotMatch(contextDeliveryText({...base,readiness:'full_ready'}),/토큰 절감|tokens saved/);

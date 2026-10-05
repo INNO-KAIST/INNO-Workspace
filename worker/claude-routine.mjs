@@ -43,7 +43,7 @@ async function routineText(task, materials, ownership, catalog, capability, sour
   const readerAvailable=typeof capability==='string'&&capability.length>0;
   const context=await buildTaskContext(task,{mode,selection:readerAvailable?'resume':'full',readerAvailable});
   const selected=readerAvailable&&context.readiness==='selected_ready'&&context.manifest?.selection?.applied==='resume'
-    &&context.manifest.budget.exceeded===false&&context.manifest.budget.requiredBytes<=context.manifest.budget.maxBytes;
+    &&context.manifest.budget.blocked===false&&context.manifest.budget.requiredBytes<=context.manifest.budget.hardMaxBytes;
   const materialBytes=materials.reduce((total,item)=>total+new TextEncoder().encode(String(item?.text??'')).byteLength,0);
   if(!context.complete&&!selected)throw Object.assign(new ContextRetrievalRequiredError(),{contextDelivery:contextDelivery(context,{provider:'claude',reader:readerAvailable,materialBytes})});
   const sourceContext=!task.parentTaskId&&!task.delegation?.review?sourceDelegationContext(task,{sourceDelegationVersion}):'';
