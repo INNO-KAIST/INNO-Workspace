@@ -4,7 +4,7 @@
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
 - 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP, Task3h 복구 UI·client·local proxy 연결 및 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
 - 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. Task3l 복구 서비스 루프·스크립트 배선 검증 완료(기본0). Task3m 해시 확인 명시 전달 HTTP 검증 완료. Task3n 로컬 복구 UI 구현·독립 리뷰·실제 브라우저 검증 완료. 전체1010건 중1009통과/0실패/기존symlink1skip. 이후 legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화는 2026-10-01 승인·PRD 반영 완료. CONTEXT-EFFICIENCY-IMPLEMENTATION.md Stage1 공통 조립/제공자 연결 검증 완료. Stage2A 범위 제한 원문 조회 검증 완료. Stage2B1 재개 상태 저장·출처 검증 완료. Stage2B2 일반 결과 전달·저장 연결 검증 완료. Stage2C 제공자별 실제 조회 helper 연결 완료. Stage2D1 선택적 문맥 전달·전체1097pass 검증 완료. 사용자 요청으로 현재 단계 종료 후 Claude handoff. 다음 최초 oversize 처리·전체 prompt 예산·관측 UI·실제 구독 환경 검증; 상세 HANDOFF-CLAUDE.md.
-- **Claude 재개 지점(2026-10-01 저녁 갱신, 이 줄이 위 두 줄보다 우선):** Claude 독립 총괄 검토 후 WU1(renew 일시 오류 허용·v0 결과 저장 실패 차단), WU2(데스크톱 fail/renew의 complete 정합), WU3(Claude 선택 조회 version-only 충돌 연속성), WU4(snapshot 불가 시 전문 대체·v0 정지 안내), WU5(사용자 결정: 96KB 초과~384KB 전문 전달, 상한 초과만 차단)를 구현·독립검증·기록했다. 사용자 요청으로 로컬 커밋 d1da52d(codex/source-release, push 안 함)에 담았으며 main/Worker/Pages 미배포. 2026-10-03: WU6(문맥 전달 관측)·WU7(문서) 완료, CR-006/007 승인·CR-004 A 결정. 2026-10-03 릴리스 완료(main/Worker ebc60186/Pages/데스크톱 6125c11, Claude·Codex 실구독 최소 시험 통과, INNO Claude Routine 재생성 trig_01JqQA1ENd9B2yKpeZVLvx3J). 2026-10-03: CR-006 S1 제공자 레지스트리(로컬 커밋 696aee5, 계획 docs/superpowers/plans/2026-10-03-provider-registry.md), CR-007 S3 플러그인 등록부(로컬 커밋 7793f1c, 계획 docs/superpowers/plans/2026-10-03-plugin-registry.md, 문서 docs/PLUGINS.md) — push·배포 안 함. 2026-10-05: CR-004 A 실행 경로 평가(3cbf0e0, 문서 docs/MODEL-ROUTING.md). H4 결과 전달 복구 H4-1~H4-5 완료(9b9352d, 계획 docs/superpowers/plans/2026-10-05-delivery-journal.md, 활성화 준비 docs/DELIVERY-ACTIVATION.md). 내용: 사용자 중단 결과 정리, claim journal·nonce, 이전 형식 결과 정리 화면, 실제 프로세스 강제종료 시험 7지점. 2026-10-05 릴리스: main·Worker 709a9224·Pages·데스크톱 9b9352d 반영, 실구독 최소 시험 통과, receipt gate 0 유지. 다음: receipt 활성화는 사용자 승인 대기(docs/DELIVERY-ACTIVATION.md). (이전 2026-10-01 예약 재개 계획은 이 세션에서 직접 진행으로 대체)
+- **Claude 재개 지점(2026-10-01 저녁 갱신, 이 줄이 위 두 줄보다 우선):** Claude 독립 총괄 검토 후 WU1(renew 일시 오류 허용·v0 결과 저장 실패 차단), WU2(데스크톱 fail/renew의 complete 정합), WU3(Claude 선택 조회 version-only 충돌 연속성), WU4(snapshot 불가 시 전문 대체·v0 정지 안내), WU5(사용자 결정: 96KB 초과~384KB 전문 전달, 상한 초과만 차단)를 구현·독립검증·기록했다. 사용자 요청으로 로컬 커밋 d1da52d(codex/source-release, push 안 함)에 담았으며 main/Worker/Pages 미배포. 2026-10-03: WU6(문맥 전달 관측)·WU7(문서) 완료, CR-006/007 승인·CR-004 A 결정. 2026-10-03 릴리스 완료(main/Worker ebc60186/Pages/데스크톱 6125c11, Claude·Codex 실구독 최소 시험 통과, INNO Claude Routine 재생성 trig_01JqQA1ENd9B2yKpeZVLvx3J). 2026-10-03: CR-006 S1 제공자 레지스트리(로컬 커밋 696aee5, 계획 docs/superpowers/plans/2026-10-03-provider-registry.md), CR-007 S3 플러그인 등록부(로컬 커밋 7793f1c, 계획 docs/superpowers/plans/2026-10-03-plugin-registry.md, 문서 docs/PLUGINS.md) — push·배포 안 함. 2026-10-05: CR-004 A 실행 경로 평가(3cbf0e0, 문서 docs/MODEL-ROUTING.md). H4 결과 전달 복구 H4-1~H4-5 완료(9b9352d, 계획 docs/superpowers/plans/2026-10-05-delivery-journal.md, 활성화 준비 docs/DELIVERY-ACTIVATION.md). 내용: 사용자 중단 결과 정리, claim journal·nonce, 이전 형식 결과 정리 화면, 실제 프로세스 강제종료 시험 7지점. 2026-10-05 릴리스: main·Worker·Pages·데스크톱 반영, 실구독 최소 시험 통과. 같은 날 receipt(v1) 운영 활성화(Worker 72489b7a, 데스크톱 65f9005, 사용자 환경변수 INNO_DESKTOP_RECEIPT_VERSION=1), 실구독 완료·일시중지 정리 확인. 끄는 순서는 docs/DELIVERY-ACTIVATION.md 4절. (이전 2026-10-01 예약 재개 계획은 이 세션에서 직접 진행으로 대체)
 - CR-004는 A안으로 결정(2026-10-03)되어 실행 경로 평가를 구현했다(2026-10-05, 커밋 전). 추가 비교 예산 0이라 실제 승격 근거 형성은 미확인.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -1127,3 +1127,28 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
     - 실행 근거는 cli_arguments이고 routeConditions가 기록됐다(CR-004 A 운영 확인). 플러그인 전달 기록은 없다(승인 플러그인 없음).
   - 데스크톱 outbox는 비었다.
 - 남은 일: receipt 활성화는 docs/DELIVERY-ACTIVATION.md에 따라 사용자 승인 뒤에 한다.
+
+### 2026-10-05 receipt(v1) 운영 활성화
+- 사용자 결정: receipt 설명을 검토한 뒤 활성화 진행을 승인했다. Worker 설정 변경과 배포는 권한 허용 후 진행했다.
+- 켜는 경로(aa85976): `INNO_DESKTOP_RECEIPT_VERSION`이 정확히 `"1"`일 때만 켜진다(public/core/delivery-receipt-gate.mjs).
+  - Worker: worker/index.mjs `configuredWorker`가 gate 조합별 Worker를 고른다.
+  - 데스크톱: scripts/desktop-bridge.mjs가 프로세스 환경변수를 읽고, 시작 창에 `Delivery receipts: on|off`를 표시한다.
+  - 독립 검증(inno-opus): 승인(수정 조건). 반영: 끄는 순서(데스크톱 먼저, Worker 나중), `reg delete` 대신 `setx ... 0`, setx 적용 범위 안내. 켜진 Worker에서 v0 데스크톱 claim이 실제로 되는지 시험을 보강했다.
+  - 전체 1372건 중 1371pass/0fail/기존 symlink 1skip.
+- Worker(65f9005): wrangler.jsonc vars에 `INNO_DESKTOP_RECEIPT_VERSION: "1"`을 추가했다. Worker 72489b7a-a06f-4c6e-9d90-60c0e9e44a1d를 배포했고, `desktopDeliveryRecovery:true`와 미인증 401을 확인했다. 직전 기준은 709a9224다.
+- 데스크톱:
+  1. 사용자가 연결기를 종료했다. 미전달 결과와 journal이 없음을 확인했다.
+  2. 메인 체크아웃을 65f9005로 fast-forward했다.
+  3. 사용자가 `setx INNO_DESKTOP_RECEIPT_VERSION 1`을 실행한 뒤 탐색기로 재시작했다. 창에 `Delivery receipts: on`이 표시됐다.
+  4. 로컬 복구 기능 3종이 켜졌고 전달 안전 상태는 정상이다. DESKTOP-ACCESS.md에 복구 화면 링크가 생겼고, 클라우드에서 online이다.
+- 실구독 시험(Codex 2건):
+  - 완료 aec094a0…:
+    - claim부터 완료까지 12초, 답변 정확히 일치, checkpoint deliveryReceiptVersion 1, routeConditions 기록.
+    - 이후 데스크톱 outbox·journal 없음, 유휴, latch 없음.
+  - 실행 중 일시중지 082f7d67…:
+    - 일시중지 200, 작업은 paused로 유지.
+    - 결과 artifact·완료 시각·응답 메시지 0건으로, 적용되지 않았다.
+    - 데스크톱 outbox·journal 없음, latch 없음.
+  - 운영 D1: desktop_reservation 0, desktop_receipt 0. 결과 수락·폐기 뒤 ACK로 해제됐다.
+  - 남은 claim 표지 2건은 예약이 사라진 claimed 표지로, 24시간 뒤 정리된다.
+- 끄는 방법·순서: docs/DELIVERY-ACTIVATION.md 4절(데스크톱 먼저 `setx INNO_DESKTOP_RECEIPT_VERSION 0` 후 재시작, 그다음 Worker 설정 제거 후 재배포).

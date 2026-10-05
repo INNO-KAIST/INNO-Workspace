@@ -1,6 +1,6 @@
 # 데스크톱 결과 전달 receipt(v1) 활성화 준비
 
-작성일: 2026-10-05. 상태: **켜는 경로 준비 완료, 운영은 아직 꺼짐.** 2026-10-05 사용자가 활성화 진행을 승인했다. 켜는 경로는 아래 1절이다. 운영 설정 변경(Worker 환경값, 데스크톱 사용자 환경변수)과 연결기 재시작은 사용자가 직접 하거나 권한을 허용한 뒤에 한다(H4-5, docs/HANDOFF-CLAUDE.md H4).
+작성일: 2026-10-05. 상태: **2026-10-05 운영 활성화 완료**(Worker 72489b7a, 데스크톱 사용자 환경변수 설정·재시작, 실구독 완료·일시중지 정리 확인; docs/PROGRESS.md). 아래는 준비 당시 기록과 끄는 방법이다. 2026-10-05 사용자가 활성화 진행을 승인했다. 켜는 경로는 아래 1절이다. 운영 설정 변경(Worker 환경값, 데스크톱 사용자 환경변수)과 연결기 재시작은 사용자가 직접 하거나 권한을 허용한 뒤에 한다(H4-5, docs/HANDOFF-CLAUDE.md H4).
 
 ## 1. gate와 협상
 - 공통 판정: public/core/delivery-receipt-gate.mjs `deliveryReceiptVersionFromEnvironment`. 환경값 `INNO_DESKTOP_RECEIPT_VERSION`이 정확히 문자열 `1`일 때만 1이고, 없거나 그 밖의 값이면 0이다(`sourceDelegationVersion`과 같은 방식).
