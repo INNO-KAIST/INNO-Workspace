@@ -136,6 +136,15 @@
 
 ### H2. 전체 입력 예산 및 문맥 효율 관측 (CTX-02,05,06 / 높음)
 
+**2026-10-06 갱신(운영 반영 전):** 계측을 구현했다. 아래 "남음"은 당시 기록이다. 계획은 docs/superpowers/plans/2026-10-06-context-metrics.md, 설계는 CONTEXT-EFFICIENCY-IMPLEMENTATION.md "H2"에 있다.
+- 구현한 것:
+  - 원문 재조회 횟수·바이트(로컬 lease, 클라우드 Worker 계수)
+  - 프롬프트 구성(작업 이력·첨부·지침)
+  - 실행별 기록과 같은 작업 비교 목록
+- 남은 것:
+  - 실제 실행의 선택 전후 비교(H3)
+  - 작업 본문 총량 상한(H9)
+
 **남음:** 96KB는 request+conversation+checkpoint만 센다. model policy·라우팅 지침·자료·source view·도구 정의·전체 wire payload를 포함한 입력 예산이 없다. `selectionSavedBytes` 등 core metrics의 execution 저장 및 UI 연결도 없다.
 
 **할 일:** 원문/선택/정적 지침/자료/재조회 바이트를 분리 계측; 지원 tokenizer 없으면 byte/추정을 정확히 표기; input/output/cached 및 압축·조회 추가 비용의 미보고 null 보존; 완료·실패·재전송 중복 없는 관측 저장; 사용자 화면에서 원문/선택/차단 사유 확인. 활성 참조를 보호하는 보관 한도/정리 정책과 성능을 검증한다.

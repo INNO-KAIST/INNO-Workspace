@@ -55,7 +55,10 @@ export function createContextAccess(overrides={}) {
       const record={token:randomBytes(32).toString('base64url'),source:JSON.parse(json),requests:0,bytes:0,busy:false,revoked:false};
       const revoke=()=>{record.revoked=true;record.source=null;if(active===record)active=null;signal?.removeEventListener('abort',revoke);};
       record.revoke=revoke;active=record;signal?.addEventListener('abort',revoke,{once:true});
-      return {token:record.token,revoke};
+      // Reads admitted past the busy, budget and request-size checks (failed reads
+      // included) and returned response bytes for this execution; kept after revocation.
+      const usage=()=>({requests:record.requests,bytes:record.bytes});
+      return {token:record.token,revoke,usage};
     },
     async read(token,input){
       const record=live(token);

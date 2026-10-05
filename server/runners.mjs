@@ -1,6 +1,6 @@
 import {checkedContextUrl,SNAPSHOT_UNAVAILABLE} from './context-access.mjs';
 import {buildTaskContext} from '../public/core/task-context.mjs';
-import {contextDelivery} from '../public/core/context-delivery.mjs';
+import {contextDelivery,withRetrieval} from '../public/core/context-delivery.mjs';
 import {sanitizeResumeState} from '../public/core/context-resume.mjs';
 import {ContextRetrievalRequiredError} from '../public/core/context-errors.mjs';
 import {sourceDelegationContext,delegationAttachments} from '../public/core/delegation-sources.mjs';
@@ -452,7 +452,7 @@ export function createCodexRunner({
     async run({task, materials = [], reviewInputs = [], executionId, generation, signal, executionBudgetVersion, sourceDelegationVersion:negotiatedSourceVersion=sourceDelegationVersion, plugins:offeredPlugins, pluginsSkipped=[], pluginCatalog:catalogInput}) {
       // Plugins come from the claim: verified text of still-approved selections (S3).
       const plugins=boundedOfferedPlugins(offeredPlugins),pluginDelivery=boundedPluginDelivery(pluginDeliveryRecord(plugins,pluginsSkipped)),pluginCatalog=(()=>{try{return boundedPluginCatalog(catalogInput);}catch{return [];}})();
-      let contextLease,delivery;
+      let contextLease,delivery,measuredDelivery=()=>delivery;
       let deadline,processStartedMono=null,processClosedMono=null,rootProcessClosed=false,deadlineExceeded=false;
       const observation=()=>localExecutionObservation(processStartedMono,processClosedMono,{rootProcessClosed,deadlineExceeded});
       try {
@@ -525,6 +525,9 @@ export function createCodexRunner({
         }
       }
       delivery=contextDelivery(context,{provider:'codex',promptBytes:Buffer.byteLength(input),materialBytes:materialBytes(materials),reader:Boolean(localContextUrl)});
+      // Scoped re-reads are final once the process has closed.
+      // Measurement never turns a result into a failure or replaces the original error.
+      measuredDelivery=()=>{try{return localContextUrl&&contextLease?withRetrieval(delivery,contextLease.usage()):delivery;}catch{return delivery;}};
       if(localContextUrl){
         runEnv.INNO_CONTEXT_URL=localContextUrl;
         runEnv.INNO_CONTEXT_TOKEN=contextLease.token;
@@ -594,7 +597,7 @@ export function createCodexRunner({
         checkpoint: structured?.checkpoint ?? (parsed.threadId ? `Codex thread ${parsed.threadId} completed.` : 'Codex execution completed.'),
         artifacts,
         usage: parsed.usage,
-        contextDelivery:delivery,
+        contextDelivery:measuredDelivery(),
         ...(pluginDelivery?{pluginDelivery}:{}),
         executionEvidence:{provider:'codex',source:'cli_arguments',requestedModel:mode==='child'?task.assignment.requestedModel:null,requestedEffort:mode==='child'?task.assignment.effort:null,cliAppliedModel,cliAppliedEffort,actualModelVersion:null,processElapsedMs,routeConditions:conditions},
         ...(deadline?{localExecution:observation()}:{}),
@@ -610,7 +613,7 @@ export function createCodexRunner({
       }
       } catch(error) {
         if(task?.evaluationBudget)error.localExecution=observation();
-        if(delivery&&error&&typeof error==='object'&&error.contextDelivery===undefined)error.contextDelivery=delivery;
+        if(delivery&&error&&typeof error==='object'&&error.contextDelivery===undefined)error.contextDelivery=measuredDelivery();
         if(delivery&&pluginDelivery&&error&&typeof error==='object'&&error.pluginDelivery===undefined)error.pluginDelivery=pluginDelivery;
         throw error;
       } finally {contextLease?.revoke();}

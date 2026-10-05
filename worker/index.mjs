@@ -7,6 +7,7 @@ import {createRemoteAdapters} from './remote-adapters.mjs';
 import {createPluginRegistry} from './plugins.mjs';
 import {isRootMaster} from '../public/core/plugins.mjs';
 import {authorizeExecution,scopedRead} from './execution-scope.mjs';
+import {countContextRead,sweepContextReads,withContextReads} from './context-reads.mjs';
 import {ModelCatalog} from './model-catalog.mjs';
 import {OfficialModelDiscovery} from './model-discovery.mjs';
 import {Delegations} from './delegations.mjs';
@@ -91,14 +92,15 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
   }
   return {
     async scheduled(event,env,context={}) {
-      const {orchestration,discovery,reviewObservations,policyRetention}=runtime(env,context);
+      const {store,orchestration,discovery,reviewObservations,policyRetention}=runtime(env,context);
       // CR-003 MOD-02: an official-only, bounded daily refresh runs independently of orchestration.
       const refresh=discovery.refresh().catch(()=>null);
       const drain=orchestration.drain();
       const observations=reviewObservations.drain().catch(()=>null);
       const retention=policyRetention.cleanupBatch().catch(()=>null);
-      if(context.waitUntil){context.waitUntil(refresh);context.waitUntil(observations);context.waitUntil(retention);return drain;}
-      const [result]=await Promise.allSettled([drain,refresh,observations,retention]);
+      const reads=sweepContextReads(store.db,store.now());
+      if(context.waitUntil){context.waitUntil(refresh);context.waitUntil(observations);context.waitUntil(retention);context.waitUntil(reads);return drain;}
+      const [result]=await Promise.allSettled([drain,refresh,observations,retention,reads]);
       if(result.status==='rejected')throw result.reason;
       return result.value;
     },
@@ -179,8 +181,14 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
         const pluginSelectionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/plugins$/);
         if (request.method === 'POST' && pluginSelectionMatch) return responseJson(await plugins.select(decodeURIComponent(pluginSelectionMatch[1]), await body(request)), 200, headers);
         if (request.method === 'POST' && pathname === '/mcp') {
-          const message=await body(request),scope=await authorizeExecution(store,env.ACCESS_TOKEN,message);
-          return responseJson(await handleMcp(store,message,{sourceDelegationVersion,handoff,models:()=>catalog.read(),listTasks:()=>scope?[scope.task]:[],readTask:id=>scopedRead(store,scope,id),delegate:args=>delegate(args.taskId,args),retryReview:args=>orchestration.retryReview(args.taskId,args),afterComplete}), 200, headers);
+          const message=await body(request),scope=await authorizeExecution(store,env.ACCESS_TOKEN,message),owner=scope?.scope;
+          const reply=await handleMcp(owner?withContextReads(store,owner):store,message,{sourceDelegationVersion,handoff,models:()=>catalog.read(),listTasks:()=>scope?[scope.task]:[],readTask:id=>scopedRead(store,scope,id),delegate:args=>delegate(args.taskId,args),retryReview:args=>orchestration.retryReview(args.taskId,args),afterComplete});
+          // Authorized read calls count (tool errors with 0 bytes); successful ones add their returned bytes.
+          if(owner&&message.params?.name==='read_task_context'){
+            const text=reply?.result&&reply.result.isError!==true?reply.result.content?.[0]?.text:'';
+            await countContextRead(store.db,owner,typeof text==='string'?new TextEncoder().encode(text).byteLength:0,store.now());
+          }
+          return responseJson(reply, 200, headers);
         }
         const executionRecoveryMatch=pathname.match(/^\/api\/tasks\/([^/]+)\/execution\/recover$/);
         if(request.method==='POST'&&executionRecoveryMatch){let task=await store.recoverRemoteExecution(decodeURIComponent(executionRecoveryMatch[1]),await body(request));if(task.status==='queued_for_review')task=await orchestration.dispatch(task.id);return responseJson({task},200,headers);}

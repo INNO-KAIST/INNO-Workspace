@@ -57,6 +57,16 @@ test('single active snapshot, inflight reads, budgets and late revocation fail e
   assert.throws(()=>checkedContextUrl('http://127.0.0.1:65536/api/desktop/context')); 
 });
 
+test('a lease reports read attempts and returned bytes, and keeps them after revocation',async()=>{
+  const registry=createContextAccess(),access=registry.open(task());
+  assert.deepEqual(access.usage(),{requests:0,bytes:0});
+  const first=await registry.read(access.token,{...input,section:'request'});
+  await assert.rejects(()=>registry.read(access.token,{...input,expectedVersion:3}));
+  const usage=access.usage();
+  assert.deepEqual(usage,{requests:2,bytes:Buffer.byteLength(JSON.stringify(first))});
+  access.revoke();assert.deepEqual(access.usage(),usage);registry.close();
+});
+
 test('helper rejects foreign URL, credentials and query without exposing token',async()=>{
   const secret='NEVER_PRINT_THIS_TOKEN';
   for(const url of ['https://example.com/api/desktop/context','http://user:pass@127.0.0.1:4175/api/desktop/context','http://127.0.0.1:4175/api/desktop/context?q=x','http://127.0.0.1:4175/api/desktop/context#x','http://127.0.0.1:4175/other']) {

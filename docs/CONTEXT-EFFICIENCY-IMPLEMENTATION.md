@@ -92,3 +92,22 @@ Stage2D1 verified: selection is enabled only for a configured managed Codex scop
   - Combined history that crosses the cap later is still blocked at run time.
 - Shared source: public/core/context-limits.mjs holds the cap, both placeholders and the message line format.
 - Not changed (follow-up): checkpoint content written by an execution and imported tasks are not byte-checked. Refusing a completion checkpoint risks losing results and needs its own design.
+
+## H2 — re-read accounting, prompt breakdown and per-execution history (2026-10-06)
+- Delivery record (version 1) gains an optional pair, `retrievalRequests` and `retrievalBytes`.
+  - It is present only when measured; absent means unmeasured. A half pair is rejected. Records without it stay valid.
+- Local Codex counts come from the execution's reader lease (`lease.usage()`): request attempts and returned JSON response bytes. They are attached on success and on failure.
+- Cloud Claude counts come from the Worker.
+  - The counter `context_read:<task>:<execution>:<generation>` starts at 0/0 when the execution is fired, so a missing counter means unmeasured, not zero.
+  - Each `read_task_context` call that passed execution authorization adds one atomic upsert. Tool errors count with 0 bytes. Calls rejected before the tool are not counted (bad or superseded capability, reads outside the assignment). A review master's reads of its children count under the master.
+  - Only a completion through that execution's MCP call merges the counts. They go into the dispatch-time record as a finishExecution option `contextReads`, never from tool input. The counter is then deleted.
+  - Take, finish and clear are separate steps, so a read landing between them is lost. The count is best-effort.
+  - Failure, handoff, delegation and expiry leave the record unmeasured. Their counters are swept by the scheduled handler after 24 hours, 32 per run.
+- Both stores drop a re-read pair supplied with a result unless the owner runs on the desktop bridge. A client cannot set cloud counts.
+- History entries keep the delivery record only for the latest 10 executions, about 4 KB per task.
+- Notice: the prompt is split into task history, attached excerpts and guidance/formatting (the remainder).
+  - Tool definitions inside the CLI are not part of the prompt and are not measured.
+  - Re-reads are shown only when a reader existed.
+- Usage history entries (100 per task) carry the validated delivery record of their execution. The task panel lists the latest 10 for this task only.
+- Real same-task comparison (full versus selected, initial plus re-read bytes) needs real runs (H3).
+- Not changed: whole-prompt size is bounded only by its parts (context cap 384000, materials 600000, fixed guidance). The task body has no total size bound (H9).

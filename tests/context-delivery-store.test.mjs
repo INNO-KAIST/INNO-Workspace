@@ -19,6 +19,13 @@ for(const kind of ['local','worker']){
   assert.deepEqual(done.checkpoint.contextDelivery,delivery());
  });
 
+ test(`${kind} completion keeps measured scoped re-reads with the delivery`,async t=>{
+  const {store,id,owner}=await claimed(t,kind);
+  const measured={...delivery('codex','selected_ready'),reader:true,retrievalRequests:4,retrievalBytes:9000};
+  const done=await store.finishExecution(id,{...owner,content:'done',contextDelivery:measured});
+  assert.deepEqual(done.checkpoint.contextDelivery,measured);
+ });
+
  test(`${kind} failure stores the context delivery that explains it`,async t=>{
   const {store,id,owner}=await claimed(t,kind);
   const failed=await store.failExecution(id,{...owner,failure:{kind:'context'},contextDelivery:delivery('codex','blocked')});

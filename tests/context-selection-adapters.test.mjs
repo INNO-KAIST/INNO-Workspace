@@ -26,10 +26,10 @@ async function sourceTask(old=oldText){
  task.checkpoint.resumeState={version:1,...context,items:[{kind:'completed',text:'Earlier draft prepared.',references:[{section:'message',messageIndex:1,digest:createHash('sha256').update(old).digest('hex')}]}]};
  return task;
 }
-async function codex(task,{configured=true,failOpen=false,evaluation=false,snapshotLimit}={}){
+async function codex(task,{configured=true,failOpen=false,evaluation=false,snapshotLimit,failExit=false,noUsage=false}={}){
  if(evaluation){const binding={jobId:'selection-evaluation',phase:'candidate',maxDurationMs:100,provider:'codex'};task={...task,status:'running',evaluationBudget:binding,checkpoint:{...task.checkpoint,provider:'codex',executionId:'execution',generation:1,claimedAt:new Date(1000).toISOString(),evaluationBudget:{...binding,deadlineAtMs:1100}}};}
  const registry=createContextAccess(snapshotLimit?{maxSnapshotBytes:snapshotLimit}:{}),capture={spawns:0,opens:0};
- const access={open(...args){capture.opens++;if(failOpen)throw Error('reader unavailable');return registry.open(...args);}};
+ const access={open(...args){capture.opens++;if(failOpen)throw Error('reader unavailable');const lease=registry.open(...args);return noUsage?{token:lease.token,revoke:lease.revoke}:lease;}};
  const runner=createCodexRunner({managedDelivery:true,...(evaluation?{now:()=>1010,monotonicNow:()=>0}:{}),...(configured?{contextAccess:access,contextUrl:'http://127.0.0.1:4175/api/desktop/context'}:{}),ensureDirectory:()=>{},runDirectory:()=>process.cwd(),spawnProcess:(_command,_args,options)=>{
   capture.spawns++;const child=new EventEmitter();child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();
   child.stdin.on('data',chunk=>capture.prompt=(capture.prompt??'')+chunk);
@@ -41,6 +41,7 @@ async function codex(task,{configured=true,failOpen=false,evaluation=false,snaps
     capture.recovered=await registry.read(options.env.INNO_CONTEXT_TOKEN,query);
     if(markerDigest)assert.equal(capture.recovered.contentDigest,markerDigest);
    }
+   if(failExit){child.stdout.end();child.emit('close',1,null);return;}
    child.stdout.write(JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'Done'}})+'\n');child.stdout.end();child.emit('close',0,null);
   })().catch(error=>child.emit('error',error));});return child;
  }});
@@ -160,6 +161,20 @@ test('full history over the hard cap runs selected on both adapters when the sel
  const remote=await cloud(t,await make());
  assert.equal(remote.fires,1);assert.ok(remote.prompt.includes('USER_TAIL_END'));assert.ok(!remote.prompt.includes('BIG_OLD_END'));
  assert.ok(remote.recovered.text.startsWith('BIG_OLD_BEGIN'));
+});
+
+test('Codex results and failures carry the scoped re-reads the execution actually made',async()=>{
+ const done=await codex(await sourceTask());
+ // The fake process makes one rejected digest probe and one successful read.
+ assert.equal(done.result.contextDelivery.retrievalRequests,2);
+ assert.equal(done.result.contextDelivery.retrievalBytes,Buffer.byteLength(JSON.stringify(done.recovered)));
+ await assert.rejects(()=>sourceTask().then(task=>codex(task,{failExit:true})),error=>error.contextDelivery?.retrievalRequests===2&&error.contextDelivery.retrievalBytes>0);
+ const noReader=await codex(await sourceTask(),{configured:false});
+ assert.equal(Object.hasOwn(noReader.result.contextDelivery,'retrievalRequests'),false);
+ // A reader that cannot report usage leaves the result intact and the re-reads unmeasured.
+ const unmeasured=await codex(await sourceTask(),{noUsage:true});
+ assert.equal(unmeasured.result.content,'Done');assert.equal(Object.hasOwn(unmeasured.result.contextDelivery,'retrievalRequests'),false);
+ await assert.rejects(()=>sourceTask().then(task=>codex(task,{failExit:true,noUsage:true})),error=>!/usage/.test(error.message)&&error.contextDelivery?.readiness==='selected_ready');
 });
 
 test('Codex results and context refusals carry the delivered context outcome in bytes',async()=>{

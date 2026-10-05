@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {buildTaskContext} from '../public/core/task-context.mjs';
 import {createContextBasis} from '../public/core/context-resume.mjs';
-import {contextDelivery,boundedContextDelivery,contextDeliveryText} from '../public/core/context-delivery.mjs';
+import {contextDelivery,boundedContextDelivery,contextDeliveryText,withRetrieval} from '../public/core/context-delivery.mjs';
 const hash=text=>createHash('sha256').update(text).digest('hex');
 const task=size=>({id:'t',version:2,prompt:'REQUEST',messages:[{role:'user',content:'REQUEST'},{role:'assistant',content:'x'.repeat(size)},{role:'user',content:'continue'}]});
 
@@ -33,6 +33,29 @@ test('stored delivery evidence is strictly bounded and never invents token count
  assert.equal(boundedContextDelivery(null),null);assert.equal(boundedContextDelivery(undefined),null);
  for(const bad of [{...d,extra:1},{...d,readiness:'partial'},{...d,provider:'api'},{...d,contextBytes:-1},{...d,originalBytes:1.5},{...d,inputTokens:12},{...d,cachedTokens:0},{...d,unit:'tokens'},{...d,reader:'yes'},{...d,promptBytes:'1'},[],'x'])
   assert.throws(()=>boundedContextDelivery(bad),{name:'ValidationError'});
+});
+
+test('measured scoped re-reads travel with the delivery record only as a complete pair',async()=>{
+ const packet=await buildTaskContext(task(1000));
+ const measured=contextDelivery(packet,{provider:'codex',promptBytes:5000,materialBytes:1000,reader:true,retrieval:{requests:3,bytes:2048}});
+ assert.equal(measured.retrievalRequests,3);assert.equal(measured.retrievalBytes,2048);
+ assert.deepEqual(boundedContextDelivery(measured),measured);
+ const unmeasured=contextDelivery(packet,{provider:'codex',promptBytes:5000,materialBytes:0,reader:true});
+ assert.equal(Object.hasOwn(unmeasured,'retrievalRequests'),false);assert.deepEqual(boundedContextDelivery(unmeasured),unmeasured);
+ const {retrievalBytes,...half}=measured;
+ for(const bad of [half,{...measured,retrievalRequests:-1},{...measured,retrievalBytes:1.5},{...measured,retrievalRequests:'3'},{...measured,retrievalBytes:null}])
+  assert.throws(()=>boundedContextDelivery(bad),{name:'ValidationError'});
+ assert.deepEqual(withRetrieval(unmeasured,{requests:2,bytes:10}),{...unmeasured,retrievalRequests:2,retrievalBytes:10});
+ assert.equal(withRetrieval(unmeasured,{requests:-1,bytes:10}),unmeasured);assert.equal(withRetrieval(null,{requests:1,bytes:1}),null);
+});
+
+test('the notice splits the prompt and reports re-reads only where a reader existed',()=>{
+ const base={version:1,provider:'codex',unit:'utf8_bytes',readiness:'selected_ready',contextBytes:40000,originalBytes:90000,selectionSavedBytes:50000,omittedMessages:2,maxBytes:96000,hardMaxBytes:384000,reader:true,promptBytes:60000,materialBytes:5000,inputTokens:null,cachedTokens:null};
+ assert.match(contextDeliveryText({...base,retrievalRequests:3,retrievalBytes:12500}),/원문 재조회 3회, 응답 12\.5KB/);
+ assert.match(contextDeliveryText(base),/원문 재조회 미측정/);
+ assert.doesNotMatch(contextDeliveryText({...base,readiness:'full_ready',reader:false,selectionSavedBytes:0,omittedMessages:0}),/재조회/);
+ assert.match(contextDeliveryText(base),/전체 프롬프트 60KB \(작업 이력 40KB, 첨부 발췌 5KB, 지침·형식 15KB\)/);
+ assert.match(contextDeliveryText({...base,materialBytes:null}),/전체 프롬프트 60KB\./);
 });
 
 test('the delivery notice states bytes, budget and outcome without claiming token savings',async()=>{

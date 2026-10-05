@@ -5,6 +5,7 @@ import {boundedContextDelivery} from '../public/core/context-delivery.mjs';
 import {usesTransport} from '../public/core/providers.mjs';
 import {boundedPluginDelivery} from '../public/core/plugins.mjs';
 import {ROUTINE_UNAVAILABLE,routineLaunch} from './claude-routine.mjs';
+import {startContextReads} from './context-reads.mjs';
 // Optional evidence: an invalid record is dropped, never the launch outcome.
 const deliveryOf=value=>{try{const delivery=boundedContextDelivery(value);return delivery?{contextDelivery:delivery}:{};}catch{return {};}};
 const pluginsOf=value=>{try{const delivery=boundedPluginDelivery(value);return delivery?{pluginDelivery:delivery}:{};}catch{return {};}};
@@ -28,6 +29,8 @@ export async function dispatchRemote({store,taskId,adapterFor,waitUntil}){
 
 export async function runRemoteClaim({store,claim,launch}){
  const task={id:claim.task.id};
+  // Re-reads start at zero before the remote session can read anything.
+  if(store.db)await startContextReads(store.db,{taskId:claim.task.id,executionId:claim.executionId,generation:claim.generation},typeof store.now==='function'?store.now():new Date().toISOString());
   let started;
   try{
    started=await launch(claim);
