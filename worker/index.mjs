@@ -1,5 +1,6 @@
 import {assertProviderId,providerManifest,providerTransport,providersByTransport} from '../public/core/providers.mjs';
 import {sourceDelegationVersionFromEnvironment} from '../public/core/source-delegation-gate.mjs';
+import {deliveryReceiptVersionFromEnvironment} from '../public/core/delivery-receipt-gate.mjs';
 import {verifyMaterialViews} from '../public/core/source-coverage.mjs';
 import {runRemoteClaim} from './dispatch.mjs';
 import {createRemoteAdapters} from './remote-adapters.mjs';
@@ -317,9 +318,14 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
   };
 }
 
-const defaultWorker = createWorker();
-const sourceDelegationWorker = createWorker({sourceDelegationVersion: 1});
-const configuredWorker = env => sourceDelegationVersionFromEnvironment(env) === 1 ? sourceDelegationWorker : defaultWorker;
+// One Worker per gate combination, chosen from exact environment opt-ins.
+const configuredWorkers = new Map();
+const configuredWorker = env => {
+  const sourceDelegationVersion = sourceDelegationVersionFromEnvironment(env), deliveryReceiptVersion = deliveryReceiptVersionFromEnvironment(env);
+  const key = `${sourceDelegationVersion}:${deliveryReceiptVersion}`;
+  if (!configuredWorkers.has(key)) configuredWorkers.set(key, createWorker({sourceDelegationVersion, deliveryReceiptVersion}));
+  return configuredWorkers.get(key);
+};
 
 export default {
   fetch(request, env, context) { return configuredWorker(env).fetch(request, env, context); },

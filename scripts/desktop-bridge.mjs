@@ -16,10 +16,12 @@ import {createOutboxRecovery} from '../server/outbox-recovery.mjs';
 
 import {createDesktopReadiness} from '../server/desktop-readiness.mjs';
 import {sourceDelegationVersionFromEnvironment} from '../public/core/source-delegation-gate.mjs';
+import {deliveryReceiptVersionFromEnvironment} from '../public/core/delivery-receipt-gate.mjs';
 import {createFileOutbox} from '../server/file-outbox.mjs';
 import {createFileJournal} from '../server/claim-journal-file.mjs';
 import {createCloudRequest,normalizedCloudOrigin} from '../server/delivery-binding.mjs';
-const deliveryReceiptVersion=0;
+// Receipts (protocol 1) only with INNO_DESKTOP_RECEIPT_VERSION=1; see docs/DELIVERY-ACTIVATION.md.
+const deliveryReceiptVersion=deliveryReceiptVersionFromEnvironment(process.env);
 const stopMessageOptions={pendingPath:'.inno/desktop-pending.json',versioned:deliveryReceiptVersion===1};
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const privateDir=path.join(root,'.inno');mkdirSync(privateDir,{recursive:true});
@@ -55,6 +57,7 @@ const shutdown=new AbortController();
 for(const event of ['SIGINT','SIGTERM'])process.on(event,()=>{shutdown.abort();contextAccess.close();bridge.stop();});
 console.log('Desktop source connection: open .inno/DESKTOP-ACCESS.md');
 console.log('INNO desktop bridge connected. One task at a time; Ctrl+C to stop.');
+console.log(deliveryReceiptVersion===1?'Delivery receipts: on (local result recovery: see .inno/DESKTOP-ACCESS.md).':'Delivery receipts: off.');
 try{
  await runDesktopService({bridge,deliveryReceiptVersion,signal:shutdown.signal,
   onDelivered:()=>console.log('INNO result delivered.'),

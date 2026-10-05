@@ -1,10 +1,11 @@
 # 데스크톱 결과 전달 receipt(v1) 활성화 준비
 
-작성일: 2026-10-05. 상태: **준비 문서. 활성화하지 않음.** gate 0→1 전환, 배포, 실제 데스크톱 연결기 재시작, 실구독 시험은 모두 사용자 승인 뒤에 한다(H4-5, docs/HANDOFF-CLAUDE.md H4).
+작성일: 2026-10-05. 상태: **켜는 경로 준비 완료, 운영은 아직 꺼짐.** 2026-10-05 사용자가 활성화 진행을 승인했다. 켜는 경로는 아래 1절이다. 운영 설정 변경(Worker 환경값, 데스크톱 사용자 환경변수)과 연결기 재시작은 사용자가 직접 하거나 권한을 허용한 뒤에 한다(H4-5, docs/HANDOFF-CLAUDE.md H4).
 
-## 1. 현재 gate와 협상
-- Worker: `createWorker({deliveryReceiptVersion})`의 기본값은 0이다. `export default`는 v1을 넘기지 않는다(worker/index.mjs `configuredWorker`). 그래서 Worker를 켜려면 설정 경로를 하나 추가해야 한다. 예: 환경값으로 v1 Worker를 고르는 방식이며, `sourceDelegationVersion`과 같은 형태다. 이 문서는 그 변경을 하지 않는다.
-- 데스크톱: scripts/desktop-bridge.mjs의 `const deliveryReceiptVersion=0`. v1일 때만 claim journal(.inno/desktop-claim.json), 로컬 복구 화면(recovery.html), 결과 폐기 정리, 이전 형식 결과 정리가 동작한다.
+## 1. gate와 협상
+- 공통 판정: public/core/delivery-receipt-gate.mjs `deliveryReceiptVersionFromEnvironment`. 환경값 `INNO_DESKTOP_RECEIPT_VERSION`이 정확히 문자열 `1`일 때만 1이고, 없거나 그 밖의 값이면 0이다(`sourceDelegationVersion`과 같은 방식).
+- Worker: `export default`가 요청의 env로 원본 위임과 receipt 조합에 맞는 Worker를 고른다(worker/index.mjs `configuredWorker`). 켜려면 `wrangler.jsonc`의 `vars`에 `"INNO_DESKTOP_RECEIPT_VERSION": "1"`을 추가하고 배포한다. 켜진 Worker도 receipt 헤더가 없는 v0 데스크톱 요청은 그대로 받는다(tests/delivery-receipt-gate.test.mjs).
+- 데스크톱: scripts/desktop-bridge.mjs가 프로세스 환경변수 `INNO_DESKTOP_RECEIPT_VERSION`을 읽는다. 원본 위임처럼 Windows 사용자 환경변수로 설정한다. 시작 창에 `Delivery receipts: on|off`가 표시된다. v1일 때만 claim journal(.inno/desktop-claim.json), 로컬 복구 화면(recovery.html), 결과 폐기 정리, 이전 형식 결과 정리가 동작한다.
 - 협상:
   - 데스크톱 요청 헤더 `x-inno-delivery-receipt-version: 1`과 `x-inno-workspace-id`.
   - Worker 상태 응답 capability `desktopDeliveryRecovery`.
@@ -22,9 +23,13 @@
 5. 데스크톱 연결기 하나만 돌고 있는지 확인한다(포트 4174 잠금). 같은 `.inno`를 두 프로세스가 쓰지 않아야 한다.
 
 ## 3. 활성화 순서(승인 후)
-1. Worker에 v1 선택 설정을 추가하고 배포한다. v0 데스크톱 요청은 그대로 동작한다(헤더가 없으면 v0 경로).
+1. `wrangler.jsonc` `vars`에 `"INNO_DESKTOP_RECEIPT_VERSION": "1"`을 추가하고 Worker를 배포한다. v0 데스크톱 요청은 그대로 동작한다(헤더가 없으면 v0 경로).
 2. Worker 상태의 `desktopDeliveryRecovery:true`를 확인한다.
-3. 데스크톱 gate를 1로 바꾸고, 실행 중인 연결기를 사용자가 직접 재시작한다. 이 세션은 실행 중인 연결기를 건드리지 않는다.
+3. 데스크톱:
+   1. 연결기가 쉬고 있을 때 "Start INNO Cloud Bridge" 창을 Ctrl+C로 종료한다.
+   2. 메인 체크아웃을 같은 커밋으로 맞춘다.
+   3. Windows 사용자 환경변수를 설정한다(`setx INNO_DESKTOP_RECEIPT_VERSION 1`). setx는 이후 새로 시작하는 프로그램에만 적용된다. 이미 열려 있던 터미널에서 실행하면 꺼진 채로 시작되므로, 탐색기에서 .cmd를 더블클릭해 실행한다.
+   4. `Start INNO Cloud Bridge.cmd`를 다시 실행한다. 창에 `Delivery receipts: on`이 보여야 한다.
 4. 최소 확인. 실구독 시험은 실행 전에 확인을 받는다.
    1. 완료 결과 전달, ACK, outbox 정리.
    2. 실행 중 사용자 일시중지가 폐기 receipt로 정리되고, 다음 실행이 가능한지.
@@ -33,6 +38,11 @@
 5. 문제가 생기면 4절의 되돌림을 따른다.
 
 ## 4. 되돌림
+- 끄는 순서: 데스크톱을 먼저 끄고 Worker를 나중에 끈다.
+  1. 둘 다 켜진 상태에서 데스크톱 outbox와 claim journal을 비운다. 전달과 ACK를 끝내고, 남은 예약은 클라우드 복구 화면에서 정리한다. 이 화면과 복구 경로는 Worker가 켜져 있을 때만 동작한다.
+  2. 데스크톱을 끈다. 연결기를 종료하고 `setx INNO_DESKTOP_RECEIPT_VERSION 0`을 실행한다. "0"은 꺼짐이다. `reg delete`는 Windows에 변경을 알리지 않아 다시 실행해도 켜진 채로 남을 수 있으므로 쓰지 않는다. 그 뒤 .cmd를 다시 실행해 `Delivery receipts: off.`를 확인한다.
+  3. 마지막으로 Worker를 끈다. `wrangler.jsonc`의 `INNO_DESKTOP_RECEIPT_VERSION`을 지우거나 `"0"`으로 바꿔 재배포하고, `desktopDeliveryRecovery:false`를 확인한다. Worker를 먼저 끄면 v1 연결기의 complete·ACK가 모두 400으로 거절되고, v0 연결기는 v1 기록을 보내지 않아 결과가 묶인다.
+- 아래 조건(outbox·journal·`desktop_receipt:*` 0)은 Worker를 끄기 전과 Worker 코드를 되돌리기 전 모두에 적용된다.
 - 데스크톱만 v0로 되돌릴 때:
   - v1 outbox 기록(pending/ack_pending)을 v0 브리지는 보내지 않는다(형식 거절). 되돌리기 전에 v1로 전달·ACK를 끝내 outbox와 claim journal이 비어 있는지 확인한다.
   - journal이 남았으면 v1에서 tick이 정리한 뒤 되돌린다.
