@@ -5,6 +5,11 @@
 
 ## 1. 가장 먼저 알아야 할 상태
 
+**2026-10-05 갱신:** 요구 ID별 판정과 운영 기준의 최신 기록은 docs/REQUIREMENTS-STATUS.md의 "2026-10-05 완료 재감사"다. 이 1절의 값은 2026-10-01 인계 당시 값이다. 그 뒤 바뀐 것:
+- main·데스크톱 cf3bcd5, Worker 72489b7a, Pages execution-route-20261005로 운영에 일관 반영했다.
+- 반영된 것: CR-006 S1, CR-007 S3, CR-004 A, H4(결과 전달 journal)와 receipt v1 운영 활성화.
+- 남은 순서는 REQUIREMENTS-STATUS.md의 진행 순서를 따른다.
+
 **전체 플랫폼은 미완료다.** 현재 세부 단계 CR-005 Stage2D1(출처 검증 기반 선택적 문맥 전달)은 구현·독립 검토·로컬 전체 검증을 마쳤다. 사용자가 이번 단계까지만 마치고 인계하도록 요청했으므로 Codex에서 새 기능 작업을 시작하지 않는다.
 
 - 최신 제품 코드 커밋: `f4a38ab` — Select source-bound resume context with scoped retrieval.
@@ -23,7 +28,7 @@
 |Cloudflare 최신 배포 기록|버전 `e2a00c32-93a7-4a98-a36b-8eeb0eb38445`, 100%, 생성 `2026-09-27T16:34:26.368Z` = 한국시간 09-28 01:34|`wrangler deployments list` 확인. 최신 개발 기능이 배포되었다는 뜻이 아님|
 |Worker/API|https://inno-workspace-api.innokaist.workers.dev|이번에는 배포 목록만 확인; 인증된 업무 요청이나 AI 실행은 하지 않음|
 |GitHub Pages|https://inno-kaist.github.io/INNO-Workspace/|이번에 Pages의 실제 자산 커밋/캐시를 새로 확인하지 않음|
-|receipt 복구 활성화|`scripts/desktop-bridge.mjs`의 `deliveryReceiptVersion=0`|새 receipt protocol 및 복구 UI가 기본 활성 상태가 아님|
+|receipt 복구 활성화|2026-10-01 당시 `deliveryReceiptVersion=0`|2026-10-05부터 `INNO_DESKTOP_RECEIPT_VERSION=1`로 운영 활성화(Worker vars와 데스크톱 사용자 환경변수, docs/DELIVERY-ACTIVATION.md)|
 |첨부 협업 설정|`wrangler.jsonc`: `INNO_SOURCE_DELEGATION_VERSION="1"`|별도 기능이다. receipt gate와 혼동하지 않는다|
 
 현재 실행 중인 운영 작업/브리지 PID/포트 점유, pending outbox·예약의 실제 내용, 계정 잔여량은 이번 인계에서 조회하지 않았다. 미존재·비어 있음·중단 가능으로 가정하면 안 된다. `wrangler.jsonc`에는 5분 간격 scheduled trigger가 있지만 임의 AI 작업의 24시간 무제한 실행 보장이 아니다.
@@ -47,7 +52,7 @@
 |검증 완료 변경의 main 반영·Cloudflare 배포|승인됨. 기존 일요일 대기 조건은 사용자의 즉시 재개 요청으로 해제됨|준비가 완료될 때까지 미완료 gate를 건너뛰지 않음. 동일 승인 재질문 불필요|
 |CR-003 모델 최신화|승인됨|MOD-01~07 범위 유지|
 |CR-005 문맥·토큰 최적화|2026-10-01 명시 승인, PRD 10절 편입|CTX-01~06의 나머지 구현 가능|
-|CR-004 실행 경로 기반 모델 비교 근거|**결정됨(2026-10-03 A안, PRD 11절)**|2026-10-05 실행 경로 평가 구현(커밋 전). 의미·한계는 docs/MODEL-ROUTING.md|
+|CR-004 실행 경로 기반 모델 비교 근거|**결정됨(2026-10-03 A안, PRD 11절)**|2026-10-05 실행 경로 평가 구현·운영 반영(3cbf0e0). 의미·한계는 docs/MODEL-ROUTING.md|
 |추가 자동 AI 비교 평가|기본 예산 0|CR-004 A 승인이 향후 있어도 별도 평가 토큰 소비 허가는 아님|
 |현재 종료점|이번 Stage2D1까지 마치고 Claude 인계|Codex 예약 재개·추가 기능 작업을 만들지 않음|
 
@@ -145,7 +150,7 @@
 
 ### H4. 결과 전달 복구의 재시작 안전성 및 운영 활성화 (SRC-02,05,06, REL-01 / 높음)
 
-**2026-10-05 갱신:** 아래 남은 핵심 1~4를 구현·독립 검증했다(커밋 전, 계획 docs/superpowers/plans/2026-10-05-delivery-journal.md). 5는 준비 문서 docs/DELIVERY-ACTIVATION.md만 작성했고, 활성화는 사용자 승인 대기다. 아래는 당시 기록이다.
+**2026-10-05 갱신:** 아래 남은 핵심 1~4를 구현·독립 검증했다(커밋 9b9352d, 계획 docs/superpowers/plans/2026-10-05-delivery-journal.md). 5는 준비 문서 docs/DELIVERY-ACTIVATION.md를 쓰고, 사용자 승인 후 같은 날 운영 활성화했다(Worker 72489b7a, 실구독 완료·일시중지 확인, PROGRESS). 아래는 당시 기록이다.
 
 **구현됨:** receipt 식별/원자 결과 수락/예약/ACK, 기존 브리지 재전송, `.tmp` 점검/해시 확인 명시 채택, 명시 drain, pause/unsafe 서비스 유지, 별도 loopback 복구 UI(Task3n), 합성·파일·브라우저 검증. **기본 protocol은 여전히0이다.**
 
@@ -167,7 +172,7 @@
 
 **현재 장애:** actualModelVersion이 null인 경로와 non-null modelVersion을 요구하는 promotion 조건, parent/batch별 comparisonId 때문에 정상 관측이 자동으로 동등 비교 쌍을 만들지 못한다. `model_policy_availability`의 운영 writer 및 중대 회귀 분류도 확인해야 한다. 기존 독립 관측의 `critical:false`를 모든 실패의 자동 중대 오류 판정으로 바꾸지 않는다.
 
-**결정(2026-10-03 갱신):** 사용자가 CR-004 A안을 선택했다(PRD 11절). 2026-10-05 실행 경로 평가를 구현했다(커밋 전, docs/MODEL-ROUTING.md). 아래는 결정 전 기록이다. CR-004 A(관측된 실행 경로를 별도 평가 단위로 추가) 또는 B(내부 실제 버전 증거까지 자동 승격 보류)는 미승인이다. A를 선택하더라도 실제 serving version=null은 유지하고 비교 범위/한계를 명시한다. 해당 결정 전 정책 의미를 몰래 바꾸지 않는다.
+**결정(2026-10-03 갱신):** 사용자가 CR-004 A안을 선택했다(PRD 11절). 2026-10-05 실행 경로 평가를 구현해 운영에 반영했다(3cbf0e0, docs/MODEL-ROUTING.md). 아래는 결정 전 기록이다. CR-004 A(관측된 실행 경로를 별도 평가 단위로 추가) 또는 B(내부 실제 버전 증거까지 자동 승격 보류)는 미승인이다. A를 선택하더라도 실제 serving version=null은 유지하고 비교 범위/한계를 명시한다. 해당 결정 전 정책 의미를 몰래 바꾸지 않는다.
 
 **완료 증거:** 동일 입력/자료 hash/도구/완료 기준으로 적격 비교, 현재 계정 가용성, 독립 품질 기준 전체 통과, 실측 비용·시간, 회귀 시 새 배정만 철회, 실행 중 배정 보존, pinned 정책 우선, 양 provider의 실제 제어 가능한 모델 경로를 확인한다. Claude 고정 Routine master와 요청한 하위 alias를 같은 실제 모델로 보지 않는다.
 
@@ -201,7 +206,9 @@
 
 장기 반복/파일 증가/대규모 이력·동기화/무료 구간 소모·복구·새 모델 갱신 실패를 부하 시험한다. 보관 예외에서 활성 근거 보호와 축적 상한이 충돌할 때 표시·정리 정책이 필요하다. OS 로그인 자동 시작은 등록 완료로 간주하지 않는다. 무한 poll/재시도/대화 전체 재주입을 정상화하지 않는다.
 
-### H10. 운영 릴리스 및 전체 완료 재감사 (REL-01 / 미완료)
+### H10. 운영 릴리스 및 전체 완료 재감사 (REL-01 / 1차 재감사 2026-10-05, 최종 재감사 남음)
+
+**2026-10-05 1차 재감사:** 결론은 미완료다. 요구 ID별 판정과 남은 담당 항목은 docs/REQUIREMENTS-STATUS.md에 있다. 운영 릴리스는 main·데스크톱 cf3bcd5, Worker 72489b7a, Pages execution-route-20261005로 일관 반영했다. 최종 재감사는 남은 순서의 마지막에 다시 한다.
 
 개발 브랜치 전체 차이를 독립 리뷰하고, 비활성 기능·마이그레이션·기존 미전달 결과·Claude checkout·데스크톱/Worker/Pages 호환성을 확인한다. 필요한 승인된 테스트와 실제 구독 최소 검증 후 main/Worker/Pages/desktop을 일관된 버전으로 반영한다. 활성 작업을 끊거나 pending/예약/비밀파일을 지우지 않는다. 릴리스 후 인증 거절·상태·정적 자산·결과 회수·원본 비보관을 검증하고 롤백 기준을 기록한다.
 
@@ -257,6 +264,6 @@ npx --no-install wrangler deploy --dry-run --outdir .inno/deploy-check
 
 ## 9. Claude에 붙여 넣을 시작 요청
 
-> INNO Workspace 저장소의 `codex/source-release` 브랜치를 사용해 주세요. 먼저 `docs/HANDOFF-CLAUDE.md`, `AGENTS.md`, 승인된 PRD와 현재 PROGRESS를 읽고 코드/테스트/운영 증거를 대조하여 전체 플랫폼을 독립 검토해 주세요. 제품 코드 기준은 `f4a38ab`이며 이후 인계 문서 커밋이 있을 수 있습니다. main은 이전 운영 버전입니다. 최초 요구 전체를 유지하되, 완료된 기능·코드만 있는 기능·실사용 미검증·미구현·외부 제약을 구분해 우선순위를 제시하고 승인 범위의 남은 작업을 순차 수행해 주세요. 기존 구독만 사용하고 API 유료 전환이나 원본 영구 업로드를 하지 마세요. CR-004는 A안으로 결정되어 실행 경로 평가를 구현했으며(2026-10-05) receipt gate는0입니다. 토큰 절약을 위해 이 handoff를 시작점으로 삼고 필요한 코드만 읽되, 직접 검증 없이 이전 완료 주장을 신뢰하지 마세요. 추가 AI 비교는 기본 예산0이며 전체 목표 완료 전에는 완료했다고 선언하지 마세요.
+> INNO Workspace 저장소의 `codex/source-release` 브랜치를 사용해 주세요. 먼저 `docs/HANDOFF-CLAUDE.md`, `AGENTS.md`, 승인된 PRD와 현재 PROGRESS를 읽고 코드/테스트/운영 증거를 대조하여 전체 플랫폼을 독립 검토해 주세요. 제품 코드 기준은 `f4a38ab`이며 이후 인계 문서 커밋이 있을 수 있습니다. main은 이전 운영 버전입니다. 최초 요구 전체를 유지하되, 완료된 기능·코드만 있는 기능·실사용 미검증·미구현·외부 제약을 구분해 우선순위를 제시하고 승인 범위의 남은 작업을 순차 수행해 주세요. 기존 구독만 사용하고 API 유료 전환이나 원본 영구 업로드를 하지 마세요. CR-004는 A안으로 결정되어 실행 경로 평가를 구현했으며(2026-10-05) receipt gate는 2026-10-05부터 1(운영 활성화)입니다. 토큰 절약을 위해 이 handoff를 시작점으로 삼고 필요한 코드만 읽되, 직접 검증 없이 이전 완료 주장을 신뢰하지 마세요. 추가 AI 비교는 기본 예산0이며 전체 목표 완료 전에는 완료했다고 선언하지 마세요.
 
 Claude 웹 대화에 이 문서만 첨부하면 로컬 E: 소스나 `.inno/`가 자동 제공되지 않는다. 로컬 Claude Code는 위 worktree에서 시작하고, 클라우드 Claude Code는 GitHub의 해당 브랜치를 checkout해야 한다. 비밀파일을 전달해 이 차이를 우회하지 않는다.
