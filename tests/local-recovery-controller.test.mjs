@@ -33,3 +33,55 @@ test('invalid default capability/status/owner metadata and raw fields never beco
 test('transport timeout settles even when injected fetch ignores abort',async()=>{const request=createLocalRecoveryRequest({origin:'http://localhost:4175',token,timeoutMs:5,fetchImpl:()=>new Promise(()=>{})});await assert.rejects(()=>request('status'));});
 test('known busy or stopped status avoids inspection and shows an accurate fixed notice',async()=>{for(const flag of ['busy','stopped']){const f=fixture({state:{...status(),localDesktop:{...localDesktop(),[flag]:true}}});await f.controller.refresh();assert.deepEqual(f.calls.map(c=>c.action),['status']);assert.equal(f.controller.getState().snapshot,null);assert.equal(f.controller.getState().error,'');assert.match(f.controller.getState().notice,flag==='busy'?/실행 중/:/종료/);assert.equal(f.controller.getState().canDrain,false);assert.equal(f.controller.getState().canPromote,false);}});
 for(const action of ['refresh','promote','drain'])test(`reentrant dispose during ${action} busy notification prevents request dispatch`,async()=>{const calls=[];let disposeOnBusy=false,controller;const view=action==='promote'?{pending:missing(),temporary:meta(other),canPromote:true}:snapshot();controller=createLocalRecovery({request:async(name)=>{calls.push(name);if(name==='status')return status();if(name==='inspect')return inspect(view);return name==='promote'?{promoted:true,phase:'pending',sha256:other}:{drained:true};},onChange:state=>{if(disposeOnBusy&&state.busy)controller.dispose();}});if(action!=='refresh'){await controller.refresh();controller.setConfirmation(action,true);}const before=calls.length;disposeOnBusy=true;assert.equal(await controller[action](),false);assert.equal(calls.length,before);assert.equal(controller.getState().snapshot,null);assert.equal(controller.getState().busy,false);});
+
+const legacyCapable=()=>({...status(),capabilities:{...status().capabilities,desktopLegacyRecovery:true}});
+const legacyView=()=>({pending:{exists:true,bytes:99,sha256:hash,phase:'legacy',owner},temporary:missing(),canPromote:false});
+test('legacy delivery needs the capability, a fresh status check and a confirmation, and sends the exact hash',async()=>{
+ const f=fixture({view:legacyView(),state:legacyCapable(),hook:action=>action==='legacyStatus'?{state:'deliverable'}:action==='legacyDeliver'?{delivered:true,state:'deliverable'}:undefined});
+ await f.controller.refresh();
+ assert.equal(f.controller.getState().canCheckLegacy,true);assert.equal(f.controller.getState().canDeliverLegacy,false);
+ assert.equal(await f.controller.deliverLegacy(),false);
+ assert.equal(await f.controller.checkLegacy(),true);
+ assert.deepEqual(f.calls.filter(c=>c.action==='legacyStatus').at(-1).input,{pendingHash:hash});
+ assert.equal(f.controller.getState().legacy.state,'deliverable');assert.equal(f.controller.getState().canArchiveLegacy,false);
+ assert.equal(f.controller.getState().canDeliverLegacy,false);
+ f.controller.setConfirmation('legacyDeliver',true);
+ assert.equal(f.controller.getState().canDeliverLegacy,true);
+ assert.equal(await f.controller.deliverLegacy(),true);
+ assert.deepEqual(f.calls.at(-1),{action:'legacyDeliver',input:{pendingHash:hash,confirm:true}});
+ assert.match(f.controller.getState().notice,/이전 형식 결과를 전달/);assert.equal(f.controller.getState().snapshot,null);assert.equal(f.controller.getState().legacy,null);
+});
+test('a legacy result that cannot be applied is archived only after confirmation, and malformed replies fail closed',async()=>{
+ const archive='desktop-pending.json.legacy-aaaaaaaaaaaaaaaa.json';
+ const f=fixture({view:legacyView(),state:legacyCapable(),hook:action=>action==='legacyStatus'?{state:'not_running'}:action==='legacyArchive'?{archived:true,archive}:undefined});
+ await f.controller.refresh();await f.controller.checkLegacy();
+ f.controller.setConfirmation('legacyDeliver',true);assert.equal(f.controller.getState().canDeliverLegacy,false);
+ f.controller.setConfirmation('legacyArchive',true);assert.equal(f.controller.getState().canArchiveLegacy,true);
+ assert.equal(await f.controller.archiveLegacy(),true);
+ assert.deepEqual(f.calls.at(-1),{action:'legacyArchive',input:{pendingHash:hash,confirm:true}});
+ assert.equal(f.controller.getState().notice.includes(archive),true);
+ for(const reply of [{state:'madeup'},{state:'deliverable',extra:1},null]){
+  const g=fixture({view:legacyView(),state:legacyCapable(),hook:action=>action==='legacyStatus'?reply:undefined});
+  await g.controller.refresh();assert.equal(await g.controller.checkLegacy(),false);
+  assert.equal(g.controller.getState().legacy,null);assert.match(g.controller.getState().error,/확인할 수 없습니다/);
+ }
+ const h=fixture({view:legacyView(),state:status()});await h.controller.refresh();assert.equal(h.controller.getState().canCheckLegacy,false);
+ const i=fixture({view:snapshot(),state:legacyCapable()});await i.controller.refresh();assert.equal(i.controller.getState().canCheckLegacy,false);
+});
+test('a refused legacy delivery allows archiving only with the refusal recorded, and an unverifiable binding only archives',async()=>{
+ let refused=false;
+ const f=fixture({view:legacyView(),state:legacyCapable(),hook:action=>action==='legacyStatus'?(refused?{state:'deliverable',refused:true}:{state:'deliverable'}):action==='legacyDeliver'?(refused=true,{delivered:false,refused:true}):action==='legacyArchive'?{archived:true,archive:'pending.json.legacy-aaaaaaaaaaaaaaaa.json'}:undefined});
+ await f.controller.refresh();await f.controller.checkLegacy();
+ f.controller.setConfirmation('legacyArchive',true);assert.equal(f.controller.getState().canArchiveLegacy,false);
+ f.controller.setConfirmation('legacyDeliver',true);assert.equal(await f.controller.deliverLegacy(),true);
+ assert.match(f.controller.getState().notice,/거절/);
+ await f.controller.refresh();await f.controller.checkLegacy();
+ assert.equal(f.controller.getState().legacy.refused,true);
+ f.controller.setConfirmation('legacyArchive',true);assert.equal(f.controller.getState().canArchiveLegacy,true);
+ await f.controller.archiveLegacy();
+ assert.deepEqual(f.calls.at(-1),{action:'legacyArchive',input:{pendingHash:hash,confirm:true,afterRefusal:true}});
+ const g=fixture({view:legacyView(),state:legacyCapable(),hook:action=>action==='legacyStatus'?{state:'binding_unverified'}:undefined});
+ await g.controller.refresh();await g.controller.checkLegacy();
+ g.controller.setConfirmation('legacyDeliver',true);assert.equal(g.controller.getState().canDeliverLegacy,false);
+ g.controller.setConfirmation('legacyArchive',true);assert.equal(g.controller.getState().canArchiveLegacy,true);
+});

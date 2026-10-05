@@ -13,7 +13,7 @@ import {failureRecord} from '../public/core/failures.mjs';
 import {assertEvaluationAttachable,assertEvaluationBindingPreserved,evaluationBinding,reserveClaimBudget} from '../public/core/evaluation-claim.mjs';
 import {encodeStoredEvaluationBudget,parseStoredEvaluationBudget} from './evaluation-budgets.mjs';
 import {prepareDeliveryReceipt,receiptStatements,requiresDeliveryReceipt} from './delivery-receipts.mjs';
-import {DesktopDeliveryCapacityError,prepareClaimReservation,reservationCapacity,reservationCapacityGuard,reservationDeleteStatement,reservationStatements,MAX_DESKTOP_DELIVERIES} from './delivery-reservations.mjs';
+import {DesktopDeliveryCapacityError,nonceUsed,prepareClaimReservation,reservationCapacity,reservationCapacityGuard,reservationDeleteStatement,reservationStatements,MAX_DESKTOP_DELIVERIES} from './delivery-reservations.mjs';
 import {createSelectionState} from '../public/core/model-selection.mjs';
 import {MAX_MODEL_POLICY_PROFILES,profileKey} from './model-policies.mjs';
 import {delegationProfile} from './allocation-policy.mjs';
@@ -154,6 +154,13 @@ export class D1TaskStore {
     let results;
     try{results=await this.db.batch(statements);}
     catch(error){
+      // A claim marker carrying this attempt's own execution ID proves the batch committed
+      // although an error was reported; any other marker means the nonce was used or closed.
+      if(reservation?.nonce){
+        const stored=(await this.db.prepare('SELECT value FROM metadata WHERE key=?1').bind(reservation.nonce.key).first())?.value;
+        if(stored===reservation.nonce.value)return next;
+        if(stored!==undefined)throw nonceUsed(stored,expectedVersion);
+      }
       if(receipt||reservation){const latest=await this.db.prepare('SELECT version FROM tasks WHERE id=?1').bind(id).first();if(latest?.version!==expectedVersion)throw new ConflictError('task changed during update',latest?.version);}
       if(reservation&&await reservationCapacity(this.db,reservation.workspaceId)>=MAX_DESKTOP_DELIVERIES)throw new DesktopDeliveryCapacityError();
       throw error;
@@ -329,7 +336,8 @@ export class D1TaskStore {
 
   async claimExecution(id, input, options = {}) {
     const {provider, expectedVersion, leaseMs = 15 * 60_000, sourceBound = false, executionBudgetVersion} = input;
-    if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>!['deliveryReceiptVersion','workspaceId'].includes(key)))throw new ValidationError('Invalid desktop claim options');
+    if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>!['deliveryReceiptVersion','workspaceId','claimNonce'].includes(key)))throw new ValidationError('Invalid desktop claim options');
+    if(options.claimNonce!==undefined&&options.deliveryReceiptVersion!==1)throw new ValidationError('Invalid desktop claim reservation');
     const deliveryReceiptVersion=options.deliveryReceiptVersion;
     if(deliveryReceiptVersion!==undefined&&(deliveryReceiptVersion!==1||!providerHas(provider,'deliveryReceipts',1)||typeof options.workspaceId!=='string'))throw new ValidationError('Invalid desktop claim reservation');
     if(deliveryReceiptVersion===undefined&&options.workspaceId!==undefined)throw new ValidationError('Invalid desktop claim reservation');
@@ -338,7 +346,7 @@ export class D1TaskStore {
     if (!Number.isFinite(leaseMs) || leaseMs < 1_000 || leaseMs > 60 * 60_000) throw new ValidationError('invalid execution lease');
     if(Object.keys(input).some(key=>key!=='executionBudgetVersion'&&(/budget|grant|reservation/i.test(key)||['jobId','phase','maxDurationMs','deadlineAtMs','deliveryReceiptVersion','workspaceId'].includes(key))))throw new ValidationError('unsupported execution budget option');
     const authorization={};
-    if(deliveryReceiptVersion===1)authorization[CLAIM_RESERVATION]={workspaceId:options.workspaceId};
+    if(deliveryReceiptVersion===1)authorization[CLAIM_RESERVATION]={workspaceId:options.workspaceId,...(options.claimNonce!==undefined?{claimNonce:options.claimNonce}:{})};
     let claim;
     return this.replaceTask(id, expectedVersion, async current => {
       let budget;

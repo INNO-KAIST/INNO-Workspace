@@ -36,7 +36,7 @@ export async function releaseDeliveryReservation(db,input){
   const body=parse(task.body,'desktop reservation task');
   if(!body||typeof body!=='object'||Array.isArray(body)||task.id!==reservation.taskId||body.id!==task.id||task.version!==expectedVersion||body.version!==task.version||!TASK_STATUSES.includes(body.status))throw conflict('Desktop reservation task changed or is invalid');
   if(body.status==='running')throw conflict('Running desktop reservation cannot be discarded');
-  if(await db.prepare('SELECT key FROM metadata WHERE key IN (?1,?2) LIMIT 1').bind(...receiptKeys).first())throw conflict('Accepted desktop delivery receipt prevents reservation discard');
+  if(await db.prepare('SELECT key FROM metadata WHERE key IN (?1,?2) LIMIT 1').bind(...receiptKeys).first())throw conflict('A settled (applied or discarded) desktop delivery receipt prevents reservation discard');
   const row=await db.prepare('SELECT value FROM metadata WHERE key=?1').bind(key).first();
   if(row){
    const saved=parse(row.value,'desktop delivery reservation');

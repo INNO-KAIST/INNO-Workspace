@@ -8,6 +8,15 @@ const encoder=new TextEncoder();
 export class DesktopDeliveryCapacityError extends ConflictError{
  constructor(){super('Desktop delivery capacity unavailable');this.code='DESKTOP_DELIVERY_CAPACITY';}
 }
+// A closed nonce simply has no claim. A nonce that already claimed must not look like "no
+// claim" to a poll, or a desktop could forget an owner it was given; it carries a code the
+// poll path does not swallow.
+export function nonceUsed(storedValue,version){
+ let state;try{state=JSON.parse(storedValue)?.state;}catch{}
+ const error=new ConflictError('Desktop claim nonce was already used',version);
+ if(state!=='closed')error.code='DESKTOP_CLAIM_NONCE_USED';
+ return error;
+}
 
 async function digest(value){
  const bytes=new Uint8Array(await crypto.subtle.digest('SHA-256',encoder.encode(JSON.stringify(value))));
@@ -52,8 +61,10 @@ export async function reservationCapacity(db,workspaceId){
 }
 
 export async function prepareClaimReservation(db,intent,current,next){
- if(!intent||typeof intent!=='object'||Object.keys(intent).length!==1||typeof intent.workspaceId!=='string'||!workspaceUuid.test(intent.workspaceId))
+ if(!intent||typeof intent!=='object'||Object.keys(intent).some(key=>!['workspaceId','claimNonce'].includes(key))||typeof intent.workspaceId!=='string'||!workspaceUuid.test(intent.workspaceId))
   throw new ValidationError('Invalid desktop workspace identity');
+ if(intent.claimNonce!==undefined&&(typeof intent.claimNonce!=='string'||!/^[0-9a-f]{64}$/.test(intent.claimNonce)))
+  throw new ValidationError('Invalid desktop claim nonce');
  const checkpoint=next.checkpoint;
  if(next.id!==current.id||next.version!==current.version+1||next.status!=='running'
   ||!providerHas(checkpoint?.provider,'deliveryReceipts',1)||checkpoint.status!=='running'||checkpoint.deliveryReceiptVersion!==1
@@ -63,7 +74,17 @@ export async function prepareClaimReservation(db,intent,current,next){
  if(await reservationCapacity(db,intent.workspaceId)>=MAX_DESKTOP_DELIVERIES)
   throw new DesktopDeliveryCapacityError();
  const value={version:1,workspaceId:intent.workspaceId,taskId:current.id,executionId:checkpoint.executionId,generation:checkpoint.generation,claimedAt:checkpoint.claimedAt};
- return {key:await reservationKey(value),value:JSON.stringify(value),workspaceId:intent.workspaceId};
+ const key=await reservationKey(value);
+ // A claim nonce is recorded with its owner in the same batch. A nonce already used, or
+ // closed by a status check, refuses the claim (worker/claim-journal.mjs).
+ let nonce;
+ if(intent.claimNonce!==undefined){
+  const markerKey='desktop_claim:'+intent.claimNonce;
+  const existing=(await db.prepare('SELECT value FROM metadata WHERE key=?1').bind(markerKey).first())?.value;
+  if(existing!==undefined)throw nonceUsed(existing,current.version);
+  nonce={key:markerKey,value:JSON.stringify({version:1,state:'claimed',workspaceId:intent.workspaceId,taskId:current.id,executionId:checkpoint.executionId,generation:checkpoint.generation,reservationKey:key,at:checkpoint.claimedAt})};
+ }
+ return {key,value:JSON.stringify(value),workspaceId:intent.workspaceId,...(nonce?{nonce}:{})};
 }
 
 export function reservationCapacityGuard(reservation,parameterIndex){
@@ -83,5 +104,8 @@ export function reservationStatements(db,reservation,next){
   AND (SELECT COUNT(*) FROM metadata WHERE key GLOB 'desktop_reservation:*' OR key GLOB 'desktop_receipt:*')<${MAX_DESKTOP_DELIVERIES}`)
   .bind(reservation.key,reservation.value,next.id,next.version,next.checkpoint.executionId,next.checkpoint.generation,reservation.workspaceId);
  const assertion=db.prepare("INSERT INTO metadata(key,value) SELECT 'revision',0 WHERE changes()!=1");
- return [insert,assertion];
+ // A plain INSERT: an existing marker (the nonce was closed meanwhile) aborts the claim.
+ const marker=reservation.nonce?[db.prepare('INSERT INTO metadata(key,value) VALUES (?1,?2)').bind(reservation.nonce.key,reservation.nonce.value),
+  db.prepare("INSERT INTO metadata(key,value) SELECT 'revision',0 WHERE changes()!=1")]:[];
+ return [insert,assertion,...marker];
 }

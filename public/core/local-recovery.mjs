@@ -13,7 +13,8 @@ function originValue(value,localOnly=false){
  if(url.username||url.password||url.search||url.hash||url.pathname!=='/'||value!==url.origin&&value!==url.origin+'/'||localOnly&&(url.protocol!=='http:'||!loopback)||!localOnly&&url.protocol!=='https:'&&!(url.protocol==='http:'&&loopback))throw fail();
  return url.origin;
 }
-const routes={status:'/api/desktop/status',inspect:'/api/desktop/recovery',promote:'/api/desktop/recovery/promote',drain:'/api/desktop/recovery/drain'};
+const routes={status:'/api/desktop/status',inspect:'/api/desktop/recovery',promote:'/api/desktop/recovery/promote',drain:'/api/desktop/recovery/drain',legacyStatus:'/api/desktop/recovery/legacy-status',legacyDeliver:'/api/desktop/recovery/legacy-deliver',legacyArchive:'/api/desktop/recovery/legacy-archive'};
+const LEGACY_STATES=['deliverable','already_applied','owner_replaced','not_running','receipt_required','task_missing','binding_unverified'];
 export function createLocalRecoveryRequest({origin,token,fetchImpl=fetch,timeoutMs=20000}){
  const base=originValue(origin,true);
  if(typeof token!=='string'||!TOKEN.test(token)||typeof fetchImpl!=='function'||!Number.isSafeInteger(timeoutMs)||timeoutMs<1||timeoutMs>120000)throw fail();
@@ -43,7 +44,7 @@ function runtime(value){
 }
 function checkedStatus(value){
  if(!object(value)||value.outboxStatus!=='not_inspected'||!object(value.capabilities))throw fail();
- return {localDesktop:runtime(value.localDesktop),outboxStatus:'not_inspected',capabilities:{desktopOutboxRecovery:boolean(value.capabilities.desktopOutboxRecovery),desktopOutboxDrain:boolean(value.capabilities.desktopOutboxDrain)}};
+ return {localDesktop:runtime(value.localDesktop),outboxStatus:'not_inspected',capabilities:{desktopOutboxRecovery:boolean(value.capabilities.desktopOutboxRecovery),desktopOutboxDrain:boolean(value.capabilities.desktopOutboxDrain),desktopLegacyRecovery:value.capabilities.desktopLegacyRecovery===undefined?false:boolean(value.capabilities.desktopLegacyRecovery)}};
 }
 function checkedBinding(value){
  if(!object(value)||typeof value.workspaceId!=='string'||!UUID.test(value.workspaceId))throw fail();
@@ -79,16 +80,21 @@ const valid=meta=>['pending','ack_pending'].includes(meta?.phase);
 export function createLocalRecovery({request,onChange=()=>{}}){
  if(typeof request!=='function'||typeof onChange!=='function')throw fail();
  let disposed=false,generation=0;
- const state={busy:false,status:null,snapshot:null,notice:'',error:'',confirmPromote:false,confirmDrain:false,canPromote:false,canDrain:false};
+ const state={busy:false,status:null,snapshot:null,notice:'',error:'',confirmPromote:false,confirmDrain:false,canPromote:false,canDrain:false,legacy:null,confirmLegacyDeliver:false,confirmLegacyArchive:false,canCheckLegacy:false,canDeliverLegacy:false,canArchiveLegacy:false};
  function derive(){
   const ready=!disposed&&!state.busy&&state.status&&!state.status.localDesktop.busy&&!state.status.localDesktop.stopped&&state.snapshot,p=state.snapshot?.pending,t=state.snapshot?.temporary;
   const compatible=valid(t)&&(p.phase==='missing'?t.phase==='pending':valid(p)&&p.binding.origin===t.binding.origin&&p.binding.workspaceId===t.binding.workspaceId&&!(p.phase==='ack_pending'&&t.phase==='pending'));
   state.canPromote=!!(ready&&state.status.capabilities.desktopOutboxRecovery&&state.snapshot.canPromote&&compatible&&state.confirmPromote);
   state.canDrain=!!(ready&&state.status.capabilities.desktopOutboxDrain&&t.phase==='missing'&&valid(p)&&state.confirmDrain);
+  // A legacy (receipt-less) result is only delivered or archived after a fresh Worker check.
+  const legacyReady=!!(ready&&state.status.capabilities.desktopLegacyRecovery&&t?.phase==='missing'&&p?.phase==='legacy');
+  state.canCheckLegacy=legacyReady;
+  state.canDeliverLegacy=!!(legacyReady&&['deliverable','already_applied'].includes(state.legacy?.state)&&state.confirmLegacyDeliver);
+  state.canArchiveLegacy=!!(legacyReady&&state.legacy&&(state.legacy.state!=='deliverable'||state.legacy.refused)&&state.confirmLegacyArchive);
  }
  const getState=()=>{derive();return clone(state);};
  function emit(){derive();if(disposed)return;try{const result=onChange(getState());result?.catch?.(()=>{});}catch{}}
- function invalidate(){state.snapshot=null;state.confirmPromote=false;state.confirmDrain=false;state.notice='';state.error='';}
+ function invalidate(){state.snapshot=null;state.confirmPromote=false;state.confirmDrain=false;state.legacy=null;state.confirmLegacyDeliver=false;state.confirmLegacyArchive=false;state.notice='';state.error='';}
  async function operation(work){
   if(disposed||state.busy)return false;
   const current=++generation;invalidate();state.busy=true;emit();
@@ -113,8 +119,44 @@ export function createLocalRecovery({request,onChange=()=>{}}){
    });
   },
   setConfirmation(action,value){
-   if(disposed||state.busy||!['promote','drain'].includes(action)||typeof value!=='boolean')return false;
-   state[action==='promote'?'confirmPromote':'confirmDrain']=value;emit();return true;
+   const field={promote:'confirmPromote',drain:'confirmDrain',legacyDeliver:'confirmLegacyDeliver',legacyArchive:'confirmLegacyArchive'}[action];
+   if(disposed||state.busy||!field||typeof value!=='boolean')return false;
+   state[field]=value;emit();return true;
+  },
+  async checkLegacy(){
+   derive();if(!state.canCheckLegacy)return false;
+   const pendingHash=state.snapshot.pending.sha256;
+   return operation(async active=>{
+    state.status=checkedStatus(await request('status'));if(!active())return;
+    const result=await request('inspect');if(!active())return;
+    const snapshot=checkedSnapshot(result?.recovery);
+    if(snapshot.pending.phase!=='legacy'||snapshot.pending.sha256!==pendingHash||snapshot.temporary.phase!=='missing')throw fail();
+    state.status.localDesktop=runtime(result?.localDesktop);
+    const reply=await request('legacyStatus',{pendingHash});if(!active())return;
+    if(!object(reply)||!LEGACY_STATES.includes(reply.state)||Object.keys(reply).some(key=>!['state','refused'].includes(key))||reply.refused!==undefined&&reply.refused!==true)throw fail();
+    state.snapshot=snapshot;state.legacy={state:reply.state,...(reply.refused?{refused:true}:{})};
+   });
+  },
+  async deliverLegacy(){
+   derive();if(!state.canDeliverLegacy)return false;
+   const input={pendingHash:state.snapshot.pending.sha256,confirm:true};
+   return operation(async active=>{
+    const result=await request('legacyDeliver',input);if(!active())return;
+    if(object(result)&&Object.keys(result).length===2&&result.delivered===false&&result.refused===true){
+     state.notice='클라우드가 이 이전 형식 결과를 거절했습니다. 파일은 그대로 있습니다. 적용하지 않고 보관하려면 상태와 클라우드 상태를 다시 확인한 뒤 보관을 선택하세요. 자동 실행은 재개되지 않습니다.';return;
+    }
+    if(!object(result)||Object.keys(result).length!==2||result.delivered!==true||!['deliverable','already_applied'].includes(result.state))throw fail();
+    state.notice='이전 형식 결과를 전달했습니다. 자동 실행은 재개되지 않습니다.';
+   });
+  },
+  async archiveLegacy(){
+   derive();if(!state.canArchiveLegacy)return false;
+   const input={pendingHash:state.snapshot.pending.sha256,confirm:true,...(state.legacy.state==='deliverable'&&state.legacy.refused?{afterRefusal:true}:{})};
+   return operation(async active=>{
+    const result=await request('legacyArchive',input);if(!active())return;
+    if(!object(result)||result.archived!==true||typeof result.archive!=='string'||!/^[A-Za-z0-9._-]{1,200}$/.test(result.archive)||result.recoveryLockUncertain!==undefined&&typeof result.recoveryLockUncertain!=='boolean'||Object.keys(result).some(key=>!['archived','archive','recoveryLockUncertain'].includes(key)))throw fail();
+    state.notice=`이전 형식 결과를 같은 폴더의 ${result.archive} 파일로 보관했습니다.${result.recoveryLockUncertain?' 복구 잠금 상태를 확인할 수 없습니다.':''} 자동 실행은 재개되지 않습니다.`;
+   });
   },
   async promote(){
    derive();if(!state.canPromote)return false;

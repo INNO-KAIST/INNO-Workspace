@@ -8,18 +8,23 @@ const fields=['version','id','workspaceId','taskId','executionId','generation','
 const encoder=new TextEncoder();
 const invalid=()=>{throw new ValidationError('Invalid desktop delivery receipt');};
 
-export async function readDeliveryReceipt(db,descriptor){
+export async function readDeliveryReceipt(db,descriptor){return (await readDeliveryRecord(db,descriptor))?.receipt??null;}
+// A stored receipt either records an applied result or, with disposition 'discarded', a
+// result the Worker settled without applying (worker/delivery-discharge.mjs). The receipt
+// returned to the desktop never carries the disposition.
+export async function readDeliveryRecord(db,descriptor){
  const row=await db.prepare('SELECT value FROM metadata WHERE key=?1').bind('desktop_receipt:'+descriptor.id).first();
  if(!row)return null;
  let saved;
  try{saved=JSON.parse(row.value);}catch{throw new ConflictError('Stored desktop delivery receipt is invalid');}
- const keys=[...fields,'acceptedAt'];
+ const discarded=saved?.disposition==='discarded';
+ const keys=[...fields,'acceptedAt',...(discarded?['disposition']:[])];
  if(!saved||typeof saved!=='object'||Array.isArray(saved)||Object.keys(saved).length!==keys.length
   ||keys.some(key=>!Object.hasOwn(saved,key))||typeof saved.acceptedAt!=='string'
   ||!Number.isFinite(Date.parse(saved.acceptedAt))||new Date(saved.acceptedAt).toISOString()!==saved.acceptedAt)
   throw new ConflictError('Stored desktop delivery receipt is invalid');
- if(fields.some(key=>saved[key]!==descriptor[key]))throw new ConflictError('Desktop delivery receipt payload conflicts with accepted result');
- return saved;
+ if(fields.some(key=>saved[key]!==descriptor[key]))throw new ConflictError('Desktop delivery receipt payload conflicts with the settled result');
+ return {receipt:Object.fromEntries([...fields,'acceptedAt'].map(key=>[key,saved[key]])),discarded};
 }
 const sameOwner=(value,receipt)=>value?.executionId===receipt.executionId&&value?.generation===receipt.generation;
 

@@ -8,8 +8,9 @@ const descriptions = Object.freeze({
  connection: ['통신 중단', '연결을 확인하고 기존 실행이 종료되었는지 확인한 뒤 이어서 실행하세요.'],
  interrupted: ['실행 연결 중단', '데스크톱을 다시 연결하면 보관된 결과부터 전달합니다. 새 실행 전 기존 작업 상태를 확인하세요.'],
  unknown: ['실행 중단', '기존 실행과 생성된 결과를 확인한 뒤 이어서 실행하세요.'],
+ restarted: ['데스크톱 실행 중단(재시작 또는 배정 응답 유실)', '데스크톱 연결기가 실행 도중 다시 시작됐거나 실행 배정 응답을 받지 못해 이 실행의 결과가 남지 않았습니다. 이전 실행 프로세스가 끝났는지와 작업 상태를 확인한 뒤 이어서 실행하세요.'],
 });
-const codes = {CONTEXT_RETRIEVAL_REQUIRED:'context',OUTPUT_LIMIT:'resource',QUOTA_EXCEEDED:'quota',AUTH_REQUIRED:'authentication',CONNECTION_FAILED:'connection'};
+const codes = {CONTEXT_RETRIEVAL_REQUIRED:'context',OUTPUT_LIMIT:'resource',QUOTA_EXCEEDED:'quota',AUTH_REQUIRED:'authentication',CONNECTION_FAILED:'connection',DESKTOP_RESTARTED:'restarted'};
 export function retryHint(value, now=Date.now()) {
  if(typeof value!=='string'||!value.trim())return null;
  const n=/^\d+(?:\.\d+)?$/.test(value.trim())?now+Number(value)*1000:Date.parse(value);

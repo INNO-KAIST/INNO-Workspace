@@ -42,7 +42,7 @@
 사용자 요청으로 Stage2D1에서 Codex 구현을 마치고 Claude 총괄 검토/후속 작업으로 인계한다. 세부 선행 조건·검증 기준·미승인 사항은 HANDOFF-CLAUDE.md H1~H10을 따른다.
 
 1. 개발 브랜치와 운영 버전을 구분하고 전체 플랫폼을 독립 검토한다. 문맥 bootstrap·전체 입력 예산·관측 UI·실제 구독 경로 검증을 마무리한다.
-2. durable claim journal·unknown-owner·legacy outbox 및 실제 lifecycle을 검증한 뒤 receipt 운영 활성화를 진행한다.
+2. H4 결과 전달 복구를 구현·검증했다(2026-10-05, 커밋 전): 사용자 중단 결과 정리, durable claim journal과 nonce 기반 owner 확인, 이전 형식 결과 명시 정리, 실제 프로세스 강제종료·재시작 시험 7지점. receipt 운영 활성화는 docs/DELIVERY-ACTIVATION.md의 점검·순서·되돌림에 따라 사용자 승인 뒤 진행한다(gate 0 유지).
 3. CR-004는 A안으로 결정되어 실행 경로 평가를 구현했다(2026-10-05, 커밋 전). 모델 평가 격리/정산·유동적 에이전트·연구/일반 산출물 품질·다중 기기/장기 운영의 승인된 독립 작업을 순차 진행한다.
 4. 준비된 변경의 main/Worker/Pages/desktop 일관 릴리스와 최초 요구사항별 완료 재감사를 수행한다. 전체 완료로 가정하지 않는다.
 ## 과거 단계별 검증 이력

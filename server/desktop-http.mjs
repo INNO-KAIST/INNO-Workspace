@@ -13,6 +13,19 @@ export function createDesktopServer({token,publicDir,request,bridge,localRecords
  if(typeof token!=='string'||token.length<24)throw Error('A strong local token is required');
  const localRecoveryEnabled=deliveryReceiptVersion===1&&typeof outboxRecovery?.inspect==='function'&&typeof outboxRecovery?.promote==='function';
  const localDrainEnabled=localRecoveryEnabled&&typeof outboxRecovery?.readPending==='function'&&typeof bridge?.drainPending==='function';
+ const localLegacyEnabled=localRecoveryEnabled&&typeof outboxRecovery?.readLegacy==='function'&&typeof outboxRecovery?.archiveLegacy==='function'&&typeof bridge?.legacyStatus==='function'&&typeof bridge?.deliverLegacy==='function';
+ const legacyInput=(input,{confirm,refusal=false})=>{
+  const keys=[...(confirm?['confirm']:[]),'pendingHash'];
+  const given=input&&typeof input==='object'&&!Array.isArray(input)?Object.keys(input).filter(key=>!(refusal&&key==='afterRefusal')).sort().join():'';
+  if(!input||typeof input!=='object'||Array.isArray(input)||given!==keys.join()||typeof input.pendingHash!=='string'||!/^[0-9a-f]{64}$/.test(input.pendingHash)||confirm&&input.confirm!==true
+   ||input.afterRefusal!==undefined&&input.afterRefusal!==true)
+   throw Object.assign(Error('Invalid legacy recovery request'),{status:400});
+  return input.pendingHash;
+ };
+ // Hashes of legacy results whose old-route delivery the Worker refused in this process.
+ // Only then may a result still classified deliverable be archived, with an extra confirmation.
+ const refusedLegacy=new Set();
+ const legacyState=async record=>(await bridge.legacyStatus(record)).state;
  const root=path.resolve(publicDir instanceof URL?fileURLToPath(publicDir):publicDir);
  const server=createServer(async(req,res)=>{
   try{
@@ -40,10 +53,29 @@ export function createDesktopServer({token,publicDir,request,bridge,localRecords
     const localInspect=req.method==='GET'&&p==='/api/desktop/recovery';
     const localPromote=req.method==='POST'&&p==='/api/desktop/recovery/promote';
     const localDrain=req.method==='POST'&&p==='/api/desktop/recovery/drain';
-    if(localStatus||localInspect||localPromote||localDrain){
-     if(!localStatus&&!localRecoveryEnabled||localDrain&&!localDrainEnabled)return json(res,404,{error:'not found'});
+    const legacyRoute=req.method==='POST'&&['/api/desktop/recovery/legacy-status','/api/desktop/recovery/legacy-deliver','/api/desktop/recovery/legacy-archive'].includes(p)?p.split('/').at(-1):null;
+    if(localStatus||localInspect||localPromote||localDrain||legacyRoute){
+     if(!localStatus&&!localRecoveryEnabled||localDrain&&!localDrainEnabled||legacyRoute&&!localLegacyEnabled)return json(res,404,{error:'not found'});
      try{
-      if(localStatus)return json(res,200,{localDesktop:bridge.runtimeStatus(),outboxStatus:'not_inspected',capabilities:{desktopOutboxRecovery:localRecoveryEnabled,desktopOutboxDrain:localDrainEnabled}});
+      if(localStatus)return json(res,200,{localDesktop:bridge.runtimeStatus(),outboxStatus:'not_inspected',capabilities:{desktopOutboxRecovery:localRecoveryEnabled,desktopOutboxDrain:localDrainEnabled,desktopLegacyRecovery:localLegacyEnabled}});
+      if(legacyRoute==='legacy-status'){
+       const pendingHash=legacyInput(await body(req),{confirm:false});
+       const record=await bridge.recoveryInspect(()=>outboxRecovery.readLegacy(pendingHash));
+       return json(res,200,{state:await legacyState(record),...(refusedLegacy.has(pendingHash)?{refused:true}:{})});
+      }
+      if(legacyRoute==='legacy-deliver'){
+       const pendingHash=legacyInput(await body(req),{confirm:true});
+       try{return json(res,200,await bridge.deliverLegacy({readLegacy:()=>outboxRecovery.readLegacy(pendingHash)}));}
+       catch(error){if(error?.legacyRefused!==true)throw error;refusedLegacy.add(pendingHash);return json(res,200,{delivered:false,refused:true});}
+      }
+      if(legacyRoute==='legacy-archive'){
+       const input=await body(req),pendingHash=legacyInput(input,{confirm:true,refusal:true}),afterRefusal=input.afterRefusal===true;
+       // The Worker check runs inside the helper's exclusive lock, right before the move.
+       return json(res,200,await outboxRecovery.archiveLegacy({pendingHash,confirm:true},{allowed:async record=>{
+        const state=await legacyState(record);
+        return state!=='deliverable'||afterRefusal&&refusedLegacy.has(pendingHash);
+       }}));
+      }
       if(localInspect){const recovery=await bridge.recoveryInspect(()=>outboxRecovery.inspect());return json(res,200,{recovery,localDesktop:bridge.runtimeStatus()});}
       if(localDrain){
        const input=await body(req);

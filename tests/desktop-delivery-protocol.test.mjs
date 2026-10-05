@@ -88,10 +88,22 @@ test('async outbox writes and clear are awaited, and async rejection retains the
   if(phase==='pending'){assert.equal(bridge.status().deliveryUnsafe,true);assert.equal(base.read(),null);}else assert.equal(base.read().phase,phase==='clear'?'ack_pending':'pending');
  }
 });
-test('renew failure persists runner output before error and blocks new AI while allowing pending drain',async()=>{
+test('a definitive renew refusal persists runner output, then settles it once with a verified receipt',async()=>{
  const f=setup({hook:path=>{if(path.endsWith('/renew'))throw Object.assign(Error('renew failed'),{status:409});},run:({signal})=>new Promise(resolve=>signal.addEventListener('abort',()=>resolve({content:'finished before stop'})))}),bridge=f.make({heartbeatMs:2});
- await assert.rejects(()=>bridge.tick(),/renew failed/);assert.equal(f.outbox.read().phase,'pending');assert.equal(f.outbox.read().input.content,'finished before stop');assert.equal(bridge.status().deliveryUnsafe,true);assert.equal(f.calls.filter(c=>c.path.endsWith('/complete')).length,0);
- await bridge.tick();await assert.rejects(()=>bridge.tick());assert.equal(f.runs(),1);assert.equal(f.calls.filter(c=>c.path.endsWith('/poll')).length,1);
+ assert.equal(await bridge.tick(),true);
+ assert.equal(f.writes[0].phase,'pending');assert.equal(f.writes[0].input.content,'finished before stop');assert.equal(f.writes[1].phase,'ack_pending');
+ assert.deepEqual(f.calls.map(c=>c.path).filter(p=>!p.endsWith('/renew')),['/api/desktop/poll','/api/desktop/task/complete','/api/desktop/task/ack']);
+ assert.equal(f.outbox.read(),null);assert.equal(bridge.status().deliveryUnsafe,false);assert.equal(f.runs(),1);
+});
+test('renew refusal whose immediate delivery fails keeps output pending and blocks new AI while allowing pending drain',async()=>{
+ let lost=false;
+ const f=setup({hook:path=>{if(path.endsWith('/renew'))throw Object.assign(Error('renew failed'),{status:409});if(path.endsWith('/complete')&&!lost){lost=true;throw Error('result lost');}},run:({signal})=>new Promise(resolve=>signal.addEventListener('abort',()=>resolve({content:'finished before stop'})))}),bridge=f.make({heartbeatMs:2});
+ await assert.rejects(()=>bridge.tick(),/result lost/);assert.equal(f.outbox.read().phase,'pending');assert.equal(f.outbox.read().input.content,'finished before stop');assert.equal(bridge.status().deliveryUnsafe,true);
+ await bridge.tick();await assert.rejects(()=>bridge.tick());assert.equal(f.runs(),1);assert.equal(f.calls.filter(c=>c.path.endsWith('/poll')).length,1);assert.equal(f.outbox.read(),null);
+});
+test('a renew failure that is not a definitive refusal still persists output and blocks without delivering',async()=>{
+ const f=setup({hook:path=>{if(path.endsWith('/renew'))throw Object.assign(Error('renew rejected'),{status:403});},run:({signal})=>new Promise(resolve=>signal.addEventListener('abort',()=>resolve({content:'finished before stop'})))}),bridge=f.make({heartbeatMs:2});
+ await assert.rejects(()=>bridge.tick(),/renew rejected/);assert.equal(f.outbox.read().phase,'pending');assert.equal(bridge.status().deliveryUnsafe,true);assert.equal(f.calls.filter(c=>c.path.endsWith('/complete')).length,0);
 });
 test('unconfirmed lease after transient renew failures persists runner output and blocks new AI',async()=>{
  const f=setup({hook:path=>{if(path.endsWith('/renew'))throw Error('network');},run:({signal})=>new Promise(resolve=>signal.addEventListener('abort',()=>resolve({content:'finished before stop'})))}),bridge=f.make({heartbeatMs:2,leaseMs:20});

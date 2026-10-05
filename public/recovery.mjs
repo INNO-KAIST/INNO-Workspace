@@ -6,6 +6,12 @@ const phaseNames={
   oversize:'허용 크기 초과',unsafe_file:'안전하게 읽을 수 없음'
 };
 const yesNo=value=>value?'예':'아니요';
+const legacyNames={
+  deliverable:'아직 적용할 수 있음 · 이전 방식으로 전달 가능',already_applied:'같은 종류의 결과가 이미 기록됨 · 전달하면 변경 없이 확인되며, 보관도 선택할 수 있음',
+  owner_replaced:'다른 실행으로 바뀜 · 적용 불가',not_running:'실행이 끝났거나 중지됨 · 적용 불가',
+  receipt_required:'새 전달 방식의 실행 · 이전 방식으로 적용 불가',task_missing:'작업을 찾을 수 없음 · 적용 불가',
+  binding_unverified:'연결 정보를 확인할 수 없음 · 전달하지 않고 보관만 가능'
+};
 const el=(document,id)=>document.getElementById(id);
 function facts(document,node,rows){
   node.replaceChildren();
@@ -29,6 +35,9 @@ export function mountLocalRecoveryPage({document,location,history,requestFactory
   const runtime=el(document,'runtime'),pending=el(document,'pending'),temporary=el(document,'temporary');
   const promoteConfirm=el(document,'confirm-promote'),drainConfirm=el(document,'confirm-drain');
   const promote=el(document,'promote'),drain=el(document,'drain');
+  const legacyCheck=el(document,'legacy-check'),legacyState=el(document,'legacy-state');
+  const legacyDeliverConfirm=el(document,'confirm-legacy-deliver'),legacyArchiveConfirm=el(document,'confirm-legacy-archive');
+  const legacyDeliver=el(document,'legacy-deliver'),legacyArchive=el(document,'legacy-archive');
   let controller;
   function staticNotice(value){
     message.textContent=value;
@@ -57,6 +66,15 @@ export function mountLocalRecoveryPage({document,location,history,requestFactory
     drainConfirm.checked=!!state.confirmDrain&&canConfirmDrain;
     promote.disabled=!state.canPromote;
     drain.disabled=!state.canDrain;
+    const legacyKnown=!!(state.canCheckLegacy&&state.legacy);
+    legacyCheck.disabled=!state.canCheckLegacy;
+    legacyState.textContent=!state.canCheckLegacy?'이전 형식 결과가 없거나 지금은 확인할 수 없습니다.':state.legacy?legacyNames[state.legacy.state]+(state.legacy.refused?' · 이 기기에서 전달이 거절됨(보관 가능)':''):'확인 전';
+    legacyDeliverConfirm.disabled=!(legacyKnown&&['deliverable','already_applied'].includes(state.legacy.state));
+    legacyArchiveConfirm.disabled=!(legacyKnown&&(state.legacy.state!=='deliverable'||state.legacy.refused));
+    legacyDeliverConfirm.checked=!!state.confirmLegacyDeliver&&!legacyDeliverConfirm.disabled;
+    legacyArchiveConfirm.checked=!!state.confirmLegacyArchive&&!legacyArchiveConfirm.disabled;
+    legacyDeliver.disabled=!state.canDeliverLegacy;
+    legacyArchive.disabled=!state.canArchiveLegacy;
     message.textContent=state.busy?'상태를 확인하거나 요청을 처리하고 있습니다…':state.notice||(!state.status?'상태를 확인하려면 버튼을 누르세요.':!state.status.capabilities.desktopOutboxRecovery?'이 연결에서는 로컬 복구를 사용할 수 없습니다.':local.stopped?'로컬 실행기가 종료되었습니다. 상태를 다시 확인해 주세요.':local.busy?'로컬 작업이 실행 중입니다. 작업이 끝난 뒤 다시 확인해 주세요.':state.snapshot?'현재 저장 상태를 확인했습니다. 필요한 작업을 직접 선택하세요.':'저장 상태를 확인하지 않았습니다.');
     error.textContent=state.error;
     facts(document,runtime,local?[
@@ -81,6 +99,11 @@ export function mountLocalRecoveryPage({document,location,history,requestFactory
   drainConfirm.addEventListener('change',()=>controller.setConfirmation('drain',drainConfirm.checked));
   promote.addEventListener('click',async()=>{await controller.promote();refresh.focus();});
   drain.addEventListener('click',async()=>{await controller.drain();refresh.focus();});
+  legacyCheck.addEventListener('click',()=>{void controller.checkLegacy();});
+  legacyDeliverConfirm.addEventListener('change',()=>controller.setConfirmation('legacyDeliver',legacyDeliverConfirm.checked));
+  legacyArchiveConfirm.addEventListener('change',()=>controller.setConfirmation('legacyArchive',legacyArchiveConfirm.checked));
+  legacyDeliver.addEventListener('click',async()=>{await controller.deliverLegacy();refresh.focus();});
+  legacyArchive.addEventListener('click',async()=>{await controller.archiveLegacy();refresh.focus();});
   return controller;
 }
 if(typeof document!=='undefined')mountLocalRecoveryPage({document,location,history});

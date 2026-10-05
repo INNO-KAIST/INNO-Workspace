@@ -17,11 +17,11 @@ test('every registered provider has a conformance harness and a declared result'
 for (const manifest of PROVIDER_MANIFESTS) runProviderConformance(test, {manifest, createHarness: PROVIDER_HARNESSES[manifest.id]});
 
 // The desktop delivery receipt protocol (version 1) is built but not enabled in
-// production (receipt gate 0). Its known gap is tracked as H4 and kept visible here.
+// production (receipt gate 0). A user-stopped execution is settled by a discarded
+// receipt (H4-1), so it must pass the same checks as version 0.
 runProviderConformance(test, {
   manifest: providerManifest('codex'), label: 'codex receipts v1',
   createHarness: t => createCodexHarness(t, {receipts: 1}),
-  todo: {staleOwner: 'H4: a user-stopped desktop execution leaves its refused fail record pending, so the desktop cannot start again without an explicit local discard'},
 });
 
 // The suite must fail adapters with known defects, or a passing run proves nothing.

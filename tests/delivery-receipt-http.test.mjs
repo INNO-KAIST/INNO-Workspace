@@ -126,7 +126,7 @@ test('corrupt stored receipt cannot be used as a replay acknowledgement',async t
  const before=await f.revision(),replay=await f.post(f.task.id,'complete',result);assert.notEqual(replay.status,200);assert.equal(await f.revision(),before);
 });
 
-test('losing task CAS writes no receipt and returns the conflict',async t=>{
+test('losing task CAS to a new owner applies nothing and settles the old result as discarded',async t=>{
  const f=await fixture(t),result=input(f.owner),descriptor=await f.receipt(f.task.id,'complete',result),original=f.db.batch.bind(f.db);
  let injected=false;
  f.db.batch=async statements=>{
@@ -138,8 +138,13 @@ test('losing task CAS writes no receipt and returns the conflict',async t=>{
   }
   return original(statements);
  };
- const response=await f.post(f.task.id,'complete',result);assert.equal(response.status,409,JSON.stringify(response));assert.equal(await f.saved(descriptor.id),null);
- assert.equal((await f.store.requireTask(f.task.id)).status,'running');
+ // The accepted-receipt batch loses its CAS and writes nothing. The new owner makes the old
+ // result permanently unacceptable, so it is settled by a discarded receipt instead.
+ const response=await f.post(f.task.id,'complete',result);assert.equal(response.status,200,JSON.stringify(response));
+ assert.equal(response.discarded,true);assert.equal(Object.hasOwn(response.deliveryReceipt,'disposition'),false);
+ assert.equal(JSON.parse(await f.saved(descriptor.id)).disposition,'discarded');
+ const after=await f.store.requireTask(f.task.id);
+ assert.equal(after.status,'running');assert.equal(after.checkpoint.status,'running');assert.notEqual(after.checkpoint.executionId,f.owner.executionId);
 });
 
 test('accepted handoff returns a stored receipt after a later dispatch read fails',async t=>{
@@ -150,4 +155,32 @@ test('accepted handoff returns a stored receipt after a later dispatch read fail
  const reply=await f.post(f.task.id,'complete',result);f.db.prepare=originalPrepare;
  assert.equal(reply.status,200,JSON.stringify(reply));assert.equal(reply.replayed,true);assert.ok(await f.saved(reply.deliveryReceipt.id));
  assert.equal((await f.store.requireTask(f.task.id)).status,'queued');
+});
+
+const reservations=async db=>Number((await db.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key GLOB 'desktop_reservation:*'").first()).n);
+test('a same-version lease-expiry pause still applies the owner result instead of discarding it',async t=>{
+ const f=await fixture(t),row=await f.db.prepare('SELECT body,version FROM tasks WHERE id=?1').bind(f.task.id).first();
+ const body={...JSON.parse(row.body),status:'paused',version:row.version+1};body.checkpoint={...body.checkpoint,interruptedBy:'lease_expiry',interruptedVersion:row.version+1};
+ await f.db.prepare('UPDATE tasks SET version=?1,body=?2 WHERE id=?3').bind(body.version,JSON.stringify(body),f.task.id).run();
+ const response=await f.post(f.task.id,'complete',input(f.owner));
+ assert.equal(response.status,200,JSON.stringify(response));assert.equal(response.discarded,undefined);
+ assert.equal((await f.store.requireTask(f.task.id)).status,'completed');
+});
+test('an invalid result body for a running owner is refused without a receipt and keeps the reservation',async t=>{
+ const f=await fixture(t);
+ const response=await f.post(f.task.id,'complete',{...input(f.owner),resumeState:{taskId:f.task.id},handoff:{provider:'claude',instructions:'x',reason:'y',acceptance:'z'}});
+ assert.equal(response.status,400,JSON.stringify(response));
+ assert.equal(await f.saved((await f.receipt(f.task.id,'complete',{...input(f.owner),resumeState:{taskId:f.task.id},handoff:{provider:'claude',instructions:'x',reason:'y',acceptance:'z'}})).id),null);
+ assert.equal(await reservations(f.db),1);assert.equal((await f.store.requireTask(f.task.id)).status,'running');
+});
+test('after a discard, the other action and a different payload for the same owner are refused',async t=>{
+ const f=await fixture(t),running=await f.store.requireTask(f.task.id);
+ await f.store.applyAction(f.task.id,{action:'pause',expectedVersion:running.version});
+ const failed={executionId:f.owner.executionId,generation:f.owner.generation,status:'failed',failure:{kind:'unknown',retryNotBefore:null}};
+ const discarded=await f.post(f.task.id,'fail',failed);assert.equal(discarded.discarded,true);
+ const stored=await f.saved(discarded.deliveryReceipt.id);
+ const other=await f.post(f.task.id,'complete',input(f.owner));assert.equal(other.status,409,JSON.stringify(other));
+ assert.equal(await f.saved((await f.receipt(f.task.id,'complete',input(f.owner))).id),null);
+ const changed=await f.post(f.task.id,'fail',{...failed,failure:{kind:'connection',retryNotBefore:null}});assert.equal(changed.status,409,JSON.stringify(changed));
+ assert.equal(await f.saved(discarded.deliveryReceipt.id),stored);
 });

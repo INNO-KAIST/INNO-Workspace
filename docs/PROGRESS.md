@@ -4,7 +4,7 @@
 - 운영 기준: main 문서 c925a00, 실행 코드 1e504e3, Worker e2a00c32-93a7-4a98-a36b-8eeb0eb38445. 미전달 결과 작업실 귀속 운영 반영 완료.
 - 개발 중: SRC02/06 delivery-receipts 계획의 Task1 식별자 완료, Task2 원자 저장·수락 경로·HTTP replay 내부 연결 검증 완료/최신 하단 기록 참조. Task3a 내부 claim 예약·상한 검증 완료. Task3b 예약의 receipt 전환·내부 ACK helper 검증 완료. Task3c HTTP claim/ACK 협상 내부 gate 연결 완료; Task3d 클라이언트 상태 전이 내부 연결 검증 완료. Task3e 실제 파일 저장·프로세스 재시작과 로그인 독립 drain 검증 완료. Task3f 내부 명시 예약 해제, Task3g 인증된 조회·폐기 HTTP, Task3h 복구 UI·client·local proxy 연결 및 Task4 Worker·실제 파일 통합 4개 검증 완료. 운영 활성화는 미완료.
 - 다음: Task3i 임시파일 복구 helper 검증 완료. Task3j 전용 복구 잠금·안전 상태 조회 검증 완료. Task3k 로컬 복구 API 검증 완료. Task3l 복구 서비스 루프·스크립트 배선 검증 완료(기본0). Task3m 해시 확인 명시 전달 HTTP 검증 완료. Task3n 로컬 복구 UI 구현·독립 리뷰·실제 브라우저 검증 완료. 전체1010건 중1009통과/0실패/기존symlink1skip. 이후 legacy outbox 명시 복구와 실행 중 결과 기록 실패의 재시작 차단 검증 → 운영 활성화·배포 검증. receipt 없이 과거에 수락된 결과를 자동 인정하지 않는다. CR005 문맥 최적화는 2026-10-01 승인·PRD 반영 완료. CONTEXT-EFFICIENCY-IMPLEMENTATION.md Stage1 공통 조립/제공자 연결 검증 완료. Stage2A 범위 제한 원문 조회 검증 완료. Stage2B1 재개 상태 저장·출처 검증 완료. Stage2B2 일반 결과 전달·저장 연결 검증 완료. Stage2C 제공자별 실제 조회 helper 연결 완료. Stage2D1 선택적 문맥 전달·전체1097pass 검증 완료. 사용자 요청으로 현재 단계 종료 후 Claude handoff. 다음 최초 oversize 처리·전체 prompt 예산·관측 UI·실제 구독 환경 검증; 상세 HANDOFF-CLAUDE.md.
-- **Claude 재개 지점(2026-10-01 저녁 갱신, 이 줄이 위 두 줄보다 우선):** Claude 독립 총괄 검토 후 WU1(renew 일시 오류 허용·v0 결과 저장 실패 차단), WU2(데스크톱 fail/renew의 complete 정합), WU3(Claude 선택 조회 version-only 충돌 연속성), WU4(snapshot 불가 시 전문 대체·v0 정지 안내), WU5(사용자 결정: 96KB 초과~384KB 전문 전달, 상한 초과만 차단)를 구현·독립검증·기록했다. 사용자 요청으로 로컬 커밋 d1da52d(codex/source-release, push 안 함)에 담았으며 main/Worker/Pages 미배포. 2026-10-03: WU6(문맥 전달 관측)·WU7(문서) 완료, CR-006/007 승인·CR-004 A 결정. 2026-10-03 릴리스 완료(main/Worker ebc60186/Pages/데스크톱 6125c11, Claude·Codex 실구독 최소 시험 통과, INNO Claude Routine 재생성 trig_01JqQA1ENd9B2yKpeZVLvx3J). 2026-10-03: CR-006 S1 제공자 레지스트리(로컬 커밋 696aee5, 계획 docs/superpowers/plans/2026-10-03-provider-registry.md), CR-007 S3 플러그인 등록부(로컬 커밋 7793f1c, 계획 docs/superpowers/plans/2026-10-03-plugin-registry.md, 문서 docs/PLUGINS.md) — push·배포 안 함. 2026-10-05: CR-004 A 실행 경로 평가 A1~A3 완료(커밋 전, 계획 docs/superpowers/plans/2026-10-05-execution-route-evaluation.md, 문서 docs/MODEL-ROUTING.md). 다음: H4 journal(+ receipt v1 사용자 중단 후 데스크톱 차단). (이전 2026-10-01 예약 재개 계획은 이 세션에서 직접 진행으로 대체)
+- **Claude 재개 지점(2026-10-01 저녁 갱신, 이 줄이 위 두 줄보다 우선):** Claude 독립 총괄 검토 후 WU1(renew 일시 오류 허용·v0 결과 저장 실패 차단), WU2(데스크톱 fail/renew의 complete 정합), WU3(Claude 선택 조회 version-only 충돌 연속성), WU4(snapshot 불가 시 전문 대체·v0 정지 안내), WU5(사용자 결정: 96KB 초과~384KB 전문 전달, 상한 초과만 차단)를 구현·독립검증·기록했다. 사용자 요청으로 로컬 커밋 d1da52d(codex/source-release, push 안 함)에 담았으며 main/Worker/Pages 미배포. 2026-10-03: WU6(문맥 전달 관측)·WU7(문서) 완료, CR-006/007 승인·CR-004 A 결정. 2026-10-03 릴리스 완료(main/Worker ebc60186/Pages/데스크톱 6125c11, Claude·Codex 실구독 최소 시험 통과, INNO Claude Routine 재생성 trig_01JqQA1ENd9B2yKpeZVLvx3J). 2026-10-03: CR-006 S1 제공자 레지스트리(로컬 커밋 696aee5, 계획 docs/superpowers/plans/2026-10-03-provider-registry.md), CR-007 S3 플러그인 등록부(로컬 커밋 7793f1c, 계획 docs/superpowers/plans/2026-10-03-plugin-registry.md, 문서 docs/PLUGINS.md) — push·배포 안 함. 2026-10-05: CR-004 A 실행 경로 평가(로컬 커밋 3cbf0e0, 문서 docs/MODEL-ROUTING.md). H4 결과 전달 복구 H4-1~H4-5 완료(커밋 전, 계획 docs/superpowers/plans/2026-10-05-delivery-journal.md, 활성화 준비 docs/DELIVERY-ACTIVATION.md). 내용: 사용자 중단 결과 정리, claim journal·nonce, 이전 형식 결과 정리 화면, 실제 프로세스 강제종료 시험 7지점. receipt gate는 0 유지. 다음: H4 커밋 확인 → receipt 활성화·배포·실구독 시험은 사용자 승인 대기. (이전 2026-10-01 예약 재개 계획은 이 세션에서 직접 진행으로 대체)
 - CR-004는 A안으로 결정(2026-10-03)되어 실행 경로 평가를 구현했다(2026-10-05, 커밋 전). 추가 비교 예산 0이라 실제 승격 근거 형성은 미확인.
 - 전체 잔여 범위는 REQUIREMENTS-STATUS.md와 PRD.md 유지. 세부 검증과 한계는 아래 최신 일자 기록에 누적한다.
 
@@ -927,3 +927,166 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
   - 평가 예산 실행은 모델 인자를 적용하지 않아 실행 경로 근거를 만들지 않는다.
   - 내부 버전·Codex CLI 버전·전역 지시 파일 변화는 구분하지 못한다.
   - 사용 중 승격 경로의 근거를 같은 경로로 갱신하는 절차가 없다.
+
+### 2026-10-05 H4-1 사용자 중단 실행의 결과 정리 (커밋 전, receipt gate 0 유지)
+- 커밋: CR-004 A를 로컬 커밋 3cbf0e0으로 남겼다(사용자 확인, push·배포 없음). H4 계획은 docs/superpowers/plans/2026-10-05-delivery-journal.md(H4-1~5)에 있다.
+- 문제: receipt v1에서 사용자가 실행 중 작업을 멈추면 데스크톱이 막혔다(기존 conformance staleOwner todo).
+  1. renew가 409를 받는다.
+  2. 실행기가 중단되고 실패 결과(또는 늦은 완료)가 outbox에 pending으로 저장된다.
+  3. Worker가 그 전달을 영구히 거절한다. lease 만료 중단만 받기 때문이다.
+  4. 데스크톱은 수동 폐기 전까지 새 실행을 못 한다.
+- 신규 worker/delivery-discharge.mjs:
+  - `ownerPermanentlyRefused`가 영구 거절을 판정한다. owner가 바뀌었거나, 같은 owner인데 running이 아니고 같은 버전의 lease 만료 일시중지도 아닌 경우다.
+  - 두 조건을 모두 만족하면 정리한다. 영구 거절이고, 그 owner의 claim 예약이 정확히 남아 있어야 한다. 결과가 수락되면 같은 배치에서 예약이 지워지므로, 예약이 있다는 것은 적용된 결과가 없다는 증거다.
+  - 정리는 D1 배치 하나다. 작업 버전·workspace 조건으로 예약을 지우고 `disposition:'discarded'` receipt를 저장한다. assertion으로 되돌림을 보장하고 작업은 바꾸지 않는다.
+  - Worker 전달 경로의 ConflictError·ValidationError 뒤에만 시도하고, 응답에 `discarded:true`를 붙인다. 데스크톱에 주는 receipt 필드는 기존과 같다.
+  - 재전송은 저장 기록으로 응답하고, ACK가 해제한다. readDeliveryRecord와 ACK 비교는 disposition 키를 허용한다.
+- server/desktop-bridge.mjs:
+  - v1에서 renew가 확정 거절(409)되면 결과를 저장한 직후 한 번 전달한다. 검증된 receipt와 ACK가 끝나면 unsafe로 멈추지 않는다. 실패하거나 다른 오류면 기존처럼 멈춘다.
+  - onDiscarded 알림을 추가했다. scripts/desktop-bridge.mjs가 "중지된 실행의 결과는 적용하지 않고 정리했습니다"를 출력한다.
+- 시험:
+  - tests/delivery-discharge.test.mjs 8건(RED 후 GREEN): 사용자 일시중지, 일시중지 뒤 늦은 완료, 응답 유실 재전송, 재개(ready)·취소 뒤 늦은 전달, 예약 없음은 확정 불가, 판정 함수.
+  - tests/delivery-receipt-http.test.mjs:
+    - 소유자 교체 CAS 손실은 폐기로 기대값을 갱신했다.
+    - 같은 버전 lease 만료 중단은 결과를 적용한다.
+    - running owner의 잘못된 본문은 400이고, receipt 없이 예약을 유지한다.
+    - 폐기 뒤 다른 action·다른 본문은 409다.
+  - tests/desktop-delivery-protocol.test.mjs: renew 시험을 새 계약에 맞춰 3건으로 나눴다(확정 거절 즉시 정리, 즉시 전달 실패는 차단·drain 유지, 409가 아닌 renew 오류는 기존 차단).
+  - tests/provider-conformance.test.mjs: receipts v1 staleOwner todo를 제거했고 통과한다.
+- 독립 검증(inno-opus): 승인. P0·P1·P2가 없고 안전 불변식(지금이나 나중에 수락될 수 있는 결과는 폐기하지 않음)이 PASS다. 반영한 P3:
+  - 메시지를 중립 표현으로 고쳤다("settled").
+  - 일괄 실패 catch의 이유를 주석으로 남겼다.
+  - 시험 4건을 추가했다.
+  - 되돌림 위험, 첫 본문 고정, lease 만료 중단 뒤 위임·검토 결과의 지연 정리를 계획 문서 한계로 기록했다.
+- 검증: 아직 구현 전인 tests/claim-journal.test.mjs(H4-2 RED)를 빼고 전체 1327건 중 1326pass/0fail/기존 symlink 1skip/0todo. git diff --check, Wrangler dry-run(자산 69개, 420.40KiB) 통과.
+
+### 2026-10-05 H4-2 claim journal과 응답 유실 owner 확인 (커밋 전, receipt gate 0 유지)
+- 문제: 응답 유실이나 프로세스 종료 때 owner를 모른다. v1 claim 응답을 받기 전이나 실행 도중 프로세스가 죽으면 owner를 모르거나, 결과도 실패 기록도 남지 않는다. 메모리 latch는 재시작하면 사라진다.
+- Worker:
+  - poll/start는 receipt 프로토콜일 때만 `claimNonce`(64 hex)를 받는다. claim 배치 안에서 예약과 함께 `desktop_claim:<nonce>` 표지를 저장한다. 표지 내용은 claimed, owner, 예약 키다. 일반 INSERT와 assertion을 쓰므로, 이미 쓰였거나 닫힌 nonce면 claim 전체가 되돌려진다. 응답은 nonce를 돌려준다.
+  - `POST /api/desktop/claim-status {nonce}`(v1 헤더 필수)는 표지가 없으면 closed 표지를 먼저 넣는다(admission fence). 그 결과 늦게 도착한 같은 nonce의 claim은 실패한다. 응답은 다음 셋 중 하나다.
+    - `none`
+    - `settled`(예약이 사라짐: 적용·폐기·명시 폐기)
+    - `claimed`(owner 포함)
+  - 표지 정리: closed 표지와 예약이 사라진 claimed 표지는 24시간 뒤 32개씩 지운다. 예약이 남은 claimed 표지는 지우지 않는다.
+  - 배치가 커밋됐는데 오류가 보고되면, 이번 시도의 고유 표지 값으로 커밋을 알아보고 claim을 성공으로 돌려준다. 그 전에는 poll이 이를 "claim 없음"으로 바꿔 owner를 잃을 수 있었다.
+- 데스크톱:
+  - server/claim-journal-file.mjs는 원자 쓰기 저장소다. 미완료 `.tmp`는 버린다. 요청 전에만 requested를 쓰고, owned는 같은 nonce의 확정 기록을 교체하므로 확정 파일만으로 안전하다. 읽을 수 없는 확정 파일은 보존하고 CLAIM_JOURNAL_INVALID를 낸다.
+  - server/desktop-bridge.mjs(`journal`, v1만)의 기록 순서:
+    1. 요청 전에 requested(binding, nonce, taskId)를 쓴다.
+    2. 검증된 응답이 오면 nonce가 일치하는지 확인하고, claim이 없으면 journal을 지우고, 있으면 owned를 쓴다.
+    3. 결과를 outbox에 저장하면 journal을 지운다.
+  - tick:
+    - 저장 결과를 전달한 뒤 같은 owner의 journal을 지운다(drain도 같다).
+    - 남은 journal은 claim-status로 정리한다. none·settled면 지운다. claimed면 owned를 먼저 쓰고, 그 owner의 실패 기록을 outbox에 저장한 뒤 journal을 지우고 전달한다. 실패 기록은 새 종류 `restarted`이고 재시도 가능한 실패다.
+    - workspace 불일치나 형식 오류는 자동으로 지우지 않고 멈춘다.
+  - journal이 있으면 claim 요청 실패에 메모리 latch를 걸지 않는다. 대신 다음 tick이 정리한다. journal이 있는 동안 직접 시작과 정리는 거절한다.
+  - scripts/desktop-bridge.mjs는 v1에서만 .inno/desktop-claim.json을 만든다.
+- public/core/failures.mjs: `restarted`(DESKTOP_RESTARTED) 안내를 추가했다. 이전 실행 프로세스가 끝났는지 확인하라고 안내한다.
+- 시험(RED 후 GREEN):
+  - tests/claim-journal.test.mjs 15건:
+    - 의도·owner 기록
+    - 빈 poll
+    - 응답 유실 해결
+    - 도달하지 않은 claim의 fence
+    - 실행 중 종료
+    - 다른 workspace journal 보존
+    - 표지 정리
+    - 실패 보고 저장 뒤 정리 전 중단
+    - 이미 정리된 owner
+    - drain
+    - journal 중 시작·정리 거절
+    - v0 nonce 거절
+    - 커밋 뒤 오류 배치
+    - 검사·배치 사이 fence 경쟁
+    - 이미 claim한 nonce를 다시 쓴 poll은 claim 없음이 아니라 409
+  - tests/claim-journal-file.test.mjs 3건.
+- 독립 검증(inno-opus): 승인(수정 조건). P0·P1이 없고, fence와 상태 기계는 PASS다. 반영한 항목:
+  - P2: requested 정리 중 중단 시 같은 실패를 두 번 보고해 막힘 → owned 선기록.
+  - P2: poll이 커밋된 모호한 claim을 "없음"으로 처리 → 고유 표지로 커밋 인식.
+  - P3: 표지 assertion, settled 상태, drain의 journal 정리, `restarted` 안내 문구, 누락 시험.
+  - 수정분 재검증 PASS. 남은 P3(R1)도 반영했다. 이미 claim한 nonce가 poll에서 "claim 없음"으로 삼켜지지 않도록 DESKTOP_CLAIM_NONCE_USED로 구분한다. 현재 요청 함수는 재전송하지 않아 도달하지 않는 방어다.
+- 검증: 전체 1347건 중 1346pass/0fail/기존 symlink 1skip(H4-3 Worker 판정 시험 2건 포함). git diff --check, Wrangler dry-run(자산 69개, 428.49KiB) 통과.
+- 한계:
+  - 같은 `.inno`를 쓰는 두 데스크톱 프로세스는 포트 4174 잠금에 의존한다(기존과 같음).
+  - 전원 장애 내구성은 보증하지 않는다.
+  - 실제 프로세스 강제종료 시험은 H4-4에서 한다.
+
+### 2026-10-05 H4-3 이전 형식(receipt 없는) 결과의 명시 정리 (커밋 전)
+- 원칙: receipt 없는 과거 결과를 자동 수락으로 인정하지 않는다. Worker가 지금 적용할 수 있다고 판정한 경우에만 이전 방식으로 보내고, 그 밖에는 지우지 않고 보관한다.
+- Worker:
+  - worker/legacy-delivery.mjs는 작업 상태만 보고 결과를 판정하는 읽기 전용 모듈이다. 판정값은 다음과 같다.
+    - deliverable(같은 v0 owner가 실행 중이거나 같은 버전의 lease 만료 일시중지)
+    - already_applied(같은 종류의 결과가 이미 기록됨)
+    - owner_replaced
+    - not_running
+    - receipt_required
+    - task_missing
+  - `POST /api/desktop/:id/legacy-status`는 v1 헤더가 필요하고 입력 키를 정확히 검사한다.
+- 데스크톱:
+  - outbox-recovery `readLegacy`는 정확한 해시이고 임시 파일이 없을 때만 legacy 기록을 읽는다.
+  - outbox-recovery `archiveLegacy`의 처리 순서:
+    1. 잠금을 잡는다.
+    2. 다시 읽는다.
+    3. Worker를 확인한다(allowed).
+    4. 변경이 없는지 다시 확인한다.
+    5. 대상 파일이 없는지 다시 확인한다.
+    6. 같은 폴더의 `<pending>.legacy-<hash16>.json`으로 이름을 바꾼다. 바이트는 그대로 두고 삭제하지 않는다.
+  - 브리지 `deliverLegacy`(복구 잠금, latch 유지)는 deliverable이나 already_applied일 때만 원래 본문을 receipt 헤더 없이 v0로 보낸 뒤 outbox를 비운다. Worker의 4xx 거절은 표시한다.
+  - 로컬 API:
+    - `/api/desktop/recovery/legacy-status`
+    - `/api/desktop/recovery/legacy-deliver`(confirm 필수)
+    - `/api/desktop/recovery/legacy-archive`(confirm 필수)
+  - deliverable 결과는 보관할 수 없다. 이 프로세스에서 이전 방식 전달이 Worker에 거절됐다면, 추가 확인(afterRefusal)과 함께 보관할 수 있다.
+  - 연결 정보를 확인할 수 없는 기록(binding_unverified)은 전달하지 않고 보관만 할 수 있다. 다른 workspace에 묶인 기록은 모든 동작을 거절한다.
+- 화면: recovery.html에 "이전 형식 결과 정리"를 추가했다(클라우드 상태 확인, 전달·보관 각각의 확인 체크). local-recovery 제어기는 같은 해시를 다시 확인하고, 모든 응답의 형식을 확인하며, 동작마다 확인을 초기화한다.
+- 실제 브라우저 확인: 임시 로컬 서버(임의 포트, 실제 Worker 코드, 실제 연결기·4174/4175와 무관)로 했다.
+  - deliverable → 전달, 작업이 완료됐다.
+  - 일시중지된 작업 → "적용 불가" 표시 → 보관했고, 디스크에 보관 파일이 있음을 확인했다.
+  - 창이 뒤에 있어 스크린샷은 찍지 못했고, 접근성 트리와 DOM 클릭으로 확인했다.
+- 독립 검증(inno-opus): 승인(수정 조건). P0·P1이 없다. 반영한 항목:
+  - P2: Worker가 계속 거절하는 deliverable 결과가 전달도 보관도 안 되던 문제 → 거절 기록 뒤 추가 확인으로 보관.
+  - P3:
+    - clear를 await로 바꿨다.
+    - 이름 바꾸기 직전 대상을 다시 확인한다.
+    - already_applied 문구를 "같은 종류의 결과"로 고쳤다.
+    - 잘못된 binding 기록을 보관할 수 있게 했다.
+    - 시험을 추가했다: fail 기록의 already_applied, 확인과 전송 사이의 일시중지, 거절 뒤 보관, 임시 파일·오래된 해시, 확인 불가 binding.
+- 2차 검증(H4-4와 함께, inno-opus): 승인(수정 조건). 반영한 P2 두 건:
+  - 거절 표시 범위: 실제 cloud 응답(`fromResponse`)의 400/409/410/422만 거절로 기록한다. 네트워크·시간 초과·로컬 413·401/403/404/429는 거절이 아니다.
+  - binding_unverified 범위: 저장 기록의 binding을 검증할 수 없을 때만 해당한다. 현재 연결 정보 문제는 오류로 처리하고, 보관 사유가 되지 않는다.
+- 시험:
+  - tests/legacy-delivery.test.mjs 2건
+  - tests/legacy-recovery.test.mjs 12건
+  - local-recovery 제어기 3건 추가(RED 후 GREEN)
+  - desktop-local-drain capability 기대값 갱신
+
+### 2026-10-05 H4-4 실제 프로세스 강제종료·재시작 시험 (커밋 전)
+- tests/desktop-process-kill.test.mjs와 tests/helpers/desktop-kill-child.mjs의 구성:
+  - 자식 Node 프로세스가 실제 데스크톱 브리지(v1, 파일 outbox, claim journal)를 실행한다.
+  - 부모의 임시 HTTP 서버(127.0.0.1 임의 포트)가 실제 Worker 코드를 감싼다.
+  - 정해진 지점에서 자식을 SIGKILL(Windows TerminateProcess)로 종료하고, 새 프로세스가 한 번 tick한다.
+  - 직접 띄운 자식만 종료한다. 4174/4175와 실제 연결기는 쓰지 않는다.
+- 7개 지점:
+  - 실행 중 종료 → 다음 프로세스가 `restarted` 실패를 보고한다.
+  - 결과 저장 뒤 전송 중 종료 → 재시작 때 complete·ack 한 번씩 보내고, 재실행하지 않는다.
+  - Worker가 결과를 적용했지만 응답 전 종료 → 재시작은 저장 receipt 재전송으로 끝나고, 작업은 변하지 않는다.
+  - Worker 수락 뒤 ACK 전 종료 → 재시작은 ACK만 보낸다.
+  - Worker가 receipt를 해제했지만 ACK 응답 전 종료 → 재시작 ACK는 멱등으로 끝난다.
+  - claim 응답 전 종료(Worker는 claim 확정) → nonce로 owner를 확인하고 `restarted`로 보고한다.
+  - claim이 Worker에 닿기 전 종료 → nonce를 닫고 claim 없이 끝난다.
+- 각 지점에서 종료 직후 디스크 상태(journal·outbox phase)와 재시작 후 정리 상태(예약·receipt 0, 재시작 뒤 요청 순서)를 확인한다. 단순 객체 재생성 시험과 구분한다.
+- 검증 반영:
+  - 'close' 대기로 출력 누락을 막았다.
+  - 시험마다 30초 제한을 두고, 자식이 먼저 끝나면 바로 실패한다.
+  - 정리는 자식 종료를 기다린 뒤 재시도 삭제한다.
+  - 요청 처리기 예외를 막았다.
+  - 세 번 연속 통과했고 임시 폴더는 남지 않았다.
+- 남은 시험하지 않은 지점: 임시 파일 쓰기 도중 종료, outbox 저장과 journal 정리 사이 종료(객체 수준 시험만 있음), 재시작 복구 중 재종료, 시작 스크립트 경로(잠금·준비 확인) 자체의 강제종료.
+- 검증: 전체 1369건 중 1368pass/0fail/기존 symlink 1skip. git diff --check, Wrangler dry-run(자산 69개, 428.49KiB) 통과.
+
+### 2026-10-05 H4-5 활성화 준비 문서 (활성화하지 않음)
+- docs/DELIVERY-ACTIVATION.md에 다음을 정리했다.
+  - gate 위치: Worker 기본 0. export default가 v1을 넘기지 않으므로 활성화하려면 설정 경로를 추가해야 한다. 데스크톱은 상수 0이다.
+  - 협상 방식, 활성화 전 읽기 점검, 승인 후 순서, 되돌림 조건(outbox·journal·receipt 비우기와 이전 판독기 제약), 한계.
+- receipt gate는 0을 유지한다. 실제 전환·배포·연결기 재시작·실구독 시험은 사용자 승인 대기다.

@@ -31,9 +31,11 @@ async function checkedReceipt(value){
  return receipt;
 }
 
+// A discarded receipt (worker/delivery-discharge.mjs) is released the same way.
 function sameReceipt(saved,receipt){
+ const extra=saved?.disposition==='discarded'?1:0;
  return saved&&typeof saved==='object'&&!Array.isArray(saved)
-  &&Object.keys(saved).length===FIELDS.length
+  &&Object.keys(saved).length===FIELDS.length+extra
   &&FIELDS.every(field=>Object.hasOwn(saved,field)&&saved[field]===receipt[field]);
 }
 
@@ -49,7 +51,7 @@ export async function releaseDeliveryReceipt(db,input){
  if(!row)return {receipt,released:false};
  let saved;
  try{saved=JSON.parse(row.value);}catch{throw conflict('Stored desktop delivery receipt is invalid');}
- if(!sameReceipt(saved,receipt))throw conflict('Desktop delivery acknowledgment conflicts with accepted result');
+ if(!sameReceipt(saved,receipt))throw conflict('Desktop delivery acknowledgment conflicts with the settled result');
  const result=await db.prepare(`DELETE FROM metadata WHERE key=?1 AND value=?2
   AND EXISTS (SELECT 1 FROM metadata WHERE key='desktop_workspace_id' AND value=?3)`)
   .bind(key,row.value,receipt.workspaceId).run();
@@ -59,6 +61,6 @@ export async function releaseDeliveryReceipt(db,input){
  if(!latest)return {receipt,released:false};
  let current;
  try{current=JSON.parse(latest.value);}catch{throw conflict('Stored desktop delivery receipt is invalid');}
- if(!sameReceipt(current,receipt))throw conflict('Desktop delivery acknowledgment conflicts with accepted result');
+ if(!sameReceipt(current,receipt))throw conflict('Desktop delivery acknowledgment conflicts with the settled result');
  throw conflict('Desktop delivery acknowledgment could not release its receipt');
 }

@@ -17,6 +17,7 @@ import {createOutboxRecovery} from '../server/outbox-recovery.mjs';
 import {createDesktopReadiness} from '../server/desktop-readiness.mjs';
 import {sourceDelegationVersionFromEnvironment} from '../public/core/source-delegation-gate.mjs';
 import {createFileOutbox} from '../server/file-outbox.mjs';
+import {createFileJournal} from '../server/claim-journal-file.mjs';
 import {createCloudRequest,normalizedCloudOrigin} from '../server/delivery-binding.mjs';
 const deliveryReceiptVersion=0;
 const stopMessageOptions={pendingPath:'.inno/desktop-pending.json',versioned:deliveryReceiptVersion===1};
@@ -40,7 +41,9 @@ const contextAccess=createContextAccess();
 const runner=createCodexRunner({contextAccess,contextUrl:'http://127.0.0.1:4175/api/desktop/context',spawnProcess:spawnCodex,modelCatalog:createModelCatalog({spawnProcess:spawnCodex,env:withoutApiEnvironment(),cwd:root}),cwd:path.join(privateDir,'desktop-runs'),managedDelivery:true,sourceDelegationVersion:sourceDelegationVersionFromEnvironment(process.env)});
 let lock;try{lock=await acquireBridgeLock();}catch(error){const message=startupPortMessage(error);if(!message)throw error;console.error(message);process.exit(1);}
 const readDeliveryBinding=async()=>({origin:endpoint,workspaceId:(await request('/api/desktop/identity')).workspaceId});
-const bridge=createDesktopBridge({deliveryReceiptVersion,request,runner,outbox,readDeliveryBinding,beforeClaim:createDesktopReadiness({runner,runRoot:path.join(privateDir,'desktop-runs')}),onError:error=>console.error(deliveryStopMessage(error,stopMessageOptions))});
+// The claim journal is used only with delivery receipts (version 1).
+const journal=deliveryReceiptVersion===1?createFileJournal(path.join(privateDir,'desktop-claim.json')):undefined;
+const bridge=createDesktopBridge({deliveryReceiptVersion,request,runner,outbox,journal,readDeliveryBinding,beforeClaim:createDesktopReadiness({runner,runRoot:path.join(privateDir,'desktop-runs')}),onError:error=>console.error(deliveryStopMessage(error,stopMessageOptions)),onDiscarded:()=>console.log('INNO: 중지된 실행의 결과는 적용하지 않고 정리했습니다.')});
 const outboxRecovery=createOutboxRecovery(pendingPath,{withExclusive:work=>bridge.recoveryMaintenance(work)});
 const localTokenPath=path.join(privateDir,'desktop-access-token.txt');
 if(!existsSync(localTokenPath))writeFileSync(localTokenPath,randomBytes(32).toString('base64url'),{mode:0o600});

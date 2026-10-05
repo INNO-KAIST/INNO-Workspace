@@ -33,7 +33,8 @@ export function createCloudRequest({endpoint,token,fetchFn=fetch}){
    headers:{authorization:`Bearer ${token}`,'content-type':'application/json',...(workspaceId!==undefined?{'x-inno-workspace-id':workspaceId}:{}),...(deliveryReceiptVersion===1?{'x-inno-delivery-receipt-version':'1'}:{})},
    body:raw,signal:AbortSignal.timeout(20000),redirect:'error',
   });
-  if(!response.ok)throw Object.assign(Error(`INNO HTTP ${response.status}`),{status:response.status});
+  // fromResponse separates a real cloud answer from local and transport failures.
+  if(!response.ok)throw Object.assign(Error(`INNO HTTP ${response.status}`),{status:response.status,fromResponse:true});
   return response.json();
  };
 }

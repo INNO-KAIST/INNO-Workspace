@@ -47,6 +47,16 @@
         <label><input id="confirm-drain" type="checkbox" disabled> 표시된 저장 결과를 전달하겠습니다.</label>
         <button id="drain" type="button" disabled>저장 결과 전달</button>
       </div>
+      <div class="action">
+        <h3>이전 형식 결과 정리</h3>
+        <p>전달 확인 기록이 없는 이전 형식 결과는 자동으로 처리하지 않습니다. 먼저 클라우드에서 이 결과를 아직 적용할 수 있는지 확인하세요. 적용할 수 없는 결과는 지우지 않고 같은 폴더에 보관 파일로 옮깁니다.</p>
+        <button id="legacy-check" type="button" disabled>클라우드 상태 확인</button>
+        <p id="legacy-state" class="support" role="status" aria-live="polite">확인 전</p>
+        <label><input id="confirm-legacy-deliver" type="checkbox" disabled> 이 이전 형식 결과를 이전 방식으로 전달하겠습니다.</label>
+        <button id="legacy-deliver" type="button" disabled>이전 형식 결과 전달</button>
+        <label><input id="confirm-legacy-archive" type="checkbox" disabled> 적용할 수 없는 이 결과를 보관 파일로 옮기겠습니다.</label>
+        <button id="legacy-archive" type="button" disabled>보관 파일로 옮기기</button>
+      </div>
     </section>
   </main>
   <script type="module" src="./recovery.mjs"></script>

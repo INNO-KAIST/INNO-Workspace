@@ -44,6 +44,7 @@ export function createOutboxRecovery(pendingPath,{fs=nodeFs,withExclusive}={}){
    if(id(record.taskId)&&['complete','fail'].includes(record.action)&&id(record.input?.executionId)&&Number.isSafeInteger(record.input?.generation)&&record.input.generation>0){
     meta.phase='legacy';meta.owner=safeOwner(record);
     if(record.binding!==undefined)try{meta.binding=checkedDeliveryBinding(record.binding);}catch{/* diagnostic only; never promoted */}
+    return {meta,identity:initial,legacy:record};
    }
    return {meta,identity:initial};
   }
@@ -82,6 +83,37 @@ export function createOutboxRecovery(pendingPath,{fs=nodeFs,withExclusive}={}){
     if(pair.temporary.meta.exists||!['pending','ack_pending'].includes(pair.pending.meta.phase)||pair.pending.meta.sha256!==expectedHash)throw conflict();
     return pair.pending.record;
    }catch{throw conflict();}
+  },
+  // A legacy (protocol 0, receipt-less) saved result. It is never promoted or treated as
+  // accepted; the caller checks the Worker and either delivers it the old way or archives it.
+  async readLegacy(hash){
+   if(typeof hash!=='string'||!HEX.test(hash))throw conflict();
+   try{
+    const pair=await readPair();
+    if(pair.temporary.meta.exists||pair.pending.meta.phase!=='legacy'||pair.pending.meta.sha256!==hash)throw conflict();
+    return pair.pending.legacy;
+   }catch{throw conflict();}
+  },
+  // Moves the exact legacy file aside (same directory, never deleted) once `allowed`, a
+  // Worker check run under the same lock, confirms it can no longer be applied.
+  async archiveLegacy(input,{allowed}={}){
+   if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).length!==2||input.confirm!==true||typeof input.pendingHash!=='string'||!HEX.test(input.pendingHash)||typeof allowed!=='function')
+    throw Object.assign(Error('Invalid legacy archive confirmation'),{status:400});
+   const archivePath=pendingPath+'.legacy-'+input.pendingHash.slice(0,16)+'.json';let committed;
+   try{
+    await withExclusive(async()=>{
+     if(committed)return committed;
+     const before=await readPair();
+     if(before.temporary.meta.exists||before.pending.meta.phase!=='legacy'||before.pending.meta.sha256!==input.pendingHash||fs.existsSync(archivePath))throw conflict();
+     if(await allowed(before.pending.legacy)!==true)throw conflict();
+     const after=await readPair();if(!unchanged(before,after))throw conflict();
+     // Rename replaces an existing target, so check again after the awaited Worker call.
+     if(fs.existsSync(archivePath))throw conflict();
+     fs.renameSync(pendingPath,archivePath);committed={archived:true,archive:path.basename(archivePath)};return committed;
+    });
+   }catch{if(!committed)throw conflict();committed={...committed,recoveryLockUncertain:true};}
+   if(!committed)throw conflict();
+   return committed;
   },
   async inspect(){
    try{const pair=await readPair();return {pending:pair.pending.meta,temporary:pair.temporary.meta,canPromote:await permitted(pair)};}catch{throw conflict();}

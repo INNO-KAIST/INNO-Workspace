@@ -145,6 +145,8 @@
 
 ### H4. 결과 전달 복구의 재시작 안전성 및 운영 활성화 (SRC-02,05,06, REL-01 / 높음)
 
+**2026-10-05 갱신:** 아래 남은 핵심 1~4를 구현·독립 검증했다(커밋 전, 계획 docs/superpowers/plans/2026-10-05-delivery-journal.md). 5는 준비 문서 docs/DELIVERY-ACTIVATION.md만 작성했고, 활성화는 사용자 승인 대기다. 아래는 당시 기록이다.
+
 **구현됨:** receipt 식별/원자 결과 수락/예약/ACK, 기존 브리지 재전송, `.tmp` 점검/해시 확인 명시 채택, 명시 drain, pause/unsafe 서비스 유지, 별도 loopback 복구 UI(Task3n), 합성·파일·브라우저 검증. **기본 protocol은 여전히0이다.**
 
 **남은 핵심:**

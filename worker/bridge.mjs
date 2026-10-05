@@ -54,7 +54,7 @@ export class CloudBridge {
     const t=JSON.parse(row.body);
     if(!DESKTOP_PROVIDERS.includes(t.checkpoint?.provider))return null;
     if(t.attachments.length)return null;
-    try{return await this.store.claimExecution(t.id,{provider:t.checkpoint.provider,expectedVersion:t.version,leaseMs:DESKTOP_EXECUTION_LEASE_MS},claimOptions);}catch(e){if(e instanceof ConflictError&&e.code!=='DESKTOP_DELIVERY_CAPACITY')return null;throw e;}
+    try{return await this.store.claimExecution(t.id,{provider:t.checkpoint.provider,expectedVersion:t.version,leaseMs:DESKTOP_EXECUTION_LEASE_MS},claimOptions);}catch(e){if(e instanceof ConflictError&&e.code!=='DESKTOP_DELIVERY_CAPACITY'&&e.code!=='DESKTOP_CLAIM_NONCE_USED')return null;throw e;}
   }
   async seen(){
     const now=Date.parse(this.store.now());
