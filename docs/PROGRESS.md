@@ -1241,3 +1241,41 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 남김:
   - 실제 실행에서 같은 작업의 선택 전후 비교(H3)
   - 작업 본문 총량 상한(H9)
+
+### 2026-10-06 릴리스(H10 재감사·H1·H2)와 H3 실구독 긴 문맥 확인
+- 사용자 결정:
+  - 배포를 미리 승인했다("배포는 미리 승인해줄게").
+  - push와 Worker 배포 권한을 허용했다.
+  - 연결기 종료와 재시작은 사용자가 했다.
+- 사전 점검(읽기만):
+  - 운영 작업 0. 데스크톱 연결기는 유휴였고 미전달 결과·journal이 없었다.
+  - wrangler.jsonc·D1 마이그레이션·워크플로 변경 없음. 롤백 기준 Worker는 72489b7a다.
+  - 호환성: 배포된 연결기 코드(cf3bcd5)를 새 Worker와 함께 메모리에서 실행했다. receipt 완료·ACK와 한도 실패가 정상이었고, 남은 것이 없었다.
+- 반영:
+  - GitHub main=codex/source-release=afaecd6(9cda3cd, b95ad1a, afaecd6). Verify 2건 success.
+  - Cloudflare Worker 10d54891-9764-4bca-afdc-a504237a875a.
+  - Pages "Publish static workspace" 37343269634 success. Worker와 Pages 자산 버전 모두 context-metrics-20261006, 새 모듈 200.
+  - 운영 확인: 384KB를 넘는 요청은 400(384KB 안내)으로 거절됐고 작업이 생기지 않았다(작업 수 24→24).
+- 데스크톱:
+  - 사용자가 연결기를 종료했다. 4174/4175 해제와 미전달 결과·journal 없음을 확인했다.
+  - 메인 체크아웃(codex/desktop-release)을 cf3bcd5에서 afaecd6으로 fast-forward했다.
+  - 사용자가 탐색기로 재시작했다. 창에 `Delivery receipts: on`이 보였고, 로컬 화면 자산은 context-metrics-20261006, 클라우드에서 online이다.
+- H3 실구독 시험(승인 범위: Codex 2회, Claude 1회. 합성 내용, 도구·위임은 인계만 허용). 작업 eb38d396…:
+  1. Codex: 암호 단어가 든 진행 기록(메시지 1)을 쓰고 Claude로 인계했다(codex->claude).
+     - 입력 19615 토큰(캐시 12416).
+  2. Claude:
+     - 암호 단어 없이 요약했다(메시지 2).
+     - MCP로 기준(basis)을 읽고, 메시지 1을 참조하는 resumeState로 완료했다.
+     - 클라우드 재조회 계수: 3회 873B. 운영에서 Worker 계수와 완료 시 병합이 동작함을 확인했다. 사용량은 보고되지 않았다(null).
+  3. Codex(사용자 질문 뒤):
+     - 선택 전달이 적용됐다. selected_ready, 생략 1건, 작업 이력 4955B(전문 6371B).
+     - 생략 원문을 1회 다시 읽었다(응답 2641B). 답은 암호 단어와 정확히 일치했다.
+     - 입력 42483 토큰(캐시 33024).
+  - 의미:
+    - 실제 Codex 샌드박스의 로컬 조회 helper, Claude의 MCP 조회, resumeState 생성→서버 해시 검증(source_matched)→선택 전달→재조회 복구가 종단으로 동작했다.
+    - 이번 사례는 생략된 원문이 답에 꼭 필요한 질문이었다. 그래서 초기 전달 감소(1416B)보다 재조회(2641B)가 커서 바이트 총량이 늘었다. 도구 왕복 때문에 입력 토큰도 컸다(다른 실행과 직접 비교는 하지 않는다).
+    - 선택 전달은 생략 원문이 필요 없을 때만 절약된다. 이 판단은 계측(H2)으로 실행별로 확인할 수 있다.
+  - 정리 확인:
+    - 운영 D1에 context_read·desktop_reservation·desktop_receipt 0. desktop_claim 표지 4는 24시간 뒤 정리된다.
+    - 데스크톱 outbox·journal 없음.
+- 발견(후속): Codex 인계(handoff) 단계의 사용량 이력 항목에는 전달 기록이 없다. 인계 경로는 usageHistory에 contextDelivery를 넘기지 않는다.
