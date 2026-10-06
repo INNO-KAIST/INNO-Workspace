@@ -1,6 +1,7 @@
 import {prepareTaskMaterials} from './core/source-materials.mjs';
 import {taskNearLimit} from './core/task-size.mjs';
 import {formatClock,formatShortDateTime} from './core/time-format.mjs';
+import {providerCards,renderProviderCards} from './provider-management-ui.mjs';
 import {artifactCheckSummary,sanitizeArtifactChecks} from './core/artifact-checks.mjs';
 import {usageRows,usageSummary} from './core/execution-usage.mjs';
 import {formatUsagePhase,formatUsageTransition,formatWallElapsed,formatRequestedModel} from './core/usage-presentation.mjs';
@@ -120,7 +121,7 @@ function renderPlan(){
  $('agent-plan').innerHTML=plan.length?plan.map((p,i)=>`<div class="agent-item ${p.status==='running'?'running':''}"><span class="agent-number">${p.status==='completed'||p.status==='done'?'✓':String(i+1).padStart(2,'0')}</span><div><strong>${esc(p.label||p.role)}</strong><small>${esc(statusNames[p.status]||'제안')} ${p.role&&p.label&&p.role!==p.label?`· ${esc(p.role)}`:''}</small></div></div>`).join(''):'<div class="panel-empty"><div class="empty-orbit">◇</div><p>요청에 맞는 역할을<br>필요한 만큼 구성합니다.</p></div>';
  const checkpoint=typeof t?.checkpoint==='string'?t.checkpoint:t?.checkpoint?.content;
  $('checkpoint-card').innerHTML=checkpoint?`<span>↻</span><div><strong>저장된 재개 지점</strong><p>${esc(checkpoint)}</p></div>`:'<span>↻</span><div><strong>맥락은 계속 이어집니다</strong><p>작업 기록과 결정 사항을 저장합니다.<br>원본은 필요할 때 다시 연결하세요.</p></div>';
- const handoffs=t?.checkpoint?.handoffHistory||[];if(handoffs.length){const box=document.createElement('div');box.className='small-copy';const heading=document.createElement('strong');heading.textContent='제공자 인계 기록 ('+handoffs.length+'/2)';box.append(heading);for(const h of handoffs){const line=document.createElement('p');line.textContent=handoffLine(h);box.append(line);}if(t.status==='queued'){const pending=document.createElement('p');pending.textContent=queuedText(t.checkpoint.provider);box.append(pending);}$('checkpoint-card').lastElementChild.append(box);}
+ const handoffs=t?.checkpoint?.handoffHistory||[];if(handoffs.length){const box=document.createElement('div');box.className='small-copy';const heading=document.createElement('strong');heading.textContent='제공자 인계 기록 ('+handoffs.length+'/2)';box.append(heading);for(const h of handoffs){const line=document.createElement('p');line.textContent=handoffLine(h);box.append(line);}if(t.status==='queued'){const pending=document.createElement('p');pending.textContent=queuedText(t.checkpoint.provider,state().capabilities);box.append(pending);}$('checkpoint-card').lastElementChild.append(box);}
  const delivery=contextDeliveryText(t?.checkpoint?.contextDelivery);if(delivery){const line=document.createElement('p');line.className='small-copy';line.textContent=delivery;$('checkpoint-card').lastElementChild.append(line);}
  const historyRows=contextHistoryRows(t);if(historyRows.length>1){const box=document.createElement('details');box.className='small-copy';box.open=contextHistoryOpen.has(t.id);box.addEventListener('toggle',()=>{if(box.open)contextHistoryOpen.add(t.id);else contextHistoryOpen.delete(t.id);});const summary=document.createElement('summary');summary.textContent=`실행별 문맥 전달 (최근 ${historyRows.length}회, 이 작업 안에서만 비교)`;box.append(summary);for(const row of historyRows){const line=document.createElement('p');line.textContent=row;box.append(line);}$('checkpoint-card').lastElementChild.append(box);}
  const pluginLine=pluginDeliveryText(t?.checkpoint?.pluginDelivery);if(pluginLine){const line=document.createElement('p');line.className='small-copy';line.textContent=pluginLine;$('checkpoint-card').lastElementChild.append(line);}
@@ -131,6 +132,8 @@ function renderPlan(){
  renderDelegation();
 }
 function renderControls(){
+ for(const option of providerOptions(state().capabilities)){const element=[...$('provider').options].find(item=>item.value===option.value);if(element){element.textContent=option.label;element.disabled=!!option.disabled;}}
+ renderProviderManagement();
  $('storage-button').hidden=!state().capabilities?.runStorage;
  $('local-records-button').hidden=!state().capabilities?.localRecordImport;
  const t=current(),c=state().capabilities||{},provider=$('provider').value,controls=taskControlState(t,state().tasks,busy);
@@ -154,6 +157,27 @@ function syncStatus(error=client?.syncError){const s=$('sync-status');s.classNam
 function sourceResultText(result){return ({storage_error:'원본 실행 기록 저장소를 사용할 수 없습니다. 브라우저 저장 공간과 탭 잠금을 확인하세요.',capacity:'원본 실행 보류 기록이 가득 찼습니다. 완료된 작업의 서버 상태를 확인하세요.',uncertain:'실행 시작 응답을 확인하지 못했습니다. 서버 실행 종료 확인 후 복구하세요.',source_error:'원본 읽기 또는 선택 범위 확인에 실패했습니다. 같은 원본을 다시 연결하세요.',sync_error:'최신 서버 상태를 확인하지 못해 원본 전달을 보류합니다.'})[result?.status]||'';}
 async function tickSource(){if(sourceTickRunning||!client?.remote||state().capabilities?.sourceDelegationVersion!==1||busy)return;sourceTickRunning=true;try{const result=await sourceCoordinator.tick();sourceStatus=sourceResultText(result);renderSourceExecution();}catch{sourceStatus='원본 실행 상태를 확인하지 못했습니다. 다음 동기화에서 다시 확인합니다.';renderSourceExecution();}finally{sourceTickRunning=false;}}
 function render(){renderList();renderMessages();renderAttachments();renderSourceExecution();renderPlan();renderControls();if(view==='usage')renderUsage();}
+// PRV-06: provider cards with the on/off switch, on the 연결 앱 page.
+// An armed "turn off" lapses after 20 s, so a later single click never turns a provider off.
+let providerArmed=null,providerRendered='',providerFocus=null;
+const armedProvider=()=>providerArmed&&Date.now()-providerArmed.at<20_000?providerArmed.id:null;
+function renderProviderManagement(){
+ const root=$('provider-grid');if(!root)return;
+ const capabilities=state().capabilities||{},cards=providerCards({tasks:state().tasks,capabilities,desktop:state().desktop});
+ const canToggle=!!client?.remote&&Number.isSafeInteger(capabilities.providerSettingsVersion);
+ // The 5-second refresh calls this; replace the buttons only when something shown changed.
+ const key=JSON.stringify([cards,armedProvider(),busy,canToggle]);if(key===providerRendered)return;providerRendered=key;
+ // The switch that was just used gets focus back once the request finishes (it is disabled meanwhile).
+ const focusId=busy?null:providerFocus;if(!busy)providerFocus=null;
+ renderProviderCards(root,cards,{busy,armed:armedProvider(),canToggle,focusId,onToggle:card=>guarded(async()=>{
+  const latest=state().capabilities||{},off=latest.disabledProviders??[],disabled=card.enabled?[...off,card.id]:off.filter(id=>id!==card.id);
+  // Turning off takes a second click after the card explains what it means.
+  if(card.enabled&&armedProvider()!==card.id){providerArmed={id:card.id,at:Date.now()};return;}
+  providerArmed=null;providerFocus=card.id;
+  await client.request('/api/providers/settings',{disabled,expectedVersion:latest.providerSettingsVersion});
+  await refresh();toast(card.enabled?`${card.label} 실행기를 사용 중지했습니다.`:`${card.label} 실행기를 다시 사용합니다.`);
+ })});
+}
 async function refresh(){if(refreshing||!client)return;refreshing=true;const viewKey=()=>JSON.stringify([state().revision,state().capabilities,state().desktop?.online,state().desktop?.notReady,state().localDesktop]);const before=viewKey();try{await client.refresh();syncStatus();if(before!==viewKey())render();else {renderControls();renderSourceExecution();}if(!busy)void tickSource();}catch(e){syncStatus(e);}finally{refreshing=false;}}
 async function act(action,extra={}){const t=current();if(!t)return;await client.action(t.id,{action,expectedVersion:t.version,...extra});syncStatus();render();}
 async function resumeDelegation(){const t=current();if(!t?.delegation)return;await client.resumeDelegation(t.id,t.version);await refresh();toast(t.delegation.state==='reviewing'?'결과 검토를 다시 실행하도록 요청했습니다.':t.status==='paused'?'완료된 하위 결과를 유지하고 작업을 재개했습니다.':'실패한 하위 작업만 다시 실행하도록 요청했습니다.');}

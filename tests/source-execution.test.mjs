@@ -70,3 +70,15 @@ test('duplicate journal task IDs fail closed across reconnect and recreation',as
  assert.equal(x.services.attemptStorage.getItem(key),damaged);
  assert.deepEqual(x.counts(),{sends:1,reads:1});
 });
+
+// PRV-06: a provider that is turned off is not a source dispatch target, and a refusal because
+// it was just turned off started nothing: no uncertain hold, so it resumes when turned on.
+test('a turned-off provider is skipped, and its refusal leaves no uncertain hold (PRV-06)',async()=>{
+ const off=fixture();off.capabilities.disabledProviders=['claude'];
+ assert.equal(sourceExecutionReadiness(off.tasks[1],off,()=>true).reason,'provider_disabled');
+ const x=setup();let runs=0;
+ x.client.run=async()=>{runs++;if(runs===1)throw Object.assign(new Error('turned off'),{status:409,code:'PROVIDER_DISABLED'});};
+ const c=new SourceExecutionCoordinator(x.services);
+ assert.equal((await c.tick()).status,'waiting');assert.equal(c.entries().length,0);
+ assert.equal((await c.tick()).status,'submitted');assert.equal(runs,2);
+});

@@ -1,3 +1,4 @@
+import {providerEnabled} from '../public/core/provider-settings.mjs';
 import {ContextRetrievalRequiredError} from '../public/core/context-errors.mjs';
 import {ConflictError} from '../public/core/tasks.mjs';
 import {failureInput,runnerError} from '../public/core/failures.mjs';
@@ -23,6 +24,8 @@ export async function dispatchRemote({store,taskId,adapterFor,waitUntil,onSettle
   // A Claude sibling of the same batch holds the slot: stay queued (H7).
   if(task.parentTaskId&&typeof store.routineSiblingBusy==='function'&&await store.routineSiblingBusy(task))return task;
   const provider=task.checkpoint.provider;adapter=adapterFor(provider);
+  // PRV-06: a turned-off provider fires nothing; the task waits until it is turned on.
+  if(typeof store.providerSettings==='function'&&!providerEnabled(await store.providerSettings(),provider))return task;
   if(!adapter?.configured)return store.markWaiting(task.id,{expectedVersion:task.version,provider,reason:adapter?.unavailableReason??'Remote provider is not configured.'});
   try{claim=await store.claimExecution(task.id,{provider,expectedVersion:task.version});break;}
   catch(error){if(error?.code==='ROUTINE_SIBLING_BUSY')return task;if(!(error instanceof ConflictError)||attempt===2)throw error;task=await store.requireTask(task.id);}

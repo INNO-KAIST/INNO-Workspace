@@ -1,4 +1,5 @@
 import {assertRunAdmission} from '../public/core/task-size.mjs';
+import {providerDisabledError,providerEnabled} from '../public/core/provider-settings.mjs';
 import {assertProviderId,providerManifest,providerTransport,providersByTransport} from '../public/core/providers.mjs';
 import {sourceDelegationVersionFromEnvironment} from '../public/core/source-delegation-gate.mjs';
 import {deliveryReceiptVersionFromEnvironment} from '../public/core/delivery-receipt-gate.mjs';
@@ -151,7 +152,8 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
         }
 
         if (request.method === 'GET' && pathname === '/api/state') {
-          return responseJson({...await store.getState(capabilities,parseRevision(url.searchParams.get('since')),{delta:url.searchParams.get('delta')==='1'}), desktop: await bridge.presence()}, 200, headers);
+          const providerSettings=await store.providerSettings();
+          return responseJson({...await store.getState({...capabilities,disabledProviders:providerSettings.disabled,providerSettingsVersion:providerSettings.version},parseRevision(url.searchParams.get('since')),{delta:url.searchParams.get('delta')==='1'}), desktop: await bridge.presence()}, 200, headers);
         }
         if (request.method === 'GET' && pathname === '/api/model-discovery') {
           // The common /api/* gate above already authenticates; keep this check explicit.
@@ -215,6 +217,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
           const options=withClaimNonce(claimOptions,input);if(options?.claimNonce)await sweepClaimMarkers(store.db,store.now());
           return responseJson({claim: await hydrate(await bridge.claim(options)),workspaceId:desktopWorkspaceId,...claimConfirmation,...(options?.claimNonce?{claimNonce:options.claimNonce}:{})}, 200, headers);
         }
+        if(request.method==='POST'&&pathname==='/api/providers/settings')return responseJson({settings:await store.updateProviderSettings(await body(request))},200,headers);
         if(request.method==='POST'&&pathname==='/api/desktop/presence')return responseJson({desktop:await bridge.reportNotReady(await body(request))},200,headers);
         if(request.method==='POST'&&bridgeMatch){
           const id=decodeURIComponent(bridgeMatch[1]), input=await body(request);
@@ -306,6 +309,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
           const transport=providerTransport(input.provider);
           // H9-2: a run starts only while its result is sure to fit in the task.
           assertRunAdmission(await store.requireTask(taskId));
+          if(!providerEnabled(await store.providerSettings(),input.provider))throw providerDisabledError(input.expectedVersion);
           if(transport==='routine_fire'){
             const task=await store.requireTask(taskId);
             if((task.parentTaskId||task.delegation?.state==='queued_for_review')&&materials.length&&(sourceDelegationVersion!==1||!task.attachments?.length))throw new ValidationError('Declared source delegation is not enabled for this execution');
@@ -327,7 +331,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
       } catch (error) {
         const status = error?.statusCode ?? 500;
         const result = {error: status === 500 ? 'internal server error' : error.message};
-        if(['DESKTOP_DELIVERY_CAPACITY','ROUTINE_SIBLING_BUSY','TASK_BODY_LIMIT'].includes(error?.code))result.code=error.code;
+        if(['DESKTOP_DELIVERY_CAPACITY','ROUTINE_SIBLING_BUSY','TASK_BODY_LIMIT','PROVIDER_DISABLED'].includes(error?.code))result.code=error.code;
         if (error instanceof ConflictError && Number.isInteger(error.currentVersion)) result.currentVersion = error.currentVersion;
         return responseJson(result, status, headers);
       }

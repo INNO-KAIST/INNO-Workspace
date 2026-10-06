@@ -9,6 +9,7 @@ import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execu
 import {ownedContextDelivery,suppliedContextDelivery,withRetrieval} from '../public/core/context-delivery.mjs';
 import {boundedLocalExecution} from '../public/core/local-execution.mjs';
 import {serializeTaskBody,taskBodyBytes,TASK_GROWTH_MAX_BYTES} from '../public/core/task-size.mjs';
+import {normalizeProviderSettings,nextProviderSettings,providerDisabledError,providerEnabled} from '../public/core/provider-settings.mjs';
 // Only the desktop runner of a bounded (evaluation) execution may supply its own local
 // observation; it is kept as evidence and never trusted from other callers (H6).
 const boundedLocalFor=(task,input,allowed)=>allowed&&task?.evaluationBudget&&input?.localExecution!==undefined?boundedLocalExecution(input.localExecution):null;
@@ -388,6 +389,8 @@ export class D1TaskStore {
     assertProviderId(provider);
     if (!Number.isFinite(leaseMs) || leaseMs < 1_000 || leaseMs > 60 * 60_000) throw new ValidationError('invalid execution lease');
     if(Object.keys(input).some(key=>key!=='executionBudgetVersion'&&(/budget|grant|reservation/i.test(key)||['jobId','phase','maxDurationMs','deadlineAtMs','deliveryReceiptVersion','workspaceId'].includes(key))))throw new ValidationError('unsupported execution budget option');
+    // PRV-06: a provider that was turned off starts nothing new; queued work waits.
+    if(!providerEnabled(await this.providerSettings(),provider))throw providerDisabledError(expectedVersion);
     await this.pauseOverLimit(id,expectedVersion);
     const authorization={};
     if(deliveryReceiptVersion===1)authorization[CLAIM_RESERVATION]={workspaceId:options.workspaceId,...(options.claimNonce!==undefined?{claimNonce:options.claimNonce}:{})};
@@ -432,6 +435,24 @@ export class D1TaskStore {
         },
       };
     },authorization).then(task => ({...claim, task}));
+  }
+
+  // PRV-06: provider on/off settings, changed only from the version that was read.
+  // A stored value that cannot be read counts as version 0 with every provider on, and the
+  // next change replaces it; the swap compares the exact text that was read.
+  async providerSettingsRow(){
+    const row=await this.db.prepare("SELECT value FROM metadata WHERE key='provider_settings'").first();
+    let settings;try{settings=normalizeProviderSettings(row?JSON.parse(row.value):null);}catch{settings=normalizeProviderSettings(null);}
+    return {settings,raw:row?row.value:null};
+  }
+  async providerSettings(){return (await this.providerSettingsRow()).settings;}
+  async updateProviderSettings(input){
+    const {settings:current,raw}=await this.providerSettingsRow(),next=nextProviderSettings(current,input),text=JSON.stringify(next);
+    const result=raw===null
+      ?await this.db.prepare("INSERT INTO metadata (key,value) VALUES ('provider_settings',?1) ON CONFLICT(key) DO NOTHING").bind(text).run()
+      :await this.db.prepare("UPDATE metadata SET value=?1 WHERE key='provider_settings' AND value=?2").bind(text,raw).run();
+    if(Number(result?.meta?.changes??0)!==1)throw new ConflictError('Provider settings changed; reload and try again',(await this.providerSettings()).version);
+    return next;
   }
 
   // H9-2: no execution starts above the growth limit, whatever queued it (run route, desktop

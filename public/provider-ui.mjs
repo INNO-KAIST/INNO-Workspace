@@ -7,7 +7,9 @@ const lower=value=>String(value||'').toLowerCase();
 
 export function providerName(value){return providerLabel(lower(value))??(value||'제공자 미기재');}
 
-export function providerOptions(){return PROVIDER_IDS.map(id=>({value:id,label:providerManifest(id).ui.option}));}
+// PRV-06: a provider the person turned off stays listed but cannot be chosen.
+const turnedOff=(provider,capabilities)=>(capabilities?.disabledProviders??[]).includes(lower(provider));
+export function providerOptions(capabilities){return PROVIDER_IDS.map(id=>({value:id,label:providerManifest(id).ui.option+(turnedOff(id,capabilities)?' (사용 중지)':''),...(turnedOff(id,capabilities)?{disabled:true}:{})}));}
 
 // Availability is any of the server state flags the manifest declares.
 export function providerAvailable(provider,capabilities){
@@ -24,15 +26,18 @@ export function executorStatusText(provider,capabilities,{desktopOnline=false,de
  const c=capabilities||{},id=lower(provider),label=providerName(provider);
  if(usesTransport(id,'desktop_bridge')){
   if(!providerAvailable(id,c))return `이 서버에 ${label} 실행기가 연결되지 않았습니다.`;
+  if(turnedOff(id,c))return `${label} 실행기는 사용 중지 상태입니다. 연결 앱의 AI 실행기에서 다시 켤 수 있습니다.`;
   if(desktopOnline&&Object.hasOwn(NOT_READY_TEXT,desktopNotReady??''))return NOT_READY_TEXT[desktopNotReady](label);
   if(c.desktopSources)return `같은 클라우드 작업 · 선택한 원본은 이 PC에서만 ${label}에 전달합니다.`;
   if(c.cloudCodex)return desktopOnline?'데스크톱 연결됨 · 같은 클라우드 작업에 결과를 저장합니다.':'데스크톱 오프라인 · 실행 요청을 대기열에 보관합니다.';
   return `이 서버의 ${label} 구독으로 실행합니다.`;
  }
+ if(providerAvailable(id,c)&&turnedOff(id,c))return `${label} 실행기는 사용 중지 상태입니다. 연결 앱의 AI 실행기에서 다시 켤 수 있습니다.`;
  return providerAvailable(id,c)?'연결된 클라우드 Routine으로 실행합니다.':`서버에 ${label} Routine 설정이 필요합니다.`;
 }
 
-export function queuedText(provider){
+export function queuedText(provider,capabilities){
+ if(turnedOff(provider,capabilities))return `${providerName(provider)} 사용 중지로 대기 중 · 다시 켜면 이어집니다.`;
  return usesTransport(lower(provider),'desktop_bridge')?`${providerName(provider)} 실행 대기 중 · 연결된 데스크톱이 켜져 있어야 이어집니다.`:`${providerName(provider)} 실행 연결 대기 중`;
 }
 

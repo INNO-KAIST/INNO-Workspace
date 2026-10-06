@@ -17,6 +17,8 @@ export function sourceExecutionReadiness(task,state,connected){
  }
  const c=state.capabilities||{};
  if(c.sourceDelegationVersion!==1)return no('unsupported');
+ // PRV-06: a provider the person turned off starts nothing; the task waits until it is on.
+ if((c.disabledProviders??[]).includes(provider))return no('provider_disabled');
  if(usesTransport(provider,'routine_fire')){
   if(!providerAvailable(provider,c))return no('provider_unavailable');
   // Claude children of one batch run one at a time (H7); the server enforces the same rule.
@@ -129,9 +131,9 @@ export class SourceExecutionCoordinator{
    catch{return {status:'uncertain',taskId:snapshot.id};}
    return {status:'submitted',taskId:snapshot.id};
   }catch(error){
-   // The server refused the claim because a Claude sibling holds the batch slot (H7):
-   // nothing started, so drop the hold and wait for the next tick.
-   if(dispatched&&sameSession()&&error?.status===409&&error.code==='ROUTINE_SIBLING_BUSY'){
+   // The server refused the claim because a Claude sibling holds the batch slot (H7) or the
+   // provider was turned off (PRV-06): nothing started, so drop the hold and wait.
+   if(dispatched&&sameSession()&&error?.status===409&&['ROUTINE_SIBLING_BUSY','PROVIDER_DISABLED'].includes(error.code)){
     try{await this.#journal(client,entries=>{const a=entries.get(snapshot.id);if(a?.version===snapshot.version&&a.status==='uncertain')entries.delete(snapshot.id);});}
     catch{return {status:'uncertain',taskId:snapshot.id};}
     return {status:'waiting',taskId:snapshot.id};
