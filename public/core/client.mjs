@@ -28,6 +28,12 @@ export function validateEndpoint(input) {
   return u.href.replace(/\/$/,'');
 }
 const blank=()=>({revision:0,tasks:[],usage:[],capabilities:{connected:false,localCodex:false,claudeRoutine:false,cloud:false}});
+// H9-3: between full reads the page asks only for changed tasks. A full read every 10
+// minutes, and on any count mismatch, repairs anything a delta could have missed.
+const FULL_REFRESH_MS=10*60_000;
+// The server's ORDER BY updated_at DESC, id ASC compares bytes, not locale order.
+const binary=(x,y)=>x<y?-1:x>y?1:0;
+const newestFirst=(a,b)=>binary(String(b.updatedAt??''),String(a.updatedAt??''))||binary(String(a.id),String(b.id));
 function database(){return new Promise((resolve,reject)=>{const r=indexedDB.open('inno-workspace',1);r.onupgradeneeded=()=>r.result.createObjectStore('state');r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});}
 async function localRead(){const db=await database();return new Promise((resolve,reject)=>{const r=db.transaction('state').objectStore('state').get('workspace');r.onsuccess=()=>{db.close();resolve(r.result||blank());};r.onerror=()=>{db.close();reject(r.error);};});}
 async function localMutate(update){
@@ -41,7 +47,7 @@ async function localMutate(update){
 const deliveryWorkspace=value=>typeof value==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
 const deliveryConnectionError=()=>Object.assign(Error('작업실 연결을 확인한 뒤 다시 시도하세요. 연결이 변경된 요청은 진행하지 않습니다.'),{status:409});
 export class WorkspaceClient {
-  constructor({baseUrl='',token='',remote=false,retryStorage}={}){this.baseUrl=validateEndpoint(baseUrl);this.token=token;this.remote=remote;this.state=blank();this.lastSync=null;this.syncError=null;this.refreshSequence=0;this.appliedSequence=0;this.syncedRevision=undefined;this.creationRetries=new CreationRetries(this.baseUrl+'\n'+token,retryStorage);}
+  constructor({baseUrl='',token='',remote=false,retryStorage,now=()=>Date.now()}={}){this.baseUrl=validateEndpoint(baseUrl);this.token=token;this.remote=remote;this.now=now;this.lastFullSync=-Infinity;this.state=blank();this.lastSync=null;this.syncError=null;this.refreshSequence=0;this.appliedSequence=0;this.syncedRevision=undefined;this.creationRetries=new CreationRetries(this.baseUrl+'\n'+token,retryStorage);}
   async request(path,body,options={}){
     if(!options||typeof options!=='object'||Array.isArray(options)||Object.keys(options).some(key=>!['workspaceId','deliveryReceiptVersion'].includes(key))||Object.keys(options).length&&(options.deliveryReceiptVersion!==1||!deliveryWorkspace(options.workspaceId)))throw deliveryConnectionError();
     const controller=new AbortController();const timeout=setTimeout(()=>controller.abort(),30000);
@@ -70,14 +76,25 @@ export class WorkspaceClient {
   }
   async refresh(){
     if(!this.remote){this.state={...blank(),...await localRead()};return this.state;}
-    const sequence=++this.refreshSequence,since=this.syncedRevision;
+    const sequence=++this.refreshSequence,since=this.syncedRevision,delta=Number.isSafeInteger(since)&&this.now()-this.lastFullSync<FULL_REFRESH_MS;
     try{
-      const s=await this.request('/api/state'+(Number.isSafeInteger(since)?'?since='+since:''));
+      const s=await this.request('/api/state'+(Number.isSafeInteger(since)?'?since='+since+(delta?'&delta=1':''):''));
       if(sequence<this.appliedSequence||(Number.isSafeInteger(s.revision)&&s.revision<this.state.revision))return this.state;
       if(s.unchanged){
         if(since===undefined||s.revision!==since||this.state.revision!==since)throw Error('동기화 변경 번호가 일치하지 않습니다. 다시 연결하세요.');
         const {unchanged,...metadata}=s;this.state={...this.state,...metadata};
-      }else{this.state={...blank(),...s};}
+      }else if(s.delta===true){
+        // Rows changed after s.since include every row changed after the state's revision, so
+        // an overlapping answer still merges; a task never goes back to an older version.
+        if(!delta||s.since!==since||s.since>this.state.revision||!Array.isArray(s.tasks)){this.syncedRevision=undefined;return this.refresh();}
+        const byId=new Map(this.state.tasks.map(task=>[task.id,task]));
+        for(const task of s.tasks){const existing=byId.get(task.id);if(!(existing?.version>task.version))byId.set(task.id,task);}
+        const tasks=[...byId.values()],versionSum=tasks.reduce((sum,task)=>sum+(Number.isSafeInteger(task.version)?task.version:0),0);
+        // Fewer tasks or a lower version sum than the server means a change was missed.
+        if(tasks.length<s.taskCount||Number.isSafeInteger(s.versionSum)&&versionSum<s.versionSum){this.syncedRevision=undefined;return this.refresh();}
+        const {delta:_delta,since:_since,taskCount:_count,versionSum:_sum,...metadata}=s;
+        this.state={...this.state,...metadata,tasks:tasks.sort(newestFirst)};
+      }else{this.state={...blank(),...s};this.lastFullSync=this.now();}
       this.syncedRevision=Number.isSafeInteger(s.revision)&&s.revision>=0?s.revision:undefined;
       this.appliedSequence=sequence;this.syncError=null;this.lastSync=Date.now();return this.state;
     }catch(error){

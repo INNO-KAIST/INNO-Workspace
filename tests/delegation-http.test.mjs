@@ -272,3 +272,16 @@ test('a review parent above the growth limit is paused like a user pause instead
  assert.equal(paused.status,'paused');assert.equal(paused.delegation.state,'paused');assert.equal(paused.delegation.epoch,parent.delegation.epoch+1);
  assert.equal(paused.notes.length,1_100_000);
 });
+// H9-3: the parent and every child written by one delegation batch are part of the next delta.
+test('children created by a delegation are part of the next delta',async t=>{
+ const f=await fixture(t);await f.post('/api/desktop/poll',{models:observedModels()});
+ const {task}=await f.post('/api/tasks',{prompt:'independent checks'});await f.post(`/api/tasks/${task.id}/run`,{provider:'codex',expectedVersion:1});
+ const {claim}=await f.post('/api/desktop/poll',{});
+ const before=await f.store.getState({});
+ await f.post(`/api/desktop/${task.id}/complete`,{...owner(claim),content:'planned',delegation:{independent:true,children}});
+ const delta=await f.store.getState({},before.revision,{delta:true});
+ const parent=await f.store.requireTask(task.id),ids=delta.tasks.map(item=>item.id);
+ assert.equal(delta.delta,true);assert.ok(ids.includes(task.id));
+ for(const child of parent.delegation.children)assert.ok(ids.includes(child.taskId),child.taskId);
+ assert.equal(delta.taskCount,(await f.store.listTasks()).length);
+});

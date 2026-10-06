@@ -60,9 +60,11 @@ CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
   version INTEGER NOT NULL,
   updated_at TEXT NOT NULL,
-  body TEXT NOT NULL
+  body TEXT NOT NULL,
+  rev INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS tasks_updated_at ON tasks(updated_at DESC);
+CREATE INDEX IF NOT EXISTS tasks_rev ON tasks(rev);
 CREATE TABLE IF NOT EXISTS usage (
   provider TEXT PRIMARY KEY,
   body TEXT NOT NULL
@@ -96,7 +98,7 @@ export class D1TaskStore {
       task.id=requestTaskId;task.creationRequestHash=await digestText(creationPayload(input));
       const body=serializeTaskBody(task,{growth:'grow'});
       await this.db.batch([
-        this.db.prepare('INSERT INTO tasks (id,version,updated_at,body) VALUES (?1,?2,?3,?4) ON CONFLICT(id) DO NOTHING').bind(task.id,task.version,task.updatedAt,body),
+        this.db.prepare("INSERT INTO tasks (id,version,updated_at,body,rev) VALUES (?1,?2,?3,?4,(SELECT value+1 FROM metadata WHERE key='revision')) ON CONFLICT(id) DO NOTHING").bind(task.id,task.version,task.updatedAt,body),
         this.db.prepare("UPDATE metadata SET value=value+1 WHERE key='revision' AND changes()=1"),
       ]);
       const stored=await this.requireTask(requestTaskId);
@@ -104,7 +106,7 @@ export class D1TaskStore {
       return stored;
     }
     await this.db.batch([
-      this.db.prepare('INSERT INTO tasks (id, version, updated_at, body) VALUES (?1, ?2, ?3, ?4)')
+      this.db.prepare("INSERT INTO tasks (id, version, updated_at, body, rev) VALUES (?1, ?2, ?3, ?4, (SELECT value+1 FROM metadata WHERE key='revision'))")
         .bind(task.id, task.version, task.updatedAt, serializeTaskBody(task,{growth:'grow'})),
       this.db.prepare("UPDATE metadata SET value = value + 1 WHERE key = 'revision'"),
     ]);
@@ -127,10 +129,27 @@ export class D1TaskStore {
     return result.results.map(row => JSON.parse(row.body));
   }
 
-  async getState(capabilities = {}, since) {
+  // H9-3: with delta, a page that holds revision `since` gets only tasks written after it
+  // (each write stores the revision it creates in tasks.rev) plus the task count to check
+  // its merge. A page that does not ask for a delta still gets every task.
+  async getState(capabilities = {}, since, {delta = false} = {}) {
     const row=await this.db.prepare("SELECT value FROM metadata WHERE key = 'revision'").first();
     const revision=Number(row?.value??0);
     if(Number.isSafeInteger(since)&&since>=0&&since===revision)return {revision,unchanged:true,capabilities};
+    // The version sum lets the page notice an update it missed (every write raises a version).
+    if(delta&&Number.isSafeInteger(since)&&since>=0&&since<revision){
+      try{
+        const [changed,usage,count]=await Promise.all([
+          this.db.prepare('SELECT body FROM tasks WHERE rev > ?1 ORDER BY updated_at DESC, id ASC').bind(since).all(),
+          this.db.prepare('SELECT body FROM usage ORDER BY provider').all(),
+          this.db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(version),0) AS v FROM tasks').first(),
+        ]);
+        return {revision,delta:true,since,taskCount:Number(count?.n??0),versionSum:Number(count?.v??0),tasks:changed.results.map(row=>JSON.parse(row.body)),usage:usage.results.map(row=>JSON.parse(row.body)),capabilities};
+      }catch(error){
+        // Before migration 0003 there is no rev column: answer with the full state.
+        if(!/no such column/i.test(String(error?.message)))throw error;
+      }
+    }
     const [tasks,usage]=await Promise.all([this.listTasks(),this.db.prepare('SELECT body FROM usage ORDER BY provider').all()]);
     return {revision,tasks,usage:usage.results.map(row=>JSON.parse(row.body)),capabilities};
   }
@@ -168,7 +187,7 @@ export class D1TaskStore {
     const siblingGate=Boolean(current.parentTaskId)&&next.status==='running'&&current.status!=='running'&&usesTransport(next.checkpoint?.provider,'routine_fire');
     const siblingGuard=siblingGate?` AND NOT EXISTS (${routineSiblingClause(4,6,7,bindings.length+1)})`:'';
     if(siblingGate)bindings.push(ROUTINE_PROVIDERS);
-    const statements=[this.db.prepare('UPDATE tasks SET version = ?1, updated_at = ?2, body = ?3 WHERE id = ?4 AND version = ?5' + guard + budgetGuard+(capacityGuard?.sql??'')+siblingGuard).bind(...bindings)];
+    const statements=[this.db.prepare("UPDATE tasks SET version = ?1, updated_at = ?2, body = ?3, rev = (SELECT value+1 FROM metadata WHERE key='revision') WHERE id = ?4 AND version = ?5" + guard + budgetGuard+(capacityGuard?.sql??'')+siblingGuard).bind(...bindings)];
     if(budget)statements.push(this.db.prepare(`UPDATE metadata SET value=?1 WHERE key=?2 AND value=?3 AND changes()=1 AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=?4 AND t.version=?5 AND json_extract(t.body,'$.checkpoint.executionId')=?6 AND json_extract(t.body,'$.checkpoint.generation')=?7)`).bind(budget.nextRaw,budget.key,budget.raw,id,next.version,next.checkpoint.executionId,next.checkpoint.generation));
     statements.push(this.db.prepare("UPDATE metadata SET value = value + 1 WHERE key = 'revision' AND changes() = 1"));
     if(budget&&!reservation)statements.push(this.db.prepare("INSERT INTO metadata (key,value) SELECT 'revision',0 WHERE changes()!=1"));
@@ -280,13 +299,13 @@ export class D1TaskStore {
         guard+=` AND NOT EXISTS (SELECT 1 FROM metadata m WHERE m.key = ?${at+1})`;
       }
     }
-    const statements=[this.db.prepare('UPDATE tasks SET version = ?1, updated_at = ?2, body = ?3 WHERE id = ?4 AND version = ?5'+guard).bind(...values)];
+    const statements=[this.db.prepare("UPDATE tasks SET version = ?1, updated_at = ?2, body = ?3, rev = (SELECT value+1 FROM metadata WHERE key='revision') WHERE id = ?4 AND version = ?5"+guard).bind(...values)];
     for(const {current:before,next:after} of records){
       if(!after)continue;
       const allowed=`EXISTS (SELECT 1 FROM tasks p WHERE p.id = ?5 AND json_extract(p.body,'$.delegation.operationId') = ?6)`;
       statements.push(before
-        ? this.db.prepare(`UPDATE tasks SET version = ?2, updated_at = ?3, body = ?4 WHERE id = ?1 AND ${allowed}`).bind(after.id,after.version,after.updatedAt,serializeTaskBody(after),next.id,next.delegation.operationId)
-        : this.db.prepare(`INSERT INTO tasks (id,version,updated_at,body) SELECT ?1,?2,?3,?4 WHERE ${allowed}`).bind(after.id,after.version,after.updatedAt,serializeTaskBody(after),next.id,next.delegation.operationId));
+        ? this.db.prepare(`UPDATE tasks SET version = ?2, updated_at = ?3, body = ?4, rev = (SELECT value+1 FROM metadata WHERE key='revision') WHERE id = ?1 AND ${allowed}`).bind(after.id,after.version,after.updatedAt,serializeTaskBody(after),next.id,next.delegation.operationId)
+        : this.db.prepare(`INSERT INTO tasks (id,version,updated_at,body,rev) SELECT ?1,?2,?3,?4,(SELECT value+1 FROM metadata WHERE key='revision') WHERE ${allowed}`).bind(after.id,after.version,after.updatedAt,serializeTaskBody(after),next.id,next.delegation.operationId));
     }
     for(const item of initialPolicies){
       statements.push(this.db.prepare(`INSERT INTO metadata(key,value) SELECT ?1,?2 WHERE EXISTS (SELECT 1 FROM tasks p WHERE p.id=?3 AND json_extract(p.body,'$.delegation.operationId')=?4)`).bind(item.key,item.text,next.id,next.delegation.operationId));

@@ -20,6 +20,8 @@ npx wrangler d1 migrations apply inno-workspace --remote
 npx wrangler secret put ACCESS_TOKEN
 ```
 
+업데이트할 때 `worker/migrations`에 새 파일이 있으면 Worker를 배포하기 **전에** 같은 `migrations apply --remote`를 먼저 실행합니다. 새 Worker는 새 열을 바로 쓰기 때문입니다(예: `0003_task_revision.sql`의 `tasks.rev`가 없으면 모든 작업 쓰기가 실패합니다). 이전 파일은 열과 색인만 추가하므로 이전 Worker도 그대로 동작합니다.
+
 접근 토큰은 임의의 긴 비밀 문자열로 생성해 비밀번호 관리자에 보관합니다. 모델 API 키를 사용하지 않습니다. 클라우드 서버는 이 토큰을 아는 단일 소유자 작업실을 위한 설계입니다. 연구실 다중 사용자 권한 모델을 대신하지 않습니다.
 
 Claude Routine이 해당 구독 계정에서 활성화된 경우:

@@ -151,7 +151,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
         }
 
         if (request.method === 'GET' && pathname === '/api/state') {
-          return responseJson({...await store.getState(capabilities,parseRevision(url.searchParams.get('since'))), desktop: await bridge.presence()}, 200, headers);
+          return responseJson({...await store.getState(capabilities,parseRevision(url.searchParams.get('since')),{delta:url.searchParams.get('delta')==='1'}), desktop: await bridge.presence()}, 200, headers);
         }
         if (request.method === 'GET' && pathname === '/api/model-discovery') {
           // The common /api/* gate above already authenticates; keep this check explicit.
