@@ -1,3 +1,4 @@
+import {formatDateTime} from './core/time-format.mjs';
 const escape=value=>String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const officialUrls={openai:'https://developers.openai.com/api/docs/models.md',claude:'https://code.claude.com/docs/en/model-config.md'};
 const providerName={openai:'OpenAI',claude:'Claude'};
@@ -7,7 +8,7 @@ const kindName={documentation_slug:'모델 문서 항목',alias:'역할 별칭'}
 const errorName={network_error:'네트워크 조회 실패',format_changed:'공식 문서 형식 변경',redirect_rejected:'허용되지 않은 주소 이동',body_too_large:'문서 크기 제한 초과',http_error:'공식 문서 HTTP 오류',content_type_changed:'문서 형식 확인 실패',timeout:'조회 시간 초과',profile_scan_failed:'정책 기록 조회 실패',policy_cleanup_failed:'정책 근거 정리 실패',pin_scan_deferred:'작업 근거 확인 지연'};
 const sourceDescription={openai:'API 모델 문서 목록 · 계정 사용 가능성과 별도',claude:'Claude Code 역할 별칭 · 실제 모델 및 계정 사용 가능성과 별도'};
 const explainError=value=>errorName[value]||value;
-const time=value=>{if(value==null)return '기록 없음';const date=new Date(value);return Number.isNaN(+date)?'확인 불가':escape(date.toLocaleString('ko-KR'));};
+const time=value=>{if(value==null)return '기록 없음';return escape(formatDateTime(value)||'확인 불가');};
 const count=value=>Number.isSafeInteger(value)&&value>=0?value.toLocaleString('ko-KR'):'확인 불가';
 
 export function renderDiscovery(data){

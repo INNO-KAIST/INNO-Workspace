@@ -1,5 +1,6 @@
 import {prepareTaskMaterials} from './core/source-materials.mjs';
 import {taskNearLimit} from './core/task-size.mjs';
+import {formatClock,formatShortDateTime} from './core/time-format.mjs';
 import {artifactCheckSummary,sanitizeArtifactChecks} from './core/artifact-checks.mjs';
 import {usageRows,usageSummary} from './core/execution-usage.mjs';
 import {formatUsagePhase,formatUsageTransition,formatWallElapsed,formatRequestedModel} from './core/usage-presentation.mjs';
@@ -52,7 +53,7 @@ const modelDiagnosticsUI=createModelDiagnosticsUI({root:$('model-diagnostics'),g
 const attachments=()=>current()?.attachments||draftAttachments;
 const sourceViews=()=>import('./core/source-views.mjs?v=source-view-1');
 const bytes=n=>n<1024?`${n} B`:n<1048576?`${(n/1024).toFixed(1)} KB`:`${(n/1048576).toFixed(1)} MB`;
-const date=v=>{const d=new Date(v);return Number.isNaN(+d)?'':d.toLocaleString('ko-KR',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});};
+const date=v=>formatShortDateTime(v);
 const recoveryReasonName=value=>({uncertain_fire:'외부 실행 시작 여부를 확인할 수 없습니다.',lease_expiry:'이전 실행 연결 시간이 만료됐습니다.',parent_pause:'부모 작업 일시정지로 이전 실행 종료 확인이 필요합니다.',connection:'실행 연결이 중단됐습니다.',unknown:'실행 종료 상태를 확인할 수 없습니다.',interrupted:'실행이 중단됐습니다.'})[value]||value||'외부 실행 상태를 확인해야 합니다.';
 function toast(message){$('toast').textContent=message;$('toast').classList.add('visible');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('toast').classList.remove('visible'),6500);}
 async function guarded(fn){if(busy)return;busy=true;try{await fn();}catch(e){toast(e.message||'작업을 처리하지 못했습니다.');if(e.status===409){await refresh();toast('다른 기기에서 변경된 최신 기록을 불러왔습니다. 내용을 확인하고 다시 시도하세요.');}}finally{busy=false;renderControls();}}
@@ -149,7 +150,7 @@ function renderControls(){
  const policyButton=$('model-policy-open');policyButton.hidden=!(client?.remote&&c.modelPolicyManagement===true&&child&&t.assignment?.selection?.profile);policyButton.disabled=busy;
  const deliveryButton=$('delivery-recovery-open');deliveryButton.hidden=!(client?.remote&&c.desktopDeliveryRecovery===true&&t);deliveryButton.disabled=busy;deliveryRecoveryUI.sync();
 }
-function syncStatus(error=client?.syncError){const s=$('sync-status');s.className='sync-badge';if(error){s.textContent='연결 오류 · 최신 상태 확인 필요';s.classList.add('error');return;}if(client?.remote){s.textContent=`동기화 ${client.lastSync?new Date(client.lastSync).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'}):''}`;s.classList.add('connected');$('connection-label').textContent=state().capabilities?.desktopSources?'클라우드 + 이 PC 자료':'서버 연결됨';}else{s.textContent='이 기기 보관';$('connection-label').textContent='이 기기 보관';}}
+function syncStatus(error=client?.syncError){const s=$('sync-status');s.className='sync-badge';if(error){s.textContent='연결 오류 · 최신 상태 확인 필요';s.classList.add('error');return;}if(client?.remote){s.textContent=`동기화 ${client.lastSync?formatClock(client.lastSync):''}`;s.classList.add('connected');$('connection-label').textContent=state().capabilities?.desktopSources?'클라우드 + 이 PC 자료':'서버 연결됨';}else{s.textContent='이 기기 보관';$('connection-label').textContent='이 기기 보관';}}
 function sourceResultText(result){return ({storage_error:'원본 실행 기록 저장소를 사용할 수 없습니다. 브라우저 저장 공간과 탭 잠금을 확인하세요.',capacity:'원본 실행 보류 기록이 가득 찼습니다. 완료된 작업의 서버 상태를 확인하세요.',uncertain:'실행 시작 응답을 확인하지 못했습니다. 서버 실행 종료 확인 후 복구하세요.',source_error:'원본 읽기 또는 선택 범위 확인에 실패했습니다. 같은 원본을 다시 연결하세요.',sync_error:'최신 서버 상태를 확인하지 못해 원본 전달을 보류합니다.'})[result?.status]||'';}
 async function tickSource(){if(sourceTickRunning||!client?.remote||state().capabilities?.sourceDelegationVersion!==1||busy)return;sourceTickRunning=true;try{const result=await sourceCoordinator.tick();sourceStatus=sourceResultText(result);renderSourceExecution();}catch{sourceStatus='원본 실행 상태를 확인하지 못했습니다. 다음 동기화에서 다시 확인합니다.';renderSourceExecution();}finally{sourceTickRunning=false;}}
 function render(){renderList();renderMessages();renderAttachments();renderSourceExecution();renderPlan();renderControls();if(view==='usage')renderUsage();}

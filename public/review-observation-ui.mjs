@@ -1,4 +1,5 @@
 import {DELEGATION_MIN_CHILDREN,DELEGATION_MAX_CHILDREN} from './core/delegation.mjs';
+import {formatDateTime} from './core/time-format.mjs';
 const savedId=/^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 const positive=value=>Number.isSafeInteger(value)&&value>=1&&value<=1_000_000;
 const escape=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -25,7 +26,7 @@ const reason=value=>typeof value==='string'&&Object.hasOwn(reasonLabels,value)?r
 const nextTime=value=>{
  if(typeof value!=='string'||value.length>64)return '다음 저장 재시도 시각 미확인';
  const time=Date.parse(value);
- return Number.isFinite(time)?`다음 저장 재시도 시각 · ${new Date(time).toLocaleString('ko-KR')}`:'다음 저장 재시도 시각 미확인';
+ return Number.isFinite(time)?`다음 저장 재시도 시각 · ${formatDateTime(time)}`:'다음 저장 재시도 시각 미확인';
 };
 function trustedRows(task){
  const d=task.delegation,c=task.checkpoint,marker=task.reviewObservation;

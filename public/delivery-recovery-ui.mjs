@@ -1,3 +1,4 @@
+import {formatDateTime} from './core/time-format.mjs';
 const reservationFields=['version','workspaceId','taskId','executionId','generation','claimedAt'];
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const validReservation=(value,workspaceId,taskId)=>{
@@ -39,7 +40,7 @@ export function createDeliveryRecoveryUI({dialog,getClient,getState,getTask,getE
   if(renderedRows.length!==reservations.length||renderedRows.some((item,index)=>item!==reservations[index])){
    const doc=dialog.ownerDocument;buttons=reservations.map((reservation,index)=>{
     const button=doc.createElement('button');button.type='button';button.className='secondary-button';button.dataset.recoveryAction='select';button.dataset.recoveryIndex=String(index);
-    button.textContent=`실행 ${reservation.executionId} · 세대 ${reservation.generation} · 시작 ${new Date(reservation.claimedAt).toLocaleString('ko-KR')}`;button.title=reservation.claimedAt;return button;
+    button.textContent=`실행 ${reservation.executionId} · 세대 ${reservation.generation} · 시작 ${formatDateTime(reservation.claimedAt)}`;button.title=reservation.claimedAt;return button;
    });
    fields.list.replaceChildren(...buttons);renderedRows=reservations.slice();
   }
