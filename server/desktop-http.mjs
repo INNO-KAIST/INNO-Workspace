@@ -8,6 +8,7 @@ import {checkedDeliveryBinding,deliveryBindingConflict} from './delivery-binding
 import {usesTransport} from '../public/core/providers.mjs';
 const MIME={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json','.svg':'image/svg+xml','.webmanifest':'application/manifest+json'};
 const json=(res,status,data)=>{res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(data));};
+const RUN_BODY_BYTES=44*1024*1024;
 async function body(req,maxBytes=750000){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>maxBytes)throw Object.assign(Error('Request exceeds supported byte limit'),{status:413});chunks.push(chunk);}try{return JSON.parse(Buffer.concat(chunks).toString('utf8')||'{}');}catch{throw Object.assign(Error('Invalid JSON'),{status:400});}}
 export function createDesktopServer({token,publicDir,request,bridge,localRecords,runStorage,readDeliveryBinding,deliveryReceiptVersion=0,outboxRecovery,contextAccess}){
  if(typeof token!=='string'||token.length<24)throw Error('A strong local token is required');
@@ -123,7 +124,18 @@ export function createDesktopServer({token,publicDir,request,bridge,localRecords
     }
     if(req.method==='POST'&&p==='/api/imports')return json(res,200,await request(p,await body(req)));
     const run=p.match(/^\/api\/tasks\/([^/]+)\/run$/);
-    if(req.method==='POST'&&run){const input=await body(req);if(usesTransport(input.provider,'desktop_bridge'))return json(res,202,{task:await bridge.startTask(decodeURIComponent(run[1]),input)});if(usesTransport(input.provider,'routine_fire'))return json(res,202,await request(p,input));return json(res,400,{error:'Invalid provider'});}
+    if(req.method==='POST'&&run){
+     // Images (up to 30 MB, base64) travel only on this loopback request to Codex on this PC.
+     // Anything bound for the cloud keeps the earlier size limit and may not carry images.
+     const input=await body(req,RUN_BODY_BYTES);
+     if(usesTransport(input.provider,'desktop_bridge'))return json(res,202,{task:await bridge.startTask(decodeURIComponent(run[1]),input)});
+     if(usesTransport(input.provider,'routine_fire')){
+      if(Array.isArray(input.materials)&&input.materials.some(m=>m&&typeof m==='object'&&m.image!==undefined))return json(res,400,{error:'이미지는 이 PC의 Codex 실행으로만 전달됩니다. Claude로는 보내지 않습니다.'});
+      if(Buffer.byteLength(JSON.stringify(input))>750000)return json(res,413,{error:'Request exceeds supported byte limit'});
+      return json(res,202,await request(p,input));
+     }
+     return json(res,400,{error:'Invalid provider'});
+    }
     if(req.method==='POST'&&/^\/api\/tasks\/[^/]+\/(?:delegation\/(?:resume|recover)|execution\/recover)$/.test(p))return json(res,200,await request(p,await body(req)));
     if(/^\/api\/tasks\/[^/]+\/model-policy$/.test(p)&&['GET','POST'].includes(req.method))return json(res,200,await request(p,req.method==='POST'?await body(req):undefined));
     if(req.method==='GET'&&p==='/api/plugins')return json(res,200,await request(p));

@@ -11,7 +11,7 @@ import {acquireBridgeLock,startupPortMessage,deliveryStopMessage} from '../serve
 import {readFileSync,writeFileSync,existsSync,mkdirSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {withoutApiEnvironment,createCodexRunner} from '../server/runners.mjs';
+import {withoutApiEnvironment,createCodexRunner,sweepImageFolders} from '../server/runners.mjs';
 import {createDesktopBridge} from '../server/desktop-bridge.mjs';
 import {runDesktopService} from '../server/desktop-service.mjs';
 import {createOutboxRecovery} from '../server/outbox-recovery.mjs';
@@ -37,6 +37,8 @@ const spawnCodex=(command,args,options)=>spawn(command==='codex'?resolveCodexCom
 const contextAccess=createContextAccess();
 const runner=createCodexRunner({processTree:createProcessTree(),contextAccess,contextUrl:'http://127.0.0.1:4175/api/desktop/context',spawnProcess:spawnCodex,modelCatalog:createModelCatalog({spawnProcess:spawnCodex,env:withoutApiEnvironment(),cwd:root}),cwd:path.join(privateDir,'desktop-runs'),managedDelivery:true,sourceDelegationVersion:sourceDelegationVersionFromEnvironment(process.env)});
 let lock;try{lock=await acquireBridgeLock();}catch(error){const message=startupPortMessage(error);if(!message)throw error;console.error(message);process.exit(1);}
+// CR-009: image inputs left by a connector that was closed mid-run are removed at start.
+await sweepImageFolders({olderThan:Date.now()});
 const readDeliveryBinding=async()=>({origin:endpoint,workspaceId:(await request('/api/desktop/identity')).workspaceId});
 // The claim journal is used only with delivery receipts (version 1).
 const journal=deliveryReceiptVersion===1?createFileJournal(path.join(privateDir,'desktop-claim.json')):undefined;

@@ -237,7 +237,7 @@ export function createDesktopBridge({request,runner,outbox,journal,heartbeatMs=1
   async startTask(taskId,input){
    if(outboxFailure)throw outboxFailure;
    if(busy||stopped||deliveryUnsafe||readOutbox()||journaled&&readJournal())throw Object.assign(Error('Desktop is busy or has a pending result. Wait before starting another task.'),{status:409});
-   const materials=sanitizeMaterials(input.materials);busy=true;
+   const materials=sanitizeMaterials(input.materials,{images:true});busy=true;
    try{
     await beforeClaim();if(stopped||recoveryPaused||deliveryUnsafe)throw Object.assign(Error('Desktop is stopping'),{status:409});
     const models=await modelSnapshot();if(stopped||recoveryPaused||deliveryUnsafe)throw Object.assign(Error('Desktop is stopping'),{status:409});

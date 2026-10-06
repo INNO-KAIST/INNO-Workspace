@@ -1,4 +1,5 @@
 import {prepareTaskMaterials} from './core/source-materials.mjs';
+import {isImageAttachment} from './core/image-materials.mjs';
 import {usesTransport} from './core/providers.mjs';
 import {providerAvailable} from './provider-ui.mjs';
 
@@ -19,6 +20,8 @@ export function sourceExecutionReadiness(task,state,connected){
  if(c.sourceDelegationVersion!==1)return no('unsupported');
  // PRV-06: a provider the person turned off starts nothing; the task waits until it is on.
  if((c.disabledProviders??[]).includes(provider))return no('provider_disabled');
+ // CR-009: images reach only Codex on this PC; a source task assigned to Claude with images waits.
+ if(!usesTransport(provider,'desktop_bridge')&&task.attachments.some(isImageAttachment))return no('images_need_codex');
  if(usesTransport(provider,'routine_fire')){
   if(!providerAvailable(provider,c))return no('provider_unavailable');
   // Claude children of one batch run one at a time (H7); the server enforces the same rule.
@@ -112,7 +115,7 @@ export class SourceExecutionCoordinator{
     const latest=client.state.tasks.find(t=>t.id===snapshot.id);
     return latest?.version===snapshot.version&&JSON.stringify(sourceExecutionReadiness(latest,client.state,s.connected))===JSON.stringify(ready);
    };
-   const materials=await prepareTaskMaterials(snapshot,{...s,isCurrent:current});
+   const materials=await prepareTaskMaterials(snapshot,{...s,isCurrent:current,allowImages:usesTransport(ready.provider,'desktop_bridge')});
    await client.refresh();
    if(!current())return {status:'stale',taskId:snapshot.id};
    let reserved;

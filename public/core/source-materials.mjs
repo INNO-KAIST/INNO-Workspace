@@ -1,9 +1,11 @@
 import {sanitizeMaterials} from './tasks.mjs';
 import {verifyMaterialViews} from './source-coverage.mjs';
 import {TEXT_BASED_FORMATS,connectedFormat} from './extract.mjs?v=formats-1';
+import {IMAGE_LIMITS,encodeImageData,imageKind,isImageAttachment} from './image-materials.mjs';
 
 // Read only during this invocation. No archive, durable queue, or source cache.
-export async function prepareTaskMaterials(task,{connected,getFile,extractText,verifyView,isCurrent=()=>true}){
+// Images go as image materials only when the run goes to Codex on this PC (allowImages).
+export async function prepareTaskMaterials(task,{connected,getFile,extractText,verifyView,isCurrent=()=>true,allowImages=false}){
  const check=()=>{if(!isCurrent())throw Object.assign(Error('자료를 읽는 동안 작업이 변경됐습니다. 최신 내용을 확인하고 다시 실행하세요.'),{code:'STALE_SOURCE_TASK',status:409});};
  check();
  const snapshot={attachments:structuredClone(task.attachments??[])};
@@ -11,10 +13,21 @@ export async function prepareTaskMaterials(task,{connected,getFile,extractText,v
  if(files.length>20)throw Error('한 번에 조회할 자료는 20개 이하여야 합니다.');
  const missing=files.filter(a=>!connected(a));
  if(missing.length)throw Error(`${missing.length}개 원본의 연결이 끊겼습니다. 파일 또는 폴더를 다시 연결하세요.`);
- const materials=[];let total=0;
+ const images=files.filter(a=>isImageAttachment(a));
+ if(images.length&&!allowImages)throw Error(`${images[0].name}: 이미지는 이 PC의 Codex 실행으로만 전달됩니다. 실행기를 Codex로 선택하세요.`);
+ if(images.length>IMAGE_LIMITS.count)throw Error('한 번에 보낼 수 있는 이미지는 10장 이하입니다. 나눠 연결하세요.');
+ const materials=[];let total=0,imageBytes=0;
  for(const a of files){
   check();if(total>=600000)throw Error('한 번에 조회할 텍스트 범위를 초과했습니다. 자료를 나눠 연결하세요.');
   const file=await getFile(a.id);check();
+  if(isImageAttachment(a)){
+   if(!(file.size<=IMAGE_LIMITS.bytesEach))throw Error(`${a.name}: 이미지는 한 장에 10 MB 이하만 보낼 수 있습니다. 크기를 줄여 다시 연결하세요.`);
+   imageBytes+=file.size;if(imageBytes>IMAGE_LIMITS.bytesTotal)throw Error('한 번에 보낼 이미지는 모두 합쳐 30 MB 이하입니다. 나눠 연결하세요.');
+   const bytes=new Uint8Array(await file.arrayBuffer());check();
+   if(!imageKind(bytes))throw Error(`${a.name}: PNG·JPEG·GIF·WebP 이미지만 Codex에 전달됩니다. 다른 형식(BMP·TIFF·HEIC 등)은 PNG나 JPEG로 저장해 다시 연결하세요.`);
+   materials.push({name:a.path||a.name,image:{data:encodeImageData(bytes)}});
+   continue;
+  }
   let result;
   if(a.view){
    if(typeof verifyView!=='function')throw Error('부분 조회 검증기를 사용할 수 없습니다.');
@@ -36,7 +49,7 @@ export async function prepareTaskMaterials(task,{connected,getFile,extractText,v
   if(total>600000)throw Error('한 번에 조회할 텍스트 범위를 초과했습니다. 자료를 나눠 연결하세요.');
   materials.push({name:a.path||a.name,text:result.text,...(a.view?{coverage:result.coverage}:{})});
  }
- const normalized=sanitizeMaterials(materials);
+ const normalized=sanitizeMaterials(materials,{images:allowImages});
  await verifyMaterialViews(snapshot,normalized);check();
  return normalized;
 }

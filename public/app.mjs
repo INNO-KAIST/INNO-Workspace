@@ -292,7 +292,7 @@ async function run(){
  if(t.status==='paused'||t.status==='failed'||t.status==='waiting_connection'||t.status==='waiting_quota'){await act('resume');if(activeId!==runTaskId)throw new Error('실행할 작업이 바뀌었습니다. 다시 확인하세요.');t=current();}
  const executionClient=client;
  const materials=await prepareTaskMaterials(t,{
-  connected,getFile:id=>session.getFile(id),extractText:extractConnectedText,
+  connected,getFile:id=>session.getFile(id),extractText:extractConnectedText,allowImages:usesTransport(provider,'desktop_bridge'),
   verifyView:async(file,view)=>(await sourceViews()).verifySourceView(file,view),
   isCurrent:()=>client===executionClient&&activeId===runTaskId&&current()?.version===t.version,
  });

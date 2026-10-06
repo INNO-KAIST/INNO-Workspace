@@ -2,6 +2,7 @@ import {sanitizeResumeState} from './context-resume.mjs';
 import {validateOfficeArtifact} from './office-container.mjs';
 import {sanitizeArtifactChecks} from './artifact-checks.mjs';
 import {sanitizeSourceView,sanitizeSourceCoverage} from './source-coverage.mjs';
+import {IMAGE_LIMITS,checkedImage} from './image-materials.mjs';
 import {FULL_CONTEXT_HARD_MAX_BYTES,EMPTY_CHECKPOINT_TEXT,EMPTY_CONVERSATION_TEXT,messageLine} from './context-limits.mjs';
 const MAX_PLAN_ITEMS = 6;
 const MAX_TEXT = 200_000;
@@ -345,14 +346,27 @@ export function applyOwnedExecutionAction(task, input, overrides = {}) {
   return next;
 }
 
-export function sanitizeMaterials(materials) {
+// Text excerpts, and (CR-009) images only where the caller allows them: the local connector
+// that hands them to Codex on this PC. Every other caller, the Worker included, refuses images.
+export function sanitizeMaterials(materials, {images = false} = {}) {
   if (materials === undefined) return [];
   if (!Array.isArray(materials)) throw new ValidationError('materials must be an array');
   if (materials.length > 20) throw new ValidationError('materials cannot contain more than 20 items');
-  let total = 0;
+  let total = 0, imageCount = 0, imageBytes = 0;
   return materials.map(item => {
     if (!item || typeof item !== 'object') throw new ValidationError('material must be an object');
     const name = text(item.name, 'material name', {max: 500});
+    if (item.image !== undefined) {
+      if (!images) throw new ValidationError('Image materials can only go to Codex on this desktop');
+      if (item.text !== undefined) throw new ValidationError('A material holds either text or an image');
+      let checked;
+      try { checked = checkedImage(item.image?.data); } catch (error) { throw new ValidationError(error.message); }
+      imageCount += 1;
+      imageBytes += checked.bytes.length;
+      if (imageCount > IMAGE_LIMITS.count) throw new ValidationError('A run can carry at most 10 images');
+      if (imageBytes > IMAGE_LIMITS.bytesTotal) throw new ValidationError('Images in one run can total at most 30 MB');
+      return {name, image: {mime: checked.mime, data: item.image.data}};
+    }
     if(typeof item.text!=='string'||item.text.length>200000)throw new ValidationError('Invalid material text');
     const content=item.text;
     total += new TextEncoder().encode(content).byteLength;

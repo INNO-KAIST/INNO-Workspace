@@ -21,9 +21,11 @@ import {runnerError} from '../public/core/failures.mjs';
 import {validateExecutionDeadline,remainingExecutionMs,localExecutionObservation} from './execution-deadline.mjs';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
-import { readFile, realpath, stat, rmdir } from 'node:fs/promises';
+import { mkdirSync, rmSync } from 'node:fs';
+import { mkdtemp, readFile, readdir, realpath, rm, stat, rmdir, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { imageExtension } from '../public/core/image-materials.mjs';
 
 // Codex adapter prompt: when a sequential handoff to the cloud provider is allowed.
 const CODEX_HANDOFF_POLICY='On the managed cloud bridge only, a useful sequential handoff to Claude is supported for tasks with NO source attachments. Do not hand off trivial work or evade quota/authentication limits. At most two provider transitions per task. First understand the request, choose why the other provider is needed and its acceptance checks. To hand off, return final JSON with summary (verified generated progress, max 12000 chars), artifacts, routing, and handoff:{provider:"claude",instructions:"bounded next stage, max 12000 chars",reason:"why",acceptance:"checks"}. Stop after returning it; this is progress, not task completion. Do not archive originals in this handoff. If already two transitions, finish directly. The receiving master chooses its own supported subagent models.';
@@ -140,13 +142,18 @@ function promptText(task, materials, ownership, context, selected) {
   const plan = Array.isArray(task.plan)
     ? task.plan.map(item => `- ${item.role}: ${item.label} — ${item.instructions}`).join('\n')
     : '';
+  let imageIndex = 0;
   const sources = materials.length === 0
     ? 'No transient source excerpts were attached to this run.'
-    : materials.map((material, index) => [
+    : materials.map((material, index) => (material.image ? [
+      `<source index="${index + 1}" name=${JSON.stringify(material.name)} kind="image">`,
+      `Attached to this prompt as image input ${++imageIndex} (${material.image.mime}); look at the image itself. It is a transient original: do not return it, a copy, or an encoding of it as an artifact.`,
+      '</source>',
+    ] : [
       `<source index="${index + 1}" name=${JSON.stringify(material.name)}>`,
       material.text,
       '</source>',
-    ].join('\n')).join('\n\n');
+    ]).join('\n')).join('\n\n');
   const childAssignment = ownership.mode === 'child' ? task.assignment : null;
   const reviewFiles = ownership.mode === 'review' ? ownership.reviewFiles : null;
   return [
@@ -457,7 +464,7 @@ export function createCodexRunner({
     async run({task, project, materials = [], reviewInputs = [], executionId, generation, signal, executionBudgetVersion, sourceDelegationVersion:negotiatedSourceVersion=sourceDelegationVersion, plugins:offeredPlugins, pluginsSkipped=[], pluginCatalog:catalogInput}) {
       // Plugins come from the claim: verified text of still-approved selections (S3).
       const plugins=boundedOfferedPlugins(offeredPlugins),pluginDelivery=boundedPluginDelivery(pluginDeliveryRecord(plugins,pluginsSkipped)),pluginCatalog=(()=>{try{return boundedPluginCatalog(catalogInput);}catch{return [];}})();
-      let contextLease,delivery,measuredDelivery=()=>delivery;
+      let contextLease,delivery,measuredDelivery=()=>delivery,imageInputs;
       let deadline,processStartedMono=null,processClosedMono=null,rootProcessClosed=false,deadlineExceeded=false;
       // H6: with a configured process tree, termination ends descendants too, and a bounded
       // run records whether every local descendant was observed gone.
@@ -497,7 +504,8 @@ export function createCodexRunner({
       const configuredMcpToken = typeof mcpToken === 'function' ? mcpToken() : mcpToken;
       const mcpArguments = [];
       const runEnv = {...env};
-      if (mode==='root'&&!deadline&&configuredMcpUrl && configuredMcpToken) {
+      // An image run gets no INNO tool channel: the originals stay between this PC and Codex.
+      if (mode==='root'&&!deadline&&configuredMcpUrl && configuredMcpToken && !materials.some(material => material?.image)) {
         const parsedMcpUrl = new URL(configuredMcpUrl);
         const loopback = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsedMcpUrl.hostname);
         if (parsedMcpUrl.protocol !== 'https:' && !(parsedMcpUrl.protocol === 'http:' && loopback)) {
@@ -523,7 +531,11 @@ export function createCodexRunner({
             ? ['--disable','multi_agent']
             : models.length ? ['--enable','multi_agent','-c','agents.max_concurrent_threads_per_session=2'] : ['--disable','multi_agent']),
       ];
-      const codexArgs = [...cliArgs, ...mcpArguments, '-'];
+      // CR-009: images go to Codex as -i inputs from a temporary folder outside the run
+      // directory (so they cannot be returned as artifacts), deleted when the run ends. The
+      // -i options come first: their value list would otherwise take the stdin marker '-'.
+      imageInputs=await writeImageInputs(materials);
+      const codexArgs = [cliArgs[0], ...imageInputs.args, ...cliArgs.slice(1), ...mcpArguments, '-'];
       const modelPolicy=deadline?'EVALUATION BUDGET EXECUTION: Work directly in this process. Do not use MCP tools, native subagents, delegation, or provider handoff. Return only the assigned result.':mode==='child'?codexChildPolicy(task,assignedRoute):mode==='review'?codexReviewPolicy(task):managedDelivery?delegationRoutingPolicy(models,{sourceDelegationVersion:sourceContext?1:0}):routingPolicy(models);
       const promptOptions={projectBlock:projectInstructionsBlock(project), plugins, pluginCatalog, executionId, generation, managedDelivery, contextGuidance, contextReaderAvailable:Boolean(localContextUrl), handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'};
       let {text:input,context}=await taskPromptWithContext(task, materials, promptOptions);
@@ -598,6 +610,7 @@ export function createCodexRunner({
       }
       if (!parsed.content) throw new Error('Codex completed without an assistant result');
       const structured = structuredResult(parsed.content);
+      if (imageInputs?.containsData(structured ? [structured.content, structured.checkpoint] : [parsed.content])) throw new Error('The result contained an attached image; it was not delivered');
       const hasResumeState = structured && Object.hasOwn(structured, 'resumeState');
       if (hasResumeState) {
         if (typeof executionId !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/.test(executionId) || !Number.isSafeInteger(generation) || generation < 1) throw new Error('Invalid resume state execution ownership');
@@ -614,7 +627,7 @@ export function createCodexRunner({
       if(delegation&&sourceContext)for(const child of delegation.children)delegationAttachments(task,child.sourceIds,{sourceDelegationVersion:1});
       const reviewReport=mode==='review'?validateReviewReport(structured?.reviewReport,task):undefined;
       if (hasResumeState && reviewReport?.some(row => row.criteria.some(criterion => criterion.status !== 'pass'))) throw new Error('Resume state requires a passing review completion');
-      if (structured) structured.artifacts = await materializeArtifacts(structured.artifacts, executionDirectory);
+      if (structured) structured.artifacts = withoutImageInputs(await materializeArtifacts(structured.artifacts, executionDirectory), imageInputs);
       const report=routingReport(structured?.routing,models);
       if(managedDelivery&&mode==='root'&&structured?.handoff)handoffTask({...task,status:'running',checkpoint:{...task.checkpoint,provider:'codex',executionId,generation}},{executionId,generation,content:structured.content,handoff:structured.handoff,artifacts:structured.artifacts});
       const artifacts=withRoutingArtifact(structured?.artifacts??[],structured?.content??parsed.content,report,managedDelivery);
@@ -642,9 +655,94 @@ export function createCodexRunner({
         if(delivery&&error&&typeof error==='object'&&error.contextDelivery===undefined)error.contextDelivery=measuredDelivery();
         if(delivery&&pluginDelivery&&error&&typeof error==='object'&&error.pluginDelivery===undefined)error.pluginDelivery=pluginDelivery;
         throw error;
-      } finally {stopSampling();contextLease?.revoke();}
+      } finally {
+        try {await imageInputs?.remove();} finally {stopSampling();contextLease?.revoke();}
+      }
     },
   };
+}
+
+const IMAGE_FOLDER_PREFIX = 'inno-images-';
+const IMAGE_SWEEP_AGE_MS = 60 * 60 * 1000;
+const RM_OPTIONS = {recursive: true, force: true, maxRetries: 5, retryDelay: 200};
+// Folders this process created and has not removed yet; removed on exit if a run is cut short.
+const liveImageFolders = new Set();
+let exitCleanup = false;
+
+async function removeImageFolder(folder) {
+  try {
+    await rm(folder, RM_OPTIONS);
+    liveImageFolders.delete(folder);
+  } catch {
+    // Still in use (a Codex descendant holding a file): kept in the set and retried by the
+    // next sweep and on exit.
+  }
+}
+
+// Removes image folders left by runs that ended without cleanup: a stopped or crashed
+// connector. At connector start every earlier folder is stale (olderThan: start time); each
+// image run also removes folders older than an hour (Codex reads its images when it starts).
+export async function sweepImageFolders({root = tmpdir(), olderThan = Date.now() - IMAGE_SWEEP_AGE_MS} = {}) {
+  // Folders of earlier runs in this process that could not be removed then (one run at a time).
+  for (const folder of [...liveImageFolders]) await removeImageFolder(folder);
+  let entries;
+  try { entries = await readdir(root, {withFileTypes: true}); } catch { return; }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(IMAGE_FOLDER_PREFIX)) continue;
+    const folder = path.join(root, entry.name);
+    const info = await stat(folder).catch(() => null);
+    if (info && info.mtimeMs < olderThan) await rm(folder, RM_OPTIONS).catch(() => {});
+  }
+}
+
+// Fixed 64-character pieces of each image's base64: a result that repeats one of them is
+// carrying the original back.
+function base64Windows(data) {
+  if (data.length < 64) return [];
+  const aligned = (offset) => offset - (offset % 4);
+  return [...new Set([0, aligned(Math.floor(data.length / 2)), aligned(data.length - 64)])].map(offset => data.slice(offset, offset + 64));
+}
+
+async function writeImageInputs(materials, root = tmpdir()) {
+  const images = materials.filter(material => material?.image);
+  if (!images.length) return {args: [], hashes: new Set(), containsData: () => false, remove: async () => {}};
+  await sweepImageFolders({root});
+  if (!exitCleanup) {
+    exitCleanup = true;
+    process.once('exit', () => { for (const folder of liveImageFolders) { try { rmSync(folder, RM_OPTIONS); } catch {} } });
+  }
+  const folder = await mkdtemp(path.join(root, IMAGE_FOLDER_PREFIX));
+  liveImageFolders.add(folder);
+  const remove = () => removeImageFolder(folder);
+  try {
+    const args = [], hashes = new Set(), windows = [];
+    for (const [index, material] of images.entries()) {
+      const file = path.join(folder, `image-${String(index + 1).padStart(2, '0')}${imageExtension(material.image.mime) ?? '.img'}`);
+      if (file.includes(',')) throw new Error('Image folder path cannot contain a comma');
+      const bytes = Buffer.from(material.image.data, 'base64');
+      await writeFile(file, bytes, {flag: 'wx'});
+      hashes.add(createHash('sha256').update(bytes).digest('hex'));
+      windows.push(...base64Windows(material.image.data));
+      args.push('-i', file);
+    }
+    const containsData = (texts) => texts.some(text => typeof text === 'string' && windows.some(window => text.includes(window)));
+    return {args, hashes, containsData, remove};
+  } catch (error) {
+    await remove();
+    throw error;
+  }
+}
+
+// Generated files that are an attached image (the same bytes, or text carrying its base64)
+// are the original, not a result, and are not delivered.
+function withoutImageInputs(artifacts, imageInputs) {
+  if (!imageInputs?.hashes.size) return artifacts;
+  return artifacts.filter(artifact => {
+    const content = String(artifact.content ?? '');
+    const bytes = Buffer.from(content, artifact.encoding === 'base64' ? 'base64' : 'utf8');
+    if (imageInputs.hashes.has(createHash('sha256').update(bytes).digest('hex'))) return false;
+    return !imageInputs.containsData([content, artifact.encoding === 'base64' ? bytes.toString('utf8') : '']);
+  });
 }
 
 function routineUrl(value) {
@@ -666,6 +764,8 @@ export function createClaudeRoutineRunner({url, token, fetchFn = fetch,sourceDel
   return {
     available: async () => configured,
     async run({task, materials = [], executionId, generation, signal}) {
+      // Images are sent only to Codex on this PC, never into a cloud Routine prompt.
+      if (materials.some(material => material?.image)) throw new Error('Claude Routine runs cannot receive image materials; images go only to Codex on this desktop');
       await verifyMaterialViews(task,materials);
       if (!configured) throw new Error('Claude Routine is not configured');
       const mode=executionMode(task);

@@ -1587,3 +1587,18 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 시험: extract-formats 12건, extract-hostile 13건(악성 입력 3초 이내·한도 이하), hwp 8건(합성 CFB 작성기: DIFAT·공유 스트림·순환·손상·긴 사슬), hdf5 5건(jsfive 공개 시험 파일 + 경계·청크·시간 한도), source-views-ui·source-materials·extract 보강.
 - 검증: 전체 1547건 중 1546 pass/0 fail/기존 1 skip, git diff --check, Wrangler dry-run(Worker·server 변경 없음). 2차 수정 뒤 실물 554개·Office 생성 표본·이전 판독기 비교를 다시 돌려 결과 동일 확인.
 - 화면 판: app.mjs?v=formats-20261006, extract.mjs?v=formats-1(모든 가져오기 같은 주소), source-views ?v 갱신, 서비스 워커 캐시 inno-shell-v6.
+- 운영 반영(사용자 승인): c9c4874 push → Pages 게시(formats-20261006, 새 판독기·jsfive 200 확인, 공개 사이트에서 CP949·RTF·R·손상 .h5 동작 확인) → 사용자가 연결기 종료, 메인 체크아웃 1184796→c9c4874 fast-forward, 사용자가 재실행(PID 확인, 127.0.0.1:4175가 새 판 제공). Worker 변경 없음.
+
+### 2026-10-07 CR-009 3단계 이미지 첨부 (커밋 전, 운영 반영 전)
+- 목표: 이미지(PNG·JPEG·GIF·WebP)를 이 PC의 Codex에 원본 그대로 전달. Codex CLI 0.160.0 `codex exec -i, --image <FILE>...` 사용.
+- 경로와 원칙:
+  - 이미지는 첨부 1건당 자료 1건(텍스트 대신 이미지 바이트)으로 다뤄 기존 "첨부마다 자료 정확히 한 건" 검사와 Worker의 이름(sourceNames) 검사를 그대로 쓴다. 바이트는 브라우저→이 PC 연결기(127.0.0.1)→Codex로만 가고, Codex가 모델 추론을 위해 OpenAI에 보내는 것 외에는 INNO 서버(Worker)·Claude Routine·로컬 기록(outbox)에 들어가지 않는다.
+  - public/core/image-materials.mjs: 장당 10 MB, 최대 10장, 합계 30 MB, 형식은 파일 시그니처로 판정(이름·MIME 표기는 믿지 않음). BMP·TIFF·HEIC 등은 PNG·JPEG로 저장해 다시 연결하라고 안내.
+  - sanitizeMaterials는 기본적으로 이미지를 거절하고, 연결기(desktop-bridge)만 허용. 브라우저는 실행기가 이 PC의 Codex일 때만 이미지를 읽는다(직접 실행·원본 위임 모두). Claude 배정 원본 작업에 이미지가 있으면 images_need_codex로 기다리며 안내.
+  - 연결기 HTTP: 실행 경로만 본문 44 MiB까지(인증 확인 뒤 읽음), Claude(routine_fire)로 가는 요청은 이미지가 있으면 400, 750 KB 초과면 413으로 전달 전에 거절.
+  - 러너: 이미지를 실행 폴더 밖 임시 폴더(%TEMP%\inno-images-*)에 쓰고 `exec` 바로 뒤에 `-i`로 넘김(값 목록이 표준입력 표시 '-'를 먹지 않도록). 실행이 끝나면 성공·실패 모두 삭제(재시도 포함), 프로세스 종료 시 동기 삭제, 연결기 시작 시 이전 폴더 전부 삭제, 매 이미지 실행 때 1시간 지난 폴더 삭제. 경로 조건(route conditions)은 이미지 경로와 무관.
+  - 결과 보호: 원본과 같은 바이트이거나 원본 base64 조각을 담은 결과물은 전달하지 않고, 요약·체크포인트에 원본 base64가 있으면 실행을 실패로 돌린다. 이미지 실행에는 INNO MCP 도구를 붙이지 않는다. Claude Routine 러너는 이미지 자료를 받으면 보내기 전에 거절.
+- 독립 검토(inno-opus): Worker·Claude로 가는 경로 없음 확인. P1 임시 파일 수명(Ctrl+C·충돌 시 잔존), P2 결과에 base64로 섞여 나갈 가능성·MCP 통로, P3 정리 순서·검사 순서 지적 → 전부 반영.
+- 시험: image-materials 14건(정리 규칙, 브라우저 준비, -i 배치·임시 폴더 위치·삭제(성공·실패), 경로 조건 불변, 결과물 걸러내기, Claude 거절, 연결기 HTTP 한도·전달 차단, 브리지 outbox 미기록, 준비 판정, 잔여 폴더 정리, MCP 미부착).
+- 검증: 전체 1561건 중 1560 pass/0 fail/기존 1 skip, git diff --check, Wrangler dry-run. 실제 Codex가 `-i` 이미지를 읽는지는 구독을 쓰므로 승인 후 1회 확인 예정.
+- 화면 판: app.mjs?v=images-20261007. 연결기 코드가 바뀌므로 반영 시 연결기 재시작 필요. Worker는 이미 이미지(텍스트 없는 자료)를 거절하므로 배포 필수는 아님.
