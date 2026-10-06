@@ -13,7 +13,7 @@ const literatureAudits=new WeakMap();
 import {buildLiteratureWorkflow} from './core/literature-workflow.mjs';
 import {createStorageUI} from './run-storage.mjs';
 import {failureGuidance} from './core/failures.mjs';
-import {executorStatusText,handoffLine,providerAvailable,providerName,providerOptions,queuedText,recoveryConfirmText,usageCardModels} from './provider-ui.mjs';
+import {executorStatusText,handoffLine,providerAvailable,providerName,providerOptions,queuedText,recoveryConfirmText,usageCardModels,SOURCE_TASK_NEEDS_DESKTOP_PAGE} from './provider-ui.mjs';
 import {usesTransport} from './core/providers.mjs';
 import {contextDeliveryText,contextHistoryRows} from './core/context-delivery.mjs';
 import {createRecordImportUI} from './record-import.mjs';
@@ -142,7 +142,7 @@ function renderControls(){
  const delegatedRunLabel=t?.status==='waiting_children'?'하위 작업 진행 중':t?.status==='queued_for_review'?'결과 검토 대기':t?.status==='running'?'결과 검토 중':t?.status==='paused'?'아래에서 재개':'병렬 작업 관리';
  $('run-button').innerHTML=`${child?'부모 작업에서 실행':delegated?delegatedRunLabel:confirmationRequired?'확인 후 조치 필요':t?.status==='queued'?'데스크톱 실행 대기':running?'실행 중':t?.status==='paused'?'이어서 실행':'작업 실행'} <span>↗</span>`;
  $('provider').disabled=busy||child||delegated;
- $('executor-status').textContent=child?'하위 작업의 실행 조건과 재개는 부모 작업에서 관리합니다.':taskNearLimit(t)?'이 작업의 저장 기록이 상한(약 1MB)에 도달해 새 메시지와 실행을 받을 수 없습니다. 기존 기록은 그대로 있으니, 새 작업을 만들어 이어 가세요.':delegated?'요청 모델과 배정 상태는 아래 병렬 위임 기록에서 확인하세요.':confirmationRequired?'외부 호출 여부를 확인할 수 없어 자동으로 다시 실행하지 않습니다. 작업 기록을 확인해 주세요.':client?.remote?executorStatusText(provider,c,{desktopOnline:!!state().desktop?.online,desktopNotReady:state().desktop?.notReady}):'실행기를 연결하세요. 현재는 작업을 기록할 수 있습니다.';
+ $('executor-status').textContent=child?'하위 작업의 실행 조건과 재개는 부모 작업에서 관리합니다.':client?.remote&&!state().capabilities?.desktopSources&&t?.attachments?.length&&!t.parentTaskId&&usesTransport(provider,'desktop_bridge')&&['ready','paused','failed','completed','waiting_user','waiting_quota','waiting_connection'].includes(t.status)?SOURCE_TASK_NEEDS_DESKTOP_PAGE:taskNearLimit(t)?'이 작업의 저장 기록이 상한(약 1MB)에 도달해 새 메시지와 실행을 받을 수 없습니다. 기존 기록은 그대로 있으니, 새 작업을 만들어 이어 가세요.':delegated?'요청 모델과 배정 상태는 아래 병렬 위임 기록에서 확인하세요.':confirmationRequired?'외부 호출 여부를 확인할 수 없어 자동으로 다시 실행하지 않습니다. 작업 기록을 확인해 주세요.':client?.remote?executorStatusText(provider,c,{desktopOnline:!!state().desktop?.online,desktopNotReady:state().desktop?.notReady}):'실행기를 연결하세요. 현재는 작업을 기록할 수 있습니다.';
  $('pause-button').disabled=!t||busy||terminal||child||t.status==='paused';$('cancel-button').disabled=!t||busy||terminal||child;
  $('edit-plan').disabled=controls.editPlanDisabled;
  $('prompt').placeholder=t?t.status==='waiting_user'?'선택 또는 수정 요청을 남겨주세요.':child?'하위 작업은 부모 작업에서 지시를 관리합니다.':delegated?'새 지시를 남기면 현재 배정 세대를 다시 계획합니다.':'추가 요청이나 방향을 남겨주세요.':'어떤 작업을 함께할까요?';
@@ -255,7 +255,7 @@ async function run(){
  const runTaskId=t.id;
  const c=state().capabilities||{},provider=$('provider').value;
  if(!client.remote||!providerAvailable(provider,c)){showSettings();toast('선택한 AI 실행기가 연결된 서버를 설정하세요.');return;}
- if(usesTransport(provider,'desktop_bridge')&&c.cloudCodex&&!c.desktopSources&&t.attachments?.length)throw new Error('이 PC의 데스크톱 연결 화면에서 같은 작업을 열고 원본을 다시 연결하세요. 휴대폰에서 PC 원본을 직접 읽을 수는 없습니다.');
+ if(usesTransport(provider,'desktop_bridge')&&c.cloudCodex&&!c.desktopSources&&t.attachments?.length)throw new Error(SOURCE_TASK_NEEDS_DESKTOP_PAGE);
  if(usesTransport(provider,'desktop_bridge')&&c.desktopSources&&t.attachments?.some(a=>a.source==='url'))throw new Error('링크만으로 원문을 읽을 수는 없습니다. 해당 문서 파일을 연결한 뒤 링크 참조를 해제하세요.');
  if(t.status==='paused'||t.status==='failed'||t.status==='waiting_connection'||t.status==='waiting_quota'){await act('resume');if(activeId!==runTaskId)throw new Error('실행할 작업이 바뀌었습니다. 다시 확인하세요.');t=current();}
  const executionClient=client;

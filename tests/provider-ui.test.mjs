@@ -70,3 +70,13 @@ test('usage cards list every provider with its vendor, label, official link and 
   assert.deepEqual(usageCardModels([]).map(card => card.record), [{}, {}]);
   assert.deepEqual(usageCardModels([null, codexRecord]).map(card => card.record), [codexRecord, {}]);
 });
+
+// 2026-10-06 user report: on a desktop web browser the refusal said "휴대폰에서…". The guidance
+// for a source-bound Codex task opened outside the desktop connection page is device-neutral
+// and says where to run it.
+test('source-bound Codex guidance names the desktop connection page, not a phone',async()=>{
+ const {SOURCE_TASK_NEEDS_DESKTOP_PAGE}=await import('../public/provider-ui.mjs');
+ assert.doesNotMatch(SOURCE_TASK_NEEDS_DESKTOP_PAGE,/휴대폰/);
+ assert.match(SOURCE_TASK_NEEDS_DESKTOP_PAGE,/DESKTOP-ACCESS\.md/);
+ assert.match(SOURCE_TASK_NEEDS_DESKTOP_PAGE,/데스크톱 연결 화면/);
+});

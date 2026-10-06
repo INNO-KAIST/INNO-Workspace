@@ -7,6 +7,10 @@ const lower=value=>String(value||'').toLowerCase();
 
 export function providerName(value){return providerLabel(lower(value))??(value||'제공자 미기재');}
 
+// A task with connected originals runs on this PC's Codex only from the desktop connection page,
+// which reads the originals locally; the web page (on any device) cannot pass them to Codex.
+export const SOURCE_TASK_NEEDS_DESKTOP_PAGE='원본 파일이 연결된 작업은 이 PC의 데스크톱 연결 화면에서 실행합니다. 지금 보는 웹 화면은 PC의 원본을 Codex에 전달할 수 없습니다. PC의 .inno/DESKTOP-ACCESS.md에 있는 링크로 데스크톱 연결 화면을 열고, 같은 작업에서 원본을 다시 연결한 뒤 실행하세요.';
+
 // PRV-06: a provider the person turned off stays listed but cannot be chosen.
 const turnedOff=(provider,capabilities)=>(capabilities?.disabledProviders??[]).includes(lower(provider));
 export function providerOptions(capabilities){return PROVIDER_IDS.map(id=>({value:id,label:providerManifest(id).ui.option+(turnedOff(id,capabilities)?' (사용 중지)':''),...(turnedOff(id,capabilities)?{disabled:true}:{})}));}
