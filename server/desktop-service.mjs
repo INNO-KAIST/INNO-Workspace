@@ -12,7 +12,9 @@ function delay(ms,signal){
 }
 async function notify(callback,value){try{await callback(value);}catch{}}
 // The caller owns HTTP and process-lock lifetime, including shutdown after settled().
-export async function runDesktopService({bridge,deliveryReceiptVersion=0,signal,onError=()=>{},onDelivered=()=>{},wait=delay}){
+// A not-ready desktop (H9-1) is retried like a transport failure, with one notice per reason,
+// and onRecovered announces the first successful tick after any notice.
+export async function runDesktopService({bridge,deliveryReceiptVersion=0,signal,onError=()=>{},onDelivered=()=>{},onRecovered=()=>{},wait=delay}){
  if(![0,1].includes(deliveryReceiptVersion))throw Error('Unsupported delivery protocol');
  const versioned=deliveryReceiptVersion===1;
  const unsafe=()=>versioned&&(bridge.runtimeStatus().deliveryUnsafe||bridge.runtimeStatus().recoveryPaused);
@@ -21,13 +23,14 @@ export async function runDesktopService({bridge,deliveryReceiptVersion=0,signal,
  while(!signal?.aborted){
   if(unsafe()){await park();break;}
   try{
-   const worked=await bridge.tick();lastErrorKey=undefined;nextDelay=worked?15000:Math.min(60000,nextDelay*1.5);
+   const worked=await bridge.tick(),recovered=lastErrorKey!==undefined;lastErrorKey=undefined;nextDelay=worked?15000:Math.min(60000,nextDelay*1.5);
+   if(recovered)await notify(onRecovered);
    if(unsafe()){await park();break;}
    if(worked)await notify(onDelivered);
   }catch(error){
    const shouldPark=versioned&&(unsafe()||!retryableStatus(error.status));
    if(shouldPark)bridge.pauseForRecovery();
-   const key=Number.isInteger(error?.status)&&error.status>=100&&error.status<=599?String(error.status):'transport';
+   const key=error?.code==='DESKTOP_NOT_READY'?'not_ready:'+error.reason:Number.isInteger(error?.status)&&error.status>=100&&error.status<=599?String(error.status):'transport';
    if(key!==lastErrorKey){lastErrorKey=key;await notify(onError,error);}
    if(shouldPark){await untilAbort(signal);break;}
    nextDelay=Math.min(60000,nextDelay*2);

@@ -13,6 +13,10 @@ export function startupPortMessage(error){
 // Console text when the desktop service stops or reports an interrupted delivery.
 // Points to preserved evidence; never suggests deleting a saved result.
 export function deliveryStopMessage(error,{pendingPath='.inno/desktop-pending.json',versioned=false}={}){
+ if(error?.code==='DESKTOP_NOT_READY'&&error.reason==='codex_login')
+  return 'INNO 대기: 이 PC에서 Codex 로그인이 확인되지 않아 새 작업을 받지 않습니다. ChatGPT/Codex 앱에서 로그인 상태를 확인하세요. 1분 안팎 간격으로 다시 확인하고, 확인되면 자동으로 이어집니다. 로그인한 뒤에도 이 안내가 계속되면 이 창에서 Ctrl+C로 종료하고 Start INNO Cloud Bridge.cmd를 다시 실행하세요.';
+ if(error?.code==='DESKTOP_NOT_READY')
+  return `INNO 대기: 실행 저장 공간 점검에 실패해 새 작업을 받지 않습니다 (${String(error.message||'').slice(0,200)}). .inno/DESKTOP-ACCESS.md의 작업 화면에서 실행 저장 공간을 정리하세요. 정리되면 자동으로 이어집니다.`;
  if(error?.code==='OUTBOX_WRITE_FAILED'||error?.code?.startsWith?.('WORKSPACE_'))return error.message;
  if(error?.code==='OUTBOX_RECOVERY_REQUIRED')return versioned
   ?'A saved result needs explicit recovery. Open local result recovery from .inno/DESKTOP-ACCESS.md before resuming.'

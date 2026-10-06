@@ -20,7 +20,7 @@ test('saved legacy result drains while Codex is unavailable, without a new claim
  const events=[],outbox=box({taskId:'t',action:'complete',input:{executionId:'e',generation:1,content:'saved'}});
  const bridge=createDesktopBridge({outbox,beforeClaim:readiness(events),runner:{models:()=>{events.push('models');}},request:async route=>{events.push(route);}});
  assert.equal(await bridge.tick(),true);assert.deepEqual(events,['/api/desktop/t/complete']);assert.equal(outbox.read(),null);
- await assert.rejects(()=>bridge.tick(),/Sign in to Codex/);assert.deepEqual(events.slice(1),['storage','available']);
+ await assert.rejects(()=>bridge.tick(),/Sign in to Codex/);assert.deepEqual(events.slice(1),['storage','available','/api/desktop/presence']);
 });
 
 test('saved receipt pending and ACK both drain while Codex is unavailable',async()=>{
@@ -32,11 +32,12 @@ test('saved receipt pending and ACK both drain while Codex is unavailable',async
  }
 });
 
+// A tick reports the reason (H9-1); that report owns nothing and no poll follows.
 test('unavailable Codex blocks poll and direct start before remote ownership',async()=>{
  const events=[],bridge=createDesktopBridge({outbox:box(),beforeClaim:readiness(events),runner:{models:()=>{events.push('models');}},request:async route=>{events.push(route);}});
  await assert.rejects(()=>bridge.tick(),/Sign in to Codex/);
  await assert.rejects(()=>bridge.startTask('t',{expectedVersion:1,materials:[]}),/Sign in to Codex/);
- assert.deepEqual(events,['storage','available','storage','available']);
+ assert.deepEqual(events,['storage','available','/api/desktop/presence','storage','available']);
  const thrown=[];const failedBridge=createDesktopBridge({outbox:box(),beforeClaim:readiness(thrown,{available:Error('login probe failed')}),runner:{},request:async()=>{throw Error('remote request forbidden');}});
  await assert.rejects(()=>failedBridge.tick(),/login probe failed/);assert.deepEqual(thrown,['storage','available']);
 });

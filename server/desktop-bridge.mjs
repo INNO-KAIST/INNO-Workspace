@@ -30,6 +30,11 @@ export function createDesktopBridge({request,runner,outbox,journal,heartbeatMs=1
  async function claimRequest(...args){
   try{return await request(...args);}catch(error){if(versioned&&!journaled)deliveryUnsafe=true;throw error;}
  }
+ // A connector that is up but cannot take work says why instead of looking offline. The
+ // report owns nothing; an older Worker without the route (or any failure) is ignored.
+ async function reportNotReady(reason){
+  try{await request('/api/desktop/presence',{state:'not_ready',reason});}catch{}
+ }
  const readOutbox=()=>{
   try{return outbox.read();}catch(error){if(versioned)deliveryUnsafe=true;throw error;}
  };
@@ -260,7 +265,8 @@ export function createDesktopBridge({request,runner,outbox,journal,heartbeatMs=1
     }
     if(journaled&&await reconcileJournal())return true;
     if(deliveryUnsafe)throw protocolError();
-    await beforeClaim();if(stopped||recoveryPaused||deliveryUnsafe)return false;
+    try{await beforeClaim();}catch(error){if(error?.code==='DESKTOP_NOT_READY'&&!stopped)await reportNotReady(error.reason);throw error;}
+    if(stopped||recoveryPaused||deliveryUnsafe)return false;
     const models=await modelSnapshot();if(stopped||recoveryPaused||deliveryUnsafe)return false;
     const binding=await readBinding();if(stopped||recoveryPaused||deliveryUnsafe)return false;
     const nonce=intendClaim(binding),claimSentAt=performance.now();

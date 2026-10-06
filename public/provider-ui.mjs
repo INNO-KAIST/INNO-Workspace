@@ -15,10 +15,16 @@ export function providerAvailable(provider,capabilities){
  const c=capabilities||{};return providerManifest(provider).ui.availability.some(flag=>!!c[flag]);
 }
 
-export function executorStatusText(provider,capabilities,{desktopOnline=false}={}){
+// desktopNotReady: why a running desktop connector is not taking work (H9-1).
+const NOT_READY_TEXT={
+ codex_login:label=>`데스크톱 연결됨 · 이 PC의 ${label} 로그인이 확인되지 않아 실행을 시작하지 않습니다. 로그인하면 대기 중인 실행이 자동으로 이어지고, 로그인한 뒤에도 계속되면 데스크톱 연결기를 다시 시작하세요.`,
+ run_storage:()=>'데스크톱 연결됨 · 이 PC의 실행 저장 공간 점검에 실패해 실행을 시작하지 않습니다. 데스크톱 작업 화면에서 실행 저장 공간을 정리하세요.',
+};
+export function executorStatusText(provider,capabilities,{desktopOnline=false,desktopNotReady}={}){
  const c=capabilities||{},id=lower(provider),label=providerName(provider);
  if(usesTransport(id,'desktop_bridge')){
   if(!providerAvailable(id,c))return `이 서버에 ${label} 실행기가 연결되지 않았습니다.`;
+  if(desktopOnline&&Object.hasOwn(NOT_READY_TEXT,desktopNotReady??''))return NOT_READY_TEXT[desktopNotReady](label);
   if(c.desktopSources)return `같은 클라우드 작업 · 선택한 원본은 이 PC에서만 ${label}에 전달합니다.`;
   if(c.cloudCodex)return desktopOnline?'데스크톱 연결됨 · 같은 클라우드 작업에 결과를 저장합니다.':'데스크톱 오프라인 · 실행 요청을 대기열에 보관합니다.';
   return `이 서버의 ${label} 구독으로 실행합니다.`;

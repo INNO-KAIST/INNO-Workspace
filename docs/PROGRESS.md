@@ -1377,7 +1377,7 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
     - 장시간 실패 시 재시작 안내
 - 판단: H7 결정(2~4개, Claude 순차)은 운영 실구독으로 확인됐다. 하위 작업 수를 스스로 고르는 판단은 1회만 관찰했다(단순 작업이라 나누지 않았고, 이는 적절했다).
 
-### 2026-10-06 H6 비교 평가 기반(예산 0)과 연결기 실행 경로 보강 (커밋 전, 운영 반영 전)
+### 2026-10-06 H6 비교 평가 기반(예산 0)과 연결기 실행 경로 보강 (37257d4, 운영 반영)
 - 사용자 결정: 기반만 만들고 예산은 0으로 둔다. Codex만 대상이고 Windows 기본 도구만 쓴다. 계획은 docs/superpowers/plans/2026-10-06-evaluation-foundation.md에 있다.
 - 조사 결과: 운영 경로가 없었다(예산 부착·제한 실행 시작·정산·화면). 마감 시 codex.exe 루트만 종료되고 자식 프로세스는 남았다. localExecution은 계산만 하고 버렸다. 일반 대기열에 제한 실행 작업이 들어오면 claim 루프 전체가 ValidationError로 멈출 수 있었다.
 - 변경:
@@ -1420,6 +1420,12 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
   - 제공자 경계 시험에 server/codex-command.mjs를 등록했다(문자열 1개).
 - 호환성: 운영 연결기 코드(f1ee851)를 새 Worker와 함께 실행했다. 완료·한도 실패가 정상이었고 남은 것이 없었다.
 - 검증: 전체 1452건 중 1451pass/0fail/기존 symlink 1skip, git diff --check, Wrangler dry-run.
+- 운영 반영(사용자 승인):
+  - 37257d4를 main과 codex/source-release에 push했고 Worker 8befc402를 배포했다. Delivery receipt v1은 유지했다. 화면 변경이 없어 Pages는 다시 게시하지 않았다.
+  - 사용자가 연결기를 종료한 뒤 메인 체크아웃을 37257d4로 fast-forward했고, 사용자가 다시 실행했다("Delivery receipts: on", "connected" 확인).
+  - 실구독 확인 1건(합성 작업, 원본 없음): 대기열 → 실행(+8초) → 완료(+23초). 결과에 명령 출력이 정확히 들어 있었다.
+    - 실행 중 연결기 아래 프로세스: codex.exe(앱 번들 경로) → conhost.exe, codex-code-mode-host.exe → conhost.exe. codex.exe는 곧바로 끝나는 실행기가 아니라 실행 내내 루트로 남았다. 위 '확인하지 못한 것'은 이로써 해소됐다.
+    - 완료 후 연결기 아래에 남은 프로세스는 없었다. 다른 codex 프로세스는 ChatGPT/Codex 앱 소유라 건드리지 않았다.
 - 남김:
   - 비교 작업 생성(제한 실행의 모델 고정)과 예산 화면
   - 사용자 예산 결정
@@ -1428,3 +1434,17 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
   - verified의 범위: 관찰된 하위 프로세스만 대상이다. 두 관찰 사이에만 살았던 중간 프로세스(예: 1초짜리 셸)가 남긴 고아 프로세스는 놓친다. 실제 예산을 열기 전에 Win32_Process 생성 이벤트 감시(관리자 권한 불필요)로 보강할지 결정해야 한다.
   - 첫 관찰 전에 끝나는 제한 실행(예: 로그인 실패)은 항상 identity_unconfirmed라 정산되지 않고 예약이 유지된다. 안전하지만 가용성 비용이 있다.
   - 확인하지 못한 것: 앱 번들 codex.exe가 곧바로 끝나는 실행기인지(그렇다면 모든 제한 실행이 identity_unconfirmed가 된다). 실구독 시험 때 확인한다.
+
+### 2026-10-06 H9-1 연결기 준비 상태 표시 (커밋 전, 운영 반영 전)
+- 배경: 2026-10-06 운영 중 ChatGPT/Codex 앱이 번들 CLI 폴더를 다시 쓴 뒤 연결기의 `codex login status` 확인이 계속 실패했다. 연결기는 최대 60초 간격으로 재확인했지만 poll을 보내지 않아 웹에는 "데스크톱 오프라인"으로만 보였고, 콘솔에는 "INNO delivery interrupted"가 떠서 원인을 알기 어려웠다. 실행 파일 경로는 H6 커밋(37257d4)에서 spawn마다 다시 찾도록 이미 고쳤다.
+- 변경:
+  - server/desktop-readiness.mjs: 준비 실패 오류에 code DESKTOP_NOT_READY와 이유(codex_login, run_storage)를 붙인다.
+  - server/desktop-bridge.mjs: 반복 poll(tick)에서 준비 실패 시 POST /api/desktop/presence {state:'not_ready',reason}을 보낸 뒤 오류를 그대로 던진다. 보고는 아무것도 소유하지 않는다(claim·journal 없음, 작업공간·receipt 헤더 없음, 실패는 무시, deliveryUnsafe·recoveryPaused 불변). 종료 중이거나 직접 시작(startTask)일 때는 보고하지 않는다.
+  - server/desktop-service.mjs: 안내는 이유별로 한 번만 띄우고, 오류 뒤 첫 정상 tick에서 onRecovered("INNO: 다시 작업을 받을 수 있습니다.")를 알린다.
+  - server/bridge-runtime.mjs: 준비 실패 콘솔 안내를 한국어로 바꿨다(로그인 확인 → 자동 재개 → 계속되면 Ctrl+C 후 Start INNO Cloud Bridge.cmd 재실행, 저장 공간은 정리 안내).
+  - Worker: /api/desktop/presence가 이유와 시작 시각을 metadata desktop_readiness에 저장한다. 같은 이유가 이어지면 처음 시각을 유지하고, 오프라인이었거나 이유가 바뀌었거나 저장값이 깨졌으면 새로 시작한다. poll이 보고를 지운다(실패해도 poll은 진행). /api/state의 desktop에 online일 때만 notReady·notReadySince가 붙는다.
+  - 화면: 실행기 상태 문구가 연결됨+준비 안 됨을 보여 준다(로그인 필요 또는 저장 공간). 원본 연결 화면(desktopSources)에서도 우선한다. Pages 자산 버전 desktop-readiness-20261006.
+- 독립 검증(inno-opus): 승인(P1·P2 없음). P3 반영: 종료 중 보고 금지, poll의 보고 삭제를 실패 무시로, 오래된 시작 시각 재설정, 웹 문구에 재시작 안내. P3 수용: 한 작업공간에 연결기 둘이면 표시가 번갈아 바뀜(단일 데스크톱 모델), 바쁨 등으로 일찍 끝난 tick에도 회복 안내가 뜰 수 있음. 배포 순서는 Pages를 먼저 한다(이전 화면은 준비 안 된 연결기를 "연결됨"으로 보여 줄 수 있다).
+- 시험: desktop-presence 8건(Worker 경로·검증·인증·receipt 거절·시각 규칙·깨진 저장값, 연결기 보고·실패 무시·종료 중, 서비스 재시도·안내·회복, 콘솔·화면 문구), desktop-readiness 기대값 2건 갱신(보고는 있고 poll은 없음).
+- 검증: 전체 1460건 중 1459pass/0fail/기존 symlink 1skip, git diff --check, Wrangler dry-run.
+- 호환성: 이전 연결기는 보고하지 않으므로 새 Worker에서 그대로 동작한다(poll의 삭제는 없는 행이라 무해). 새 연결기는 이전 Worker의 404를 무시한다.

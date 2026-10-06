@@ -210,10 +210,11 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
           return responseJson(await claimStatus(store.db,{nonce:input?.nonce,workspaceId:desktopWorkspaceId,now:store.now()}),200,headers);
         }
         if (request.method === 'POST' && pathname === '/api/desktop/poll') {
-          const input=await body(request);if(input.models!==undefined)await catalog.report(input.models);
+          const input=await body(request);try{await bridge.markReady();}catch{}if(input.models!==undefined)await catalog.report(input.models);
           const options=withClaimNonce(claimOptions,input);if(options?.claimNonce)await sweepClaimMarkers(store.db,store.now());
           return responseJson({claim: await hydrate(await bridge.claim(options)),workspaceId:desktopWorkspaceId,...claimConfirmation,...(options?.claimNonce?{claimNonce:options.claimNonce}:{})}, 200, headers);
         }
+        if(request.method==='POST'&&pathname==='/api/desktop/presence')return responseJson({desktop:await bridge.reportNotReady(await body(request))},200,headers);
         if(request.method==='POST'&&bridgeMatch){
           const id=decodeURIComponent(bridgeMatch[1]), input=await body(request);
           if(bridgeMatch[2]==='legacy-status')return responseJson(await legacyDeliveryStatus(store,id,input),200,headers);

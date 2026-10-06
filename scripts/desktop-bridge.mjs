@@ -56,6 +56,7 @@ console.log(deliveryReceiptVersion===1?'Delivery receipts: on (local result reco
 try{
  await runDesktopService({bridge,deliveryReceiptVersion,signal:shutdown.signal,
   onDelivered:()=>console.log('INNO result delivered.'),
+  onRecovered:()=>console.log('INNO: 다시 작업을 받을 수 있습니다.'),
   onError:error=>console.error(deliveryStopMessage(error,stopMessageOptions))
  });
 }finally{

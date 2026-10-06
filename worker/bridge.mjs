@@ -4,6 +4,8 @@ import {ConflictError,ValidationError,DESKTOP_EXECUTION_LEASE_MS} from '../publi
 import {providerHas,providersByTransport} from '../public/core/providers.mjs';
 
 const DESKTOP_PROVIDERS=providersByTransport('desktop_bridge'),DESKTOP_PROVIDER_LIST=JSON.stringify(DESKTOP_PROVIDERS);
+// Why a running connector is not taking work (H9-1).
+const NOT_READY_REASONS=['codex_login','run_storage'];
 // Desktops that predate provider selection omit it and run the first desktop provider.
 function desktopProvider(value){
   if(value===undefined)return DESKTOP_PROVIDERS[0];
@@ -62,7 +64,26 @@ export class CloudBridge {
     const now=Date.parse(this.store.now());
     await this.store.db.prepare("INSERT INTO metadata (key,value) VALUES ('desktop_seen',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE metadata.value < ?2").bind(now,now-60000).run();
   }
-  async presence(){const row=await this.store.db.prepare("SELECT value FROM metadata WHERE key='desktop_seen'").first();return {lastSeen:row?.value??null,online:!!row&&Date.parse(this.store.now())-row.value<180000};}
+  // H9-1: a running connector that cannot take work reports why. The first report time is
+  // kept while the reason stays the same and the desktop stayed online; the next poll clears
+  // the report. One workspace has one desktop: a second, ready desktop's poll would clear it.
+  async reportNotReady(input){
+    if(!input||typeof input!=='object'||Array.isArray(input)||Object.keys(input).sort().join()!=='reason,state'||input.state!=='not_ready'||!NOT_READY_REASONS.includes(input.reason))
+      throw new ValidationError('Invalid desktop presence report');
+    const continued=(await this.presence()).online;
+    await this.store.db.prepare(`INSERT INTO metadata (key,value) VALUES ('desktop_readiness',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value${continued?" WHERE json_valid(metadata.value)=0 OR json_extract(metadata.value,'$.reason') IS NOT json_extract(excluded.value,'$.reason')":''}`)
+      .bind(JSON.stringify({reason:input.reason,since:Date.parse(this.store.now())})).run();
+    await this.seen();
+    return this.presence();
+  }
+  async markReady(){await this.store.db.prepare("DELETE FROM metadata WHERE key='desktop_readiness'").run();}
+  async presence(){
+    const rows=(await this.store.db.prepare("SELECT key,value FROM metadata WHERE key IN ('desktop_seen','desktop_readiness')").all()).results??[];
+    const seen=rows.find(row=>row.key==='desktop_seen'),online=!!seen&&Date.parse(this.store.now())-seen.value<180000;
+    let readiness=null;try{readiness=JSON.parse(rows.find(row=>row.key==='desktop_readiness')?.value??'null');}catch{}
+    const notReady=online&&NOT_READY_REASONS.includes(readiness?.reason)&&Number.isSafeInteger(readiness.since);
+    return {lastSeen:seen?.value??null,online,...(notReady?{notReady:readiness.reason,notReadySince:readiness.since}:{})};
+  }
   async renew(id,input){
     await this.seen();
     return concurrentRetry(this.store,id,t=>this.store.replaceTask(id,t.version,current=>{
