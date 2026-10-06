@@ -20,6 +20,8 @@ export async function prepareImport(raw){
  const checkpointText=typeof raw.checkpoint==='string'?raw.checkpoint:raw.checkpoint?.content;
  const task={id,title:text(raw.title,'title',500),prompt:text(raw.prompt,'prompt'),type:text(raw.type??'general','type',100),status,version:raw.version,createdAt,updatedAt,messages,plan,artifacts,attachments,checkpoint:checkpointText===undefined?null:{content:text(checkpointText,'checkpoint'),status,updatedAt,usageHistory:sanitizeUsageHistory(raw.checkpoint?.usageHistory??(raw.checkpoint?.usage?[raw.checkpoint.usage]:[]))}};
  if(raw.decision){const d=raw.decision;task.decision={prompt:text(d.prompt,'decision',2000),options:array(d.options,'decision options',5).map(o=>({label:text(o.label,'option',500),pros:text(o.pros,'pros',2000),cons:text(o.cons,'cons',2000)}))};}
+ // CR-008: the project reference is kept only when present, so earlier record hashes hold.
+ if(raw.projectId!==undefined&&raw.projectId!==null)task.projectId=text(raw.projectId,'project id',200);
  const bytes=new TextEncoder().encode(JSON.stringify(task));if(bytes.length>680000)throw new ValidationError('Record exceeds 680000 bytes. Original record is preserved; no partial import.');
  const digest=await crypto.subtle.digest('SHA-256',bytes);const hash=Array.from(new Uint8Array(digest),b=>b.toString(16).padStart(2,'0')).join('');
  return {task,hash};

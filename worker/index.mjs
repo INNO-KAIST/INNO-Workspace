@@ -69,7 +69,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
   function runtime(env,context={}){
     const store=new D1TaskStore(env.DB),bridge=new CloudBridge(store,{sourceDelegationVersion});
     const catalog=new ModelCatalog(store),discovery=new OfficialModelDiscovery(store,{fetchFn});
-    const plugins=createPluginRegistry(store,{fetchFn}),adapterFor=createRemoteAdapters({fetchFn,env,sourceDelegationVersion,catalog,plugins});
+    const plugins=createPluginRegistry(store,{fetchFn}),adapterFor=createRemoteAdapters({fetchFn,env,sourceDelegationVersion,catalog,plugins,projects:{resolve:task=>store.projectForTask(task)}});
     // Desktop claims carry the verified text of the task's still-approved plugins.
     const hydrate=async claim=>{
       const hydrated=await orchestration.hydrateClaim(claim);
@@ -78,6 +78,8 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
       if(task.plugins?.length){const {offered,skipped}=await plugins.resolve(task);Object.assign(extra,{plugins:offered,pluginsSkipped:skipped});}
       // A root master may assign approved plugins to the children it delegates.
       if(isRootMaster(task)){const pluginCatalog=await plugins.approvedCatalog();if(pluginCatalog.length)extra.pluginCatalog=pluginCatalog;}
+      // CR-008: the project's instructions travel with the execution.
+      const project=await store.projectForTask(task);if(project)extra.project={id:project.id,name:project.name,instructions:project.instructions};
       return {...hydrated,...extra};
     };
     // State flags the UI reads for each cloud provider (manifest ui.availability).
@@ -129,7 +131,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
           if (!authorized(request, env)) return responseJson({error: 'unauthorized'}, 401, {...headers, 'www-authenticate': 'Bearer'});
         }
         const {store,bridge,orchestration,hydrate,adapterFor,remoteFlags,plugins,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement}=runtime(env,context);
-        const capabilities = {desktopDeliveryRecovery:deliveryReceiptVersion===1,sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,reviewObservationRecovery:true,cloudCodex: true, localCodex: false, ...remoteFlags, cloud: true, connected: true, pluginRegistry: true};
+        const capabilities = {desktopDeliveryRecovery:deliveryReceiptVersion===1,sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,reviewObservationRecovery:true,cloudCodex: true, localCodex: false, ...remoteFlags, cloud: true, connected: true, pluginRegistry: true, projects: true};
         const bridgeMatch=pathname.match(/^\/api\/desktop\/([^/]+)\/(start|renew|complete|fail|ack|reservations|discard|legacy-status)$/);
         const recoveryRoute=bridgeMatch&&['reservations','discard','legacy-status'].includes(bridgeMatch[2]);
         const receiptHeader=request.headers.get('x-inno-delivery-receipt-version');
@@ -217,6 +219,10 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
           const options=withClaimNonce(claimOptions,input);if(options?.claimNonce)await sweepClaimMarkers(store.db,store.now());
           return responseJson({claim: await hydrate(await bridge.claim(options)),workspaceId:desktopWorkspaceId,...claimConfirmation,...(options?.claimNonce?{claimNonce:options.claimNonce}:{})}, 200, headers);
         }
+        // CR-008: projects.
+        if(request.method==='POST'&&pathname==='/api/projects')return responseJson({project:await store.createProject(await body(request))},200,headers);
+        const projectMatch=pathname.match(/^\/api\/projects\/([^/]+)$/);
+        if(request.method==='POST'&&projectMatch)return responseJson(await store.changeProject(decodeURIComponent(projectMatch[1]),await body(request)),200,headers);
         if(request.method==='POST'&&pathname==='/api/providers/settings')return responseJson({settings:await store.updateProviderSettings(await body(request))},200,headers);
         if(request.method==='POST'&&pathname==='/api/desktop/presence')return responseJson({desktop:await bridge.reportNotReady(await body(request))},200,headers);
         if(request.method==='POST'&&bridgeMatch){

@@ -2,6 +2,8 @@ import {prepareTaskMaterials} from './core/source-materials.mjs';
 import {taskNearLimit} from './core/task-size.mjs';
 import {formatClock,formatShortDateTime} from './core/time-format.mjs';
 import {providerCards,renderProviderCards} from './provider-management-ui.mjs';
+import {NO_PROJECT,normalizeProjectFilter,taskInProjectFilter,projectListModel,creationProject,renderProjectList} from './project-ui.mjs';
+import {projectForTask} from './core/projects.mjs';
 import {artifactCheckSummary,sanitizeArtifactChecks} from './core/artifact-checks.mjs';
 import {usageRows,usageSummary} from './core/execution-usage.mjs';
 import {formatUsagePhase,formatUsageTransition,formatWallElapsed,formatRequestedModel} from './core/usage-presentation.mjs';
@@ -65,14 +67,14 @@ function setView(next){view=next;for(const key of Object.keys(names))$(`${key}-v
 function selectTask(id){modelPolicyUI.close();deliveryRecoveryUI.close();selectionEpoch++;activeId=id;lastRendered='';localStorage.setItem('inno-active-task',id||'');setView('workspace');render();$('conversation-scroll').scrollTop=$('conversation-scroll').scrollHeight;}
 function newTask(){modelPolicyUI.close();deliveryRecoveryUI.close();selectionEpoch++;activeId=null;localStorage.removeItem('inno-active-task');draftAttachments=[];lastRendered='';$('prompt').value='';setView('workspace');render();$('prompt').focus();}
 function renderList(){
- const query=$('task-search').value.toLowerCase();const ordered=[...state().tasks].sort((a,b)=>new Date(b.updatedAt)-new Date(a.updatedAt));const groups=taskListGroups(ordered,query);
- $('task-count').textContent=taskListGroups(state().tasks).length;
+ const query=$('task-search').value.toLowerCase();const filter=projectFilter(),ordered=[...state().tasks].filter(task=>taskInProjectFilter(task,state(),filter)).sort((a,b)=>new Date(b.updatedAt)-new Date(a.updatedAt));const groups=taskListGroups(ordered,query);renderProjects();
+ $('task-count').textContent=taskListGroups(ordered).length;
  $('task-list').innerHTML=groups.length?groups.map(({task,children})=>{const displayStatus=taskDisplayStatus(task);return `<div class="task-group"><button class="task-item ${task.id===activeId?'active':''}" data-task="${esc(task.id)}"><span class="task-item-title">${esc(task.title)}</span><small>${esc(statusNames[displayStatus]||displayStatus)} · ${esc(date(task.updatedAt))}</small></button>${children.length?`<div class="child-task-list" aria-label="${esc(task.title)} 하위 작업">${children.map(child=>`<button class="task-item child-task-item ${child.id===activeId?'active':''}" data-task="${esc(child.id)}"><span class="task-item-title">${esc(child.assignment?.role||child.title||'하위 작업')}</span><small><span class="task-child-provider">${esc(providerName(child.assignment?.provider))}</span> · ${esc(statusNames[child.status]||child.status)}</small></button>`).join('')}</div>`:''}</div>`;}).join(''):'<p class="task-list-empty">기록된 작업이 없습니다.<br>첫 번째 질문을 남겨보세요.</p>';
 }
 function renderMessages(){
  const t=current();$('welcome').classList.toggle('hidden',!!t);$('task-toolbar').classList.toggle('hidden',!t);
  if(!t){$('messages').innerHTML='';return;}
- const displayStatus=taskDisplayStatus(t);$('task-title').textContent=t.title;$('task-type-label').textContent=typeNames[t.type]||'WORKSPACE';$('task-status').textContent=statusNames[displayStatus]||displayStatus;$('task-status').className=`status ${displayStatus}`;
+ const displayStatus=taskDisplayStatus(t);$('task-title').textContent=t.title;{const project=projectForTask(t,state());$('task-type-label').textContent=(typeNames[t.type]||'WORKSPACE')+(project?` · ${project.name}`:'');}$('task-status').textContent=statusNames[displayStatus]||displayStatus;$('task-status').className=`status ${displayStatus}`;
  const key=t.id+':'+t.version;if(lastRendered===key)return;lastRendered=key;
  const wasBottom=$('conversation-scroll').scrollHeight-$('conversation-scroll').scrollTop-$('conversation-scroll').clientHeight<130;
  $('messages').innerHTML=(t.messages||[]).map(m=>`<article class="message ${['user','assistant','system'].includes(m.role)?m.role:'system'}"><div class="message-head"><strong>${m.role==='user'?'YOU':m.role==='assistant'?'INNO · ASSISTANT':'WORKSPACE · 상태 기록'}</strong><span>${esc(date(m.createdAt))}</span></div><div class="message-body">${esc(m.content)}</div></article>`).join('');
@@ -156,7 +158,37 @@ function renderControls(){
 function syncStatus(error=client?.syncError){const s=$('sync-status');s.className='sync-badge';if(error){s.textContent='연결 오류 · 최신 상태 확인 필요';s.classList.add('error');return;}if(client?.remote){s.textContent=`동기화 ${client.lastSync?formatClock(client.lastSync):''}`;s.classList.add('connected');$('connection-label').textContent=state().capabilities?.desktopSources?'클라우드 + 이 PC 자료':'서버 연결됨';}else{s.textContent='이 기기 보관';$('connection-label').textContent='이 기기 보관';}}
 function sourceResultText(result){return ({storage_error:'원본 실행 기록 저장소를 사용할 수 없습니다. 브라우저 저장 공간과 탭 잠금을 확인하세요.',capacity:'원본 실행 보류 기록이 가득 찼습니다. 완료된 작업의 서버 상태를 확인하세요.',uncertain:'실행 시작 응답을 확인하지 못했습니다. 서버 실행 종료 확인 후 복구하세요.',source_error:'원본 읽기 또는 선택 범위 확인에 실패했습니다. 같은 원본을 다시 연결하세요.',sync_error:'최신 서버 상태를 확인하지 못해 원본 전달을 보류합니다.'})[result?.status]||'';}
 async function tickSource(){if(sourceTickRunning||!client?.remote||state().capabilities?.sourceDelegationVersion!==1||busy)return;sourceTickRunning=true;try{const result=await sourceCoordinator.tick();sourceStatus=sourceResultText(result);renderSourceExecution();}catch{sourceStatus='원본 실행 상태를 확인하지 못했습니다. 다음 동기화에서 다시 확인합니다.';renderSourceExecution();}finally{sourceTickRunning=false;}}
-function render(){renderList();renderMessages();renderAttachments();renderSourceExecution();renderPlan();renderControls();if(view==='usage')renderUsage();}
+// CR-008: projects in the sidebar, the composer's project, the task menu and the project dialog.
+let activeProject=(()=>{try{return localStorage.getItem('inno-active-project')||null;}catch{return null;}})(),projectsRendered='',editingProject=null,projectDeleteArmed=false;
+const projectFilter=()=>normalizeProjectFilter(activeProject,state());
+function selectProject(key){activeProject=key;try{key?localStorage.setItem('inno-active-project',key):localStorage.removeItem('inno-active-project');}catch{}projectsRendered='';renderList();renderComposerProject();}
+function renderProjects(){
+ const enabled=!!state().capabilities?.projects;$('project-section').classList.toggle('hidden',!enabled);$('project-list').classList.toggle('hidden',!enabled);if(!enabled)return;
+ const rows=projectListModel(state(),projectFilter()),key=JSON.stringify(rows.map(row=>[row.key,row.label,row.count,row.active,row.project?.version]));if(key===projectsRendered)return;projectsRendered=key;
+ renderProjectList($('project-list'),rows,{onSelect:selectProject,onEdit:project=>openProjectDialog((state().projects??[]).find(item=>item.id===project.id)??project)});
+}
+function renderComposerProject(){
+ const project=state().capabilities?.projects&&!current()?creationProject(state(),projectFilter()):null,chip=$('composer-project');
+ chip.classList.toggle('hidden',!project);chip.textContent=project?`프로젝트 '${project.name}'에 만듭니다${project.instructions.trim()?' · 공통 지침 적용':''} · `:'';
+}
+function openProjectDialog(project){
+ if(!client?.remote){toast('서버에 연결하면 프로젝트를 쓸 수 있습니다.');return;}
+ editingProject=project;projectDeleteArmed=false;
+ $('project-dialog-title').textContent=project?'프로젝트 설정':'새 프로젝트';$('project-name').value=project?.name??'';$('project-instructions').value=project?.instructions??'';
+ $('project-delete').hidden=!project;$('project-delete').textContent='프로젝트 삭제';$('project-delete-note').classList.add('hidden');$('project-error').textContent='';
+ $('project-dialog').showModal();
+}
+async function projectRequest(path,body){try{return await client.request(path,body);}catch(error){$('project-error').textContent=error.status===409?'다른 곳에서 바뀌었습니다. 닫았다가 다시 열어 주세요.':error.message;return null;}}
+function openTaskMenu(){
+ const t=current();if(!t)return;const child=!!t.parentTaskId,projects=state().projects??[];
+ $('task-menu-note').textContent=child?'하위 작업은 부모 작업을 따릅니다. 이름과 프로젝트는 부모 작업에서 바꾸세요.':'';
+ $('task-rename-input').value=t.title;$('task-rename-input').disabled=child;$('task-rename-save').disabled=child;
+ $('task-move-row').classList.toggle('hidden',!state().capabilities?.projects);
+ const select=$('task-move-select');select.replaceChildren(new Option('프로젝트 없음',''),...projects.map(project=>new Option(project.name,project.id)));
+ select.value=projects.some(project=>project.id===t.projectId)?t.projectId:'';select.disabled=child;$('task-move-save').disabled=child;
+ $('task-menu-dialog').showModal();
+}
+function render(){renderList();renderMessages();renderAttachments();renderSourceExecution();renderPlan();renderControls();renderComposerProject();if(view==='usage')renderUsage();}
 // PRV-06: provider cards with the on/off switch, on the 연결 앱 page.
 // An armed "turn off" lapses after 20 s, so a later single click never turns a provider off.
 let providerArmed=null,providerRendered='',providerFocus=null;
@@ -290,7 +322,7 @@ function renderUsage(){
 function showSettings(){$('server-url').value=client?.baseUrl||location.origin;$('server-token').value=client?.token||'';$('settings-error').textContent='';openDialog('settings-dialog');}
 async function configure(e){e.preventDefault();const button=e.submitter;button.disabled=true;try{const baseUrl=validateEndpoint($('server-url').value),token=$('server-token').value.trim();const candidate=new WorkspaceClient({baseUrl,token,remote:true});await candidate.refresh();modelPolicyUI.close();deliveryRecoveryUI.close();selectionEpoch++;sourceCoordinator.resetSession();session.clear();draftAttachments=[];client=candidate;modelDiagnosticsUI.sync();const reconnect=await sourceCoordinator.reconnect();sourceStatus=sourceResultText(reconnect);sessionStorage.setItem('inno-token',token);localStorage.setItem('inno-server',baseUrl);sessionStorage.setItem('inno-remote','1');activeId=null;lastRendered='';syncStatus();render();void tickSource();$('settings-dialog').close();toast('서버에 연결했습니다. 이 탭이 열려 있는 동안 5초마다 상태를 확인합니다.');}catch(error){$('settings-error').textContent=error.message;}finally{button.disabled=false;}}
 
-$('composer').addEventListener('submit',e=>{e.preventDefault();guarded(async()=>{const prompt=$('prompt').value.trim();if(!prompt)return;if(current()){await act(current().status==='waiting_user'?'decide':'message',{content:prompt});}else{const t=await client.create({prompt,type:$('task-type').value,attachments:draftAttachments});activeId=t.id;localStorage.setItem('inno-active-task',t.id);draftAttachments=[];lastRendered='';} $('prompt').value='';syncStatus();render();requestAnimationFrame(()=>$('conversation-scroll').scrollTop=$('conversation-scroll').scrollHeight);toast(client.remote?'작업을 서버에 기록했습니다. 실행 버튼으로 시작하세요.':'작업을 이 기기에 기록했습니다. AI 실행은 서버 연결이 필요합니다.');});});
+$('composer').addEventListener('submit',e=>{e.preventDefault();guarded(async()=>{const prompt=$('prompt').value.trim();if(!prompt)return;if(current()){await act(current().status==='waiting_user'?'decide':'message',{content:prompt});}else{const t=await client.create({prompt,type:$('task-type').value,attachments:draftAttachments,...(creationProject(state(),projectFilter())?{projectId:creationProject(state(),projectFilter()).id}:{})});activeId=t.id;localStorage.setItem('inno-active-task',t.id);draftAttachments=[];lastRendered='';} $('prompt').value='';syncStatus();render();requestAnimationFrame(()=>$('conversation-scroll').scrollTop=$('conversation-scroll').scrollHeight);toast(client.remote?'작업을 서버에 기록했습니다. 실행 버튼으로 시작하세요.':'작업을 이 기기에 기록했습니다. AI 실행은 서버 연결이 필요합니다.');});});
 $('prompt').addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();$('composer').requestSubmit();}});
 $('new-task').onclick=newTask;$('task-search').oninput=renderList;
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>setView(b.dataset.view));
@@ -317,7 +349,23 @@ $('local-records-button').onclick=()=>guarded(()=>recordImports.fromLocal());
 $('restore-button').onclick=()=>$('restore-input').click();$('restore-input').onchange=e=>guarded(async()=>{const file=e.target.files[0];if(!file)return;if(file.size>20*1024*1024)throw new Error('작업 기록 파일은 20 MB 이하여야 합니다.');const text=await file.text();if(client.remote){await recordImports.fromBundle(parseBundle(text));e.target.value='';return;}const count=await client.restore(text);render();toast(`${count}개 작업을 가져왔습니다. 원본은 다시 연결하세요.`);e.target.value='';});
 $('edit-plan').onclick=()=>{$('plan-text').value=(current()?.plan||[]).map(x=>x.label||x.role).join('\n');openDialog('plan-dialog');};
 $('plan-form').onsubmit=e=>{e.preventDefault();guarded(async()=>{const labels=$('plan-text').value.split('\n').map(s=>s.trim()).filter(Boolean);if(!labels.length||labels.length>6)throw new Error('역할은 1개에서 6개 사이로 구성하세요.');await act('plan',{plan:labels.map((label,i)=>({id:`role-${i+1}`,role:label,label,status:'pending',instructions:label}))});$('plan-dialog').close();});};
-$('task-menu').onclick=()=>{if(!current())return;const t=current();$('preview-title').textContent='작업 기록';$('preview-content').innerHTML=`<pre>${esc(JSON.stringify(exportBundle({tasks:[t]}),null,2))}</pre>`;openDialog('preview-dialog');};
+$('task-menu').onclick=openTaskMenu;
+$('new-project').onclick=()=>openProjectDialog(null);
+$('task-rename-save').onclick=()=>guarded(async()=>{await act('rename',{title:$('task-rename-input').value});$('task-menu-dialog').close();toast('작업 이름을 바꿨습니다.');});
+$('task-move-save').onclick=()=>guarded(async()=>{const value=$('task-move-select').value;await act('move',{projectId:value||null});$('task-menu-dialog').close();toast(value?'프로젝트로 옮겼습니다.':'프로젝트에서 뺐습니다.');});
+$('project-form').onsubmit=event=>{event.preventDefault();guarded(async()=>{
+ const input={name:$('project-name').value,instructions:$('project-instructions').value};
+ const result=editingProject?await projectRequest(`/api/projects/${encodeURIComponent(editingProject.id)}`,{action:'update',...input,expectedVersion:editingProject.version}):await projectRequest('/api/projects',input);
+ if(!result)return;$('project-dialog').close();await refresh();
+ if(!editingProject&&result.project)selectProject(result.project.id);
+ toast(editingProject?'프로젝트를 저장했습니다.':'프로젝트를 만들었습니다. 새 작업은 이 프로젝트에 만들어집니다.');
+});};
+$('project-delete').onclick=()=>{
+ if(!editingProject)return;
+ if(!projectDeleteArmed){projectDeleteArmed=true;$('project-delete').textContent='삭제 확인';$('project-delete-note').classList.remove('hidden');return;}
+ guarded(async()=>{const id=editingProject.id;const result=await projectRequest(`/api/projects/${encodeURIComponent(id)}`,{action:'delete',expectedVersion:editingProject.version});if(!result)return;$('project-dialog').close();if(activeProject===id)selectProject(null);await refresh();toast('프로젝트를 삭제했습니다. 작업은 프로젝트 없음으로 남습니다.');});
+};
+$('task-record-button').onclick=()=>{$('task-menu-dialog').close();if(!current())return;const t=current();$('preview-title').textContent='작업 기록';$('preview-content').innerHTML=`<pre>${esc(JSON.stringify(exportBundle({tasks:[t]}),null,2))}</pre>`;openDialog('preview-dialog');};
 $('preview-dialog').addEventListener('close',()=>{previewUrls.forEach(u=>URL.revokeObjectURL(u));previewUrls=[];$('preview-content').replaceChildren();});
 $('recovery-dialog').addEventListener('close',()=>{pendingRecovery=null;$('recovery-confirm').checked=false;});
 $('mobile-menu').onclick=()=>{$('sidebar').classList.add('open');$('sidebar-scrim').classList.add('open');};$('sidebar-scrim').onclick=closeSidebar;

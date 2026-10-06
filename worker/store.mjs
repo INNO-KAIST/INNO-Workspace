@@ -10,6 +10,7 @@ import {ownedContextDelivery,suppliedContextDelivery,withRetrieval} from '../pub
 import {boundedLocalExecution} from '../public/core/local-execution.mjs';
 import {serializeTaskBody,taskBodyBytes,TASK_GROWTH_MAX_BYTES} from '../public/core/task-size.mjs';
 import {normalizeProviderSettings,nextProviderSettings,providerDisabledError,providerEnabled} from '../public/core/provider-settings.mjs';
+import {createProject,updateProject,storedProject,PROJECT_LIMITS} from '../public/core/projects.mjs';
 // Only the desktop runner of a bounded (evaluation) execution may supply its own local
 // observation; it is kept as evidence and never trusted from other callers (H6).
 const boundedLocalFor=(task,input,allowed)=>allowed&&task?.evaluationBudget&&input?.localExecution!==undefined?boundedLocalExecution(input.localExecution):null;
@@ -78,11 +79,11 @@ INSERT OR IGNORE INTO metadata (key, value) VALUES ('revision', 0);
 `;
 
 class D1NotFoundError extends Error {
-  constructor() { super('task not found'); this.statusCode = 404; }
+  constructor(message='task not found') { super(message); this.statusCode = 404; }
 }
 
-// Actions that only change state stay allowed for a task above the growth limit.
-const growthOf=input=>['pause','resume','cancel'].includes(input?.action)?undefined:'grow';
+// Actions that only change state or filing stay allowed for a task above the growth limit.
+const growthOf=input=>['pause','resume','cancel','rename','move'].includes(input?.action)?undefined:'grow';
 
 export class D1TaskStore {
   constructor(database, options = {}) {
@@ -94,6 +95,7 @@ export class D1TaskStore {
 
   async createTask(input) {
     const task = createTask(input, {now: this.now, id: this.id});
+    if(task.projectId)await this.requireProject(task.projectId);
     const requestTaskId=creationId(input);
     if(requestTaskId){
       task.id=requestTaskId;task.creationRequestHash=await digestText(creationPayload(input));
@@ -145,14 +147,14 @@ export class D1TaskStore {
           this.db.prepare('SELECT body FROM usage ORDER BY provider').all(),
           this.db.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(version),0) AS v FROM tasks').first(),
         ]);
-        return {revision,delta:true,since,taskCount:Number(count?.n??0),versionSum:Number(count?.v??0),tasks:changed.results.map(row=>JSON.parse(row.body)),usage:usage.results.map(row=>JSON.parse(row.body)),capabilities};
+        return {revision,delta:true,since,taskCount:Number(count?.n??0),versionSum:Number(count?.v??0),tasks:changed.results.map(row=>JSON.parse(row.body)),usage:usage.results.map(row=>JSON.parse(row.body)),projects:await this.listProjects(),capabilities};
       }catch(error){
         // Before migration 0003 there is no rev column: answer with the full state.
         if(!/no such column/i.test(String(error?.message)))throw error;
       }
     }
-    const [tasks,usage]=await Promise.all([this.listTasks(),this.db.prepare('SELECT body FROM usage ORDER BY provider').all()]);
-    return {revision,tasks,usage:usage.results.map(row=>JSON.parse(row.body)),capabilities};
+    const [tasks,usage,projects]=await Promise.all([this.listTasks(),this.db.prepare('SELECT body FROM usage ORDER BY provider').all(),this.listProjects()]);
+    return {revision,tasks,usage:usage.results.map(row=>JSON.parse(row.body)),projects,capabilities};
   }
 
   // growth: see public/core/task-size.mjs ('grow' or 'completion'; omitted for state changes).
@@ -334,7 +336,58 @@ export class D1TaskStore {
     return next;
   }
 
-  applyAction(id, input) {
+  // CR-008: projects are metadata rows 'project:<id>'. Every change bumps the workspace
+  // revision so pages re-read; deleting removes only the row, and tasks that still name it
+  // read as no project.
+  async listProjects(){
+    const rows=(await this.db.prepare("SELECT value FROM metadata WHERE key GLOB 'project:*'").all()).results??[];
+    return rows.map(row=>storedProject(row.value)).filter(Boolean).sort((a,b)=>String(a.createdAt).localeCompare(String(b.createdAt))||a.id.localeCompare(b.id));
+  }
+  async projectRow(id){
+    if(typeof id!=='string'||!id||id.length>PROJECT_LIMITS.id)return null;
+    const row=await this.db.prepare('SELECT value FROM metadata WHERE key=?1').bind('project:'+id).first();
+    const project=row?storedProject(row.value):null;
+    return project?{project,raw:row.value}:null;
+  }
+  // The project an execution of this task works in: its own, or its parent's for a child.
+  async projectForTask(task){
+    let id=task?.projectId;
+    if(!id&&task?.parentTaskId)id=(await this.getTask(task.parentTaskId))?.projectId;
+    return id?(await this.projectRow(id))?.project??null:null;
+  }
+  async requireProject(id){
+    const row=await this.projectRow(id);
+    if(!row)throw new ValidationError('Project not found');
+    return row.project;
+  }
+  async createProject(input){
+    const project=createProject(input,{now:this.now,id:this.id});
+    // The limit is checked in the same statement, so two creations at the limit cannot both land.
+    const results=await this.db.batch([
+      this.db.prepare("INSERT INTO metadata (key,value) SELECT ?1,?2 WHERE (SELECT COUNT(*) FROM metadata WHERE key GLOB 'project:*')<?3").bind('project:'+project.id,JSON.stringify(project),PROJECT_LIMITS.count),
+      this.db.prepare("UPDATE metadata SET value=value+1 WHERE key='revision' AND changes()=1"),
+    ]);
+    if(Number(results[0]?.meta?.changes??0)!==1)throw new ValidationError(`At most ${PROJECT_LIMITS.count} projects`);
+    return project;
+  }
+  async changeProject(id,input){
+    const row=await this.projectRow(id);
+    if(!row)throw new D1NotFoundError('project not found');
+    const deleting=input?.action==='delete';
+    if(!deleting&&input?.action!=='update')throw new ValidationError('Unsupported project action');
+    if(deleting&&(!Number.isInteger(input.expectedVersion)||input.expectedVersion!==row.project.version))throw new ConflictError('Project changed; reload and try again',row.project.version);
+    const next=deleting?null:updateProject(row.project,input,{now:this.now});
+    const results=await this.db.batch([
+      deleting?this.db.prepare('DELETE FROM metadata WHERE key=?1 AND value=?2').bind('project:'+id,row.raw)
+        :this.db.prepare('UPDATE metadata SET value=?1 WHERE key=?2 AND value=?3').bind(JSON.stringify(next),'project:'+id,row.raw),
+      this.db.prepare("UPDATE metadata SET value=value+1 WHERE key='revision' AND changes()=1"),
+    ]);
+    if(Number(results[0]?.meta?.changes??0)!==1)throw new ConflictError('Project changed; reload and try again',(await this.projectRow(id))?.project.version);
+    return deleting?{deleted:true,id}:{project:next};
+  }
+
+  async applyAction(id, input) {
+    if(input?.action==='move'&&input.projectId!==null)await this.requireProject(input.projectId);
     return this.replaceTask(id, input?.expectedVersion, current => {
       if(current.parentTaskId)throw new ValidationError('Child user mutations require the parent delegation coordinator');
       const next=applyAction(current,input,{now:this.now,id:this.id});

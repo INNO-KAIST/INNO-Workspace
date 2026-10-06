@@ -1,3 +1,4 @@
+import {projectInstructionsBlock} from '../public/core/projects.mjs';
 import {checkedContextUrl,SNAPSHOT_UNAVAILABLE} from './context-access.mjs';
 import {buildTaskContext} from '../public/core/task-context.mjs';
 import {contextDelivery,withRetrieval} from '../public/core/context-delivery.mjs';
@@ -161,6 +162,7 @@ function promptText(task, materials, ownership, context, selected) {
     `Task type: ${task.type}`,
     `Task title: ${task.title}`,
     ownership.contextGuidance || '',
+    ...(ownership.projectBlock ? [ownership.projectBlock] : []),
     '',
     'User request:',
     context.request,
@@ -452,7 +454,7 @@ export function createCodexRunner({
     available: () => availability ? availability() : defaultCodexAvailability(spawnProcess, env),
     models: async()=>{const catalog=await readCatalog();const models=modelCatalogRows(Array.isArray(catalog)?catalog:catalog?.models);return Array.isArray(catalog)?models:{models,observedAt:catalog?.observedAt??null,status:catalog?.status==='fresh'?'fresh':'unavailable'};},
     sourceDelegationVersion:sourceDelegationVersion===1?1:0,
-    async run({task, materials = [], reviewInputs = [], executionId, generation, signal, executionBudgetVersion, sourceDelegationVersion:negotiatedSourceVersion=sourceDelegationVersion, plugins:offeredPlugins, pluginsSkipped=[], pluginCatalog:catalogInput}) {
+    async run({task, project, materials = [], reviewInputs = [], executionId, generation, signal, executionBudgetVersion, sourceDelegationVersion:negotiatedSourceVersion=sourceDelegationVersion, plugins:offeredPlugins, pluginsSkipped=[], pluginCatalog:catalogInput}) {
       // Plugins come from the claim: verified text of still-approved selections (S3).
       const plugins=boundedOfferedPlugins(offeredPlugins),pluginDelivery=boundedPluginDelivery(pluginDeliveryRecord(plugins,pluginsSkipped)),pluginCatalog=(()=>{try{return boundedPluginCatalog(catalogInput);}catch{return [];}})();
       let contextLease,delivery,measuredDelivery=()=>delivery;
@@ -523,7 +525,7 @@ export function createCodexRunner({
       ];
       const codexArgs = [...cliArgs, ...mcpArguments, '-'];
       const modelPolicy=deadline?'EVALUATION BUDGET EXECUTION: Work directly in this process. Do not use MCP tools, native subagents, delegation, or provider handoff. Return only the assigned result.':mode==='child'?codexChildPolicy(task,assignedRoute):mode==='review'?codexReviewPolicy(task):managedDelivery?delegationRoutingPolicy(models,{sourceDelegationVersion:sourceContext?1:0}):routingPolicy(models);
-      const promptOptions={plugins, pluginCatalog, executionId, generation, managedDelivery, contextGuidance, contextReaderAvailable:Boolean(localContextUrl), handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'};
+      const promptOptions={projectBlock:projectInstructionsBlock(project), plugins, pluginCatalog, executionId, generation, managedDelivery, contextGuidance, contextReaderAvailable:Boolean(localContextUrl), handoffFiles, reviewFiles, modelPolicy, mode, sourceContext, evaluationBound:Boolean(deadline),allowDelegation:!deadline&&managedDelivery&&mode==='root', allowHandoff:!deadline&&managedDelivery&&mode==='root'};
       let {text:input,context}=await taskPromptWithContext(task, materials, promptOptions);
       if(localContextUrl){
         try{contextLease=contextAccess.open(task,signal);}

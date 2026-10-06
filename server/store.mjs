@@ -41,8 +41,8 @@ export class ExecutionConflictError extends ConflictError {
 const EVALUATION_ATTACH=Symbol('evaluation attach');
 const BUDGET_COMMIT=Symbol('budget commit');
 
-// Actions that only change state stay allowed for a task above the growth limit.
-const growthOf=input=>['pause','resume','cancel'].includes(input?.action)?undefined:'grow';
+// Actions that only change state or filing stay allowed for a task above the growth limit.
+const growthOf=input=>['pause','resume','cancel','rename','move'].includes(input?.action)?undefined:'grow';
 
 export class SqliteTaskStore {
   constructor(filename = ':memory:', options = {}) {

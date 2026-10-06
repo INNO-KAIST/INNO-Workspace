@@ -1,7 +1,7 @@
 import {CreationRetries,creationId} from './create-requests.mjs';
 import {sanitizeSourceView} from './source-coverage.mjs';
 const attachmentKeys = ['id','name','path','size','lastModified','type','source','url'];
-const taskKeys = ['id','title','prompt','type','status','version','createdAt','updatedAt','messages','plan','artifacts','checkpoint','decision','sessionUrl','error','provider','parentTaskId','batchId','parentEpoch','assignment','delegation'];
+const taskKeys = ['id','title','prompt','type','status','version','createdAt','updatedAt','messages','plan','artifacts','checkpoint','decision','sessionUrl','error','provider','parentTaskId','batchId','parentEpoch','assignment','delegation','projectId'];
 const pick = (value, keys) => Object.fromEntries(keys.filter(k => value[k] !== undefined).map(k=>[k,value[k]]));
 export function exportBundle(state) {
   return {format:'inno-workspace-v1',exportedAt:new Date().toISOString(),tasks:(state.tasks||[]).map(t=>({

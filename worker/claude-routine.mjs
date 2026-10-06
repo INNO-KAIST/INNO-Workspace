@@ -1,3 +1,4 @@
+import {projectInstructionsBlock} from '../public/core/projects.mjs';
 import {buildTaskContext} from '../public/core/task-context.mjs';
 import {ContextRetrievalRequiredError} from '../public/core/context-errors.mjs';
 import {contextDelivery} from '../public/core/context-delivery.mjs';
@@ -38,7 +39,8 @@ function cloudContextGuidance(task) {
   ].join('\n');
 }
 
-async function routineText(task, materials, ownership, catalog, capability, sourceDelegationVersion=0, offered=[], pluginCatalog=[]) {
+async function routineText(task, materials, ownership, catalog, capability, sourceDelegationVersion=0, offered=[], pluginCatalog=[], project=null) {
+  const projectBlock=projectInstructionsBlock(project);
   const mode=task.delegation?.state==='reviewing'?'review':task.parentTaskId||task.assignment?'child':'root';
   const readerAvailable=typeof capability==='string'&&capability.length>0;
   const context=await buildTaskContext(task,{mode,selection:readerAvailable?'resume':'full',readerAvailable});
@@ -69,6 +71,7 @@ async function routineText(task, materials, ownership, catalog, capability, sour
     `Execution ID: ${ownership.executionId}`,
     `Execution generation: ${ownership.generation}`,
     cloudContextGuidance(task),
+    ...(projectBlock?[projectBlock]:[]),
     `Request: ${context.request}`,
     selected?'Selected durable conversation (original messages remain available through scoped reads):':'Recent durable conversation (newer messages can revise the original request):',
     context.conversation || '- No additional messages.',
@@ -87,7 +90,7 @@ async function routineText(task, materials, ownership, catalog, capability, sour
   return {text,delivery:contextDelivery(context,{provider:'claude',promptBytes:new TextEncoder().encode(text).byteLength,materialBytes,reader:readerAvailable})};
 }
 
-export async function fireRoutine(fetchFn, env, task, materials, ownership, signal, catalog, sourceDelegationVersion=0, plugins={offered:[],skipped:[]}, pluginCatalog=[]) {
+export async function fireRoutine(fetchFn, env, task, materials, ownership, signal, catalog, sourceDelegationVersion=0, plugins={offered:[],skipped:[]}, pluginCatalog=[], project=null) {
   const capability=await executionCapability(env.ACCESS_TOKEN,{...ownership,task});
   let routine;
   const response = await fetchFn(env.CLAUDE_ROUTINE_URL, {
@@ -98,7 +101,7 @@ export async function fireRoutine(fetchFn, env, task, materials, ownership, sign
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
     },
-    body: JSON.stringify({text: (routine = await routineText(task, materials, ownership, catalog, capability, sourceDelegationVersion, plugins.offered, pluginCatalog)).text}),
+    body: JSON.stringify({text: (routine = await routineText(task, materials, ownership, catalog, capability, sourceDelegationVersion, plugins.offered, pluginCatalog, project)).text}),
   });
   const result = await response.json().catch(() => null);
   if (!response.ok) {
@@ -119,9 +122,10 @@ export const routineLaunch=fire=>async(claim,options)=>{
  return {sessionUrl:fired.claude_code_session_url,checkpoint:'Claude session started; results await verification.',contextDelivery:fired.contextDelivery,pluginDelivery:fired.pluginDelivery};
 };
 
-export function createClaudeRoutineAdapter({fetchFn=fetch,env={},sourceDelegationVersion=0,catalog,plugins}={}){
+// projects.resolve(task) gives the task's project (CR-008), or null.
+export function createClaudeRoutineAdapter({fetchFn=fetch,env={},sourceDelegationVersion=0,catalog,plugins,projects}={}){
  return {
   provider:'claude',configured:routineConfigured(env),unavailableReason:ROUTINE_UNAVAILABLE,
-  launch:routineLaunch(async(claim,{materials=[]}={})=>fireRoutine(fetchFn,env,claim.task,materials,claim,undefined,await catalog.read(),sourceDelegationVersion,plugins?await plugins.resolve(claim.task):undefined,plugins&&isRootMaster(claim.task)?await plugins.approvedCatalog():[])),
+  launch:routineLaunch(async(claim,{materials=[]}={})=>fireRoutine(fetchFn,env,claim.task,materials,claim,undefined,await catalog.read(),sourceDelegationVersion,plugins?await plugins.resolve(claim.task):undefined,plugins&&isRootMaster(claim.task)?await plugins.approvedCatalog():[],projects?await projects.resolve(claim.task):null)),
  };
 }

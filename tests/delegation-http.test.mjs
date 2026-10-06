@@ -285,3 +285,20 @@ test('children created by a delegation are part of the next delta',async t=>{
  for(const child of parent.delegation.children)assert.ok(ids.includes(child.taskId),child.taskId);
  assert.equal(delta.taskCount,(await f.store.listTasks()).length);
 });
+
+// CR-008: renaming a delegation parent while its children run keeps the delegation going.
+test('renaming a delegation parent while its children run keeps the delegation going',async t=>{
+ const f=await fixture(t);await f.post('/api/desktop/poll',{models:observedModels()});
+ const {task}=await f.post('/api/tasks',{prompt:'independent checks'});await f.post(`/api/tasks/${task.id}/run`,{provider:'codex',expectedVersion:1});
+ const {claim}=await f.post('/api/desktop/poll',{});
+ await f.post(`/api/desktop/${task.id}/complete`,{...owner(claim),content:'planned',delegation:{independent:true,children}});
+ let parent=await f.store.requireTask(task.id);assert.equal(parent.status,'waiting_children');
+ parent=await f.store.applyAction(task.id,{action:'rename',title:'검증 묶음',expectedVersion:parent.version});
+ for(const assignment of parent.delegation.children){
+  const child=await f.store.requireTask(assignment.taskId);
+  const c=child.status==='running'?owner(child.checkpoint):owner((await f.post('/api/desktop/poll',{})).claim);
+  await f.post(`/api/desktop/${child.id}/complete`,{...c,content:'4'});
+ }
+ const {claim:review}=await f.post('/api/desktop/poll',{});
+ assert.equal(review.task.id,task.id);assert.equal(review.task.title,'검증 묶음');
+});

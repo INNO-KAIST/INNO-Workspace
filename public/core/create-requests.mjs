@@ -7,7 +7,7 @@ export function creationId(input){
 }
 export function creationPayload(input){
  let sequence=0;const task=createTask(input,{now:()=>'',id:()=>`field-${++sequence}`});
- return JSON.stringify({prompt:task.prompt,title:task.title,type:task.type,attachments:task.attachments});
+ return JSON.stringify({prompt:task.prompt,title:task.title,type:task.type,attachments:task.attachments,...(task.projectId?{projectId:task.projectId}:{})});
 }
 export async function digestText(text){return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text))),n=>n.toString(16).padStart(2,'0')).join('');}
 export class CreationRetries {

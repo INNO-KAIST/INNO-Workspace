@@ -184,3 +184,15 @@ test('after a discard, the other action and a different payload for the same own
  const changed=await f.post(f.task.id,'fail',{...failed,failure:{kind:'connection',retryNotBefore:null}});assert.equal(changed.status,409,JSON.stringify(changed));
  assert.equal(await f.saved(discarded.deliveryReceipt.id),stored);
 });
+
+// CR-008: renaming or moving a task while it runs on the desktop does not cost its result.
+test('a rename during a receipt-bound desktop run still accepts the result',async t=>{
+ const f=await fixture(t);
+ const running=await f.store.requireTask(f.task.id);
+ const renamed=await f.store.applyAction(f.task.id,{action:'rename',title:'바뀐 이름',expectedVersion:running.version});
+ assert.equal(renamed.status,'running');
+ const done=await f.post(f.task.id,'complete',input(f.owner));
+ assert.equal(done.status,200,JSON.stringify(done));
+ const stored=await f.store.requireTask(f.task.id);
+ assert.equal(stored.status,'completed');assert.equal(stored.title,'바뀐 이름');
+});

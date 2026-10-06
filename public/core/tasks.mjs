@@ -207,7 +207,9 @@ export function createTask(input, overrides = {}) {
   const prompt = text(input.prompt, 'prompt');
   requireRunnable(utf8Bytes(prompt) + utf8Bytes(EMPTY_CHECKPOINT_TEXT) + utf8Bytes(EMPTY_CONVERSATION_TEXT));
   const type = typeof input.type === 'string' && input.type.trim() ? input.type.trim().slice(0, 100) : 'general';
+  const projectId = input.projectId === undefined || input.projectId === null ? null : text(input.projectId, 'project id', {max: 200});
   return {
+    ...(projectId ? {projectId} : {}),
     id: deps.id(),
     title: typeof input.title === 'string' && input.title.trim()
       ? input.title.trim().slice(0, 120)
@@ -233,7 +235,8 @@ function assertAction(task, input) {
   if (input.expectedVersion !== task.version) {
     throw new ConflictError(`version conflict: expected ${input.expectedVersion}, current ${task.version}`, task.version);
   }
-  if (TERMINAL_STATUSES.includes(task.status) && !(task.status === 'completed' && input.action === 'message')) {
+  // Renaming or moving a finished task only changes how it is filed (CR-008).
+  if (TERMINAL_STATUSES.includes(task.status) && !(task.status === 'completed' && input.action === 'message') && !['rename', 'move'].includes(input.action)) {
     throw new ConflictError(`task is terminal (${task.status})`, task.version);
   }
 }
@@ -305,6 +308,15 @@ export function applyAction(task, input, overrides = {}) {
       break;
     case 'plan':
       next.plan = normalizePlan(input.plan, deps.id);
+      break;
+    // CR-008: a person renames a task or files it into a project. A delegation child follows
+    // its parent, so it is renamed or moved through the parent only.
+    case 'rename':
+    case 'move':
+      if (task.parentTaskId) throw new ValidationError('A delegation child follows its parent; rename or move the parent task');
+      if (input.action === 'rename') next.title = text(input.title, 'title', {max: 120});
+      else if (input.projectId === null) delete next.projectId;
+      else next.projectId = text(input.projectId, 'project id', {max: 200});
       break;
     case 'attachments':
       if (task.status === 'running') throw new ConflictError('attachments cannot change while task is running', task.version);

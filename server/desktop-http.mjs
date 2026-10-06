@@ -130,6 +130,8 @@ export function createDesktopServer({token,publicDir,request,bridge,localRecords
     if(req.method==='POST'&&(/^\/api\/plugins\/(?:import|approve|disable|remove)$/.test(p)||/^\/api\/tasks\/[^/]+\/plugins$/.test(p)))return json(res,200,await request(p,await body(req)));
     if(/^\/api\/tasks\/[^/]+\/review-observations$/.test(p)&&['GET','POST'].includes(req.method))return json(res,200,await request(p,req.method==='POST'?await body(req):undefined));
     if(req.method==='POST'&&(p==='/api/tasks'||/^\/api\/tasks\/[^/]+\/actions$/.test(p)))return json(res,p==='/api/tasks'?201:200,await request(p,await body(req)));
+    // CR-008 projects and PRV-06 provider settings are cloud writes the page makes through here.
+    if(req.method==='POST'&&(p==='/api/projects'||/^\/api\/projects\/[^/]+$/.test(p)||p==='/api/providers/settings'))return json(res,200,await request(p,await body(req)));
     return json(res,404,{error:'not found'});
    }
    if(req.method!=='GET')return json(res,404,{error:'not found'});

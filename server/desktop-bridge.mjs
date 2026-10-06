@@ -171,7 +171,7 @@ export function createDesktopBridge({request,runner,outbox,journal,heartbeatMs=1
    renewal=request(`/api/desktop/${encodeURIComponent(task.id)}/renew`,owner,options(binding)).then(()=>{confirmedAt=Math.max(confirmedAt,sentAt);},e=>{if(!retryableStatus(e?.status)){monitorError??=e;controller.abort();}}).finally(()=>{renewal=null;});
   },heartbeatMs);
   let result,runError;
-  try{result=await runner.run({task,...owner,materials,reviewInputs:claim.reviewInputs,...(claim.plugins?{plugins:claim.plugins,pluginsSkipped:claim.pluginsSkipped??[]}:{}),...(claim.pluginCatalog?{pluginCatalog:claim.pluginCatalog}:{}),sourceDelegationVersion:runner.sourceDelegationVersion===1&&claim.sourceDelegationVersion===1?1:0,signal:controller.signal});}catch(e){runError=e;}
+  try{result=await runner.run({task,...owner,materials,reviewInputs:claim.reviewInputs,...(claim.project?{project:claim.project}:{}),...(claim.plugins?{plugins:claim.plugins,pluginsSkipped:claim.pluginsSkipped??[]}:{}),...(claim.pluginCatalog?{pluginCatalog:claim.pluginCatalog}:{}),sourceDelegationVersion:runner.sourceDelegationVersion===1&&claim.sourceDelegationVersion===1?1:0,signal:controller.signal});}catch(e){runError=e;}
   finally{clearInterval(timer);if(renewal)await renewal;}
   if(!versioned&&monitorError)throw monitorError;
   if(!versioned&&controller.signal.aborted)throw Error('Desktop execution stopped');
