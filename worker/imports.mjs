@@ -1,5 +1,6 @@
 import {prepareImport,importCopyId} from '../public/core/imports.mjs';
 import {ValidationError} from '../public/core/tasks.mjs';
+import {serializeTaskBody} from '../public/core/task-size.mjs';
 export class RecordImporter {
  constructor(store){this.store=store;}
  async import(raw,{copy=false}={}){
@@ -15,7 +16,7 @@ export class RecordImporter {
   if(existing)return {status:await this.same(existing,hash)?'skipped':'conflict',id:targetId};
   const task={...prepared.task,id:targetId,version:1,provenance:{sourceId:raw.id,sourceHash:hash,sourceVersion:raw.version,importedAt:this.store.now()}};
   const results=await this.store.db.batch([
-   this.store.db.prepare('INSERT OR IGNORE INTO tasks (id,version,updated_at,body) VALUES (?1,?2,?3,?4)').bind(task.id,task.version,task.updatedAt,JSON.stringify(task)),
+   this.store.db.prepare('INSERT OR IGNORE INTO tasks (id,version,updated_at,body) VALUES (?1,?2,?3,?4)').bind(task.id,task.version,task.updatedAt,serializeTaskBody(task,{growth:'grow'})),
    this.store.db.prepare("UPDATE metadata SET value=value+1 WHERE key='revision' AND changes()=1"),
   ]);
   if(Number(results[0]?.meta?.changes)===1)return {status:'created',id:task.id};

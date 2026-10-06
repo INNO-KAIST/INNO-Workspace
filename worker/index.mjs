@@ -1,3 +1,4 @@
+import {assertRunAdmission} from '../public/core/task-size.mjs';
 import {assertProviderId,providerManifest,providerTransport,providersByTransport} from '../public/core/providers.mjs';
 import {sourceDelegationVersionFromEnvironment} from '../public/core/source-delegation-gate.mjs';
 import {deliveryReceiptVersionFromEnvironment} from '../public/core/delivery-receipt-gate.mjs';
@@ -270,7 +271,8 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
               store.assertExecution(parent,input);
               const report=validateReviewReport(parent,input,{requirePass:false});
               if(report.some(row=>row.criteria.some(c=>c.status!=='pass'))){
-                if(!report.some(row=>row.criteria.some(c=>c.status==='unverifiable'))&&parent.delegation.retryCount<1){const result=await orchestration.retryReview(id,input,receiptOptions);return await accepted(result.parent);}
+                // A retry that cannot start its child (H9-2 growth limit) asks the person instead, so this result is still stored.
+                if(!report.some(row=>row.criteria.some(c=>c.status==='unverifiable'))&&parent.delegation.retryCount<1){try{const result=await orchestration.retryReview(id,input,receiptOptions);return await accepted(result.parent);}catch(error){if(error?.code!=='TASK_BODY_LIMIT')throw error;}}
                 const task=await store.requestDecision(id,{...input,prompt:'하위 결과의 검토 기준을 모두 확인하지 못했습니다. 근거를 확인하고 진행 방향을 선택해 주세요.',options:[{label:'검토 보완',pros:'검증이 부족한 기준을 보완합니다.',cons:'추가 작업이 필요합니다.'},{label:'요청 수정',pros:'목표 또는 기준을 다시 지정합니다.',cons:'기존 배정이 변경될 수 있습니다.'}]},receiptOptions);
                 return await accepted(task);
               }
@@ -302,6 +304,8 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
           if (!Number.isInteger(input.expectedVersion)) throw new ValidationError('expectedVersion is required');
           const materials = sanitizeMaterials(input.materials);
           const transport=providerTransport(input.provider);
+          // H9-2: a run starts only while its result is sure to fit in the task.
+          assertRunAdmission(await store.requireTask(taskId));
           if(transport==='routine_fire'){
             const task=await store.requireTask(taskId);
             if((task.parentTaskId||task.delegation?.state==='queued_for_review')&&materials.length&&(sourceDelegationVersion!==1||!task.attachments?.length))throw new ValidationError('Declared source delegation is not enabled for this execution');
@@ -323,7 +327,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
       } catch (error) {
         const status = error?.statusCode ?? 500;
         const result = {error: status === 500 ? 'internal server error' : error.message};
-        if(['DESKTOP_DELIVERY_CAPACITY','ROUTINE_SIBLING_BUSY'].includes(error?.code))result.code=error.code;
+        if(['DESKTOP_DELIVERY_CAPACITY','ROUTINE_SIBLING_BUSY','TASK_BODY_LIMIT'].includes(error?.code))result.code=error.code;
         if (error instanceof ConflictError && Number.isInteger(error.currentVersion)) result.currentVersion = error.currentVersion;
         return responseJson(result, status, headers);
       }

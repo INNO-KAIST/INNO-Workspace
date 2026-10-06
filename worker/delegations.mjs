@@ -1,6 +1,7 @@
 import {usageHistory} from '../public/core/execution-usage.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
 import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
+import {TaskBodyLimitError,taskBodyBytes,TASK_GROWTH_MAX_BYTES} from '../public/core/task-size.mjs';
 import {allocateDelegation,isDelegationReplay,buildReview,validateReviewReport} from '../public/core/delegation.mjs';
 import {validateAssignments} from '../public/core/delegation.mjs';
 import {resolveAllocationPolicy} from './allocation-policy.mjs';
@@ -95,6 +96,8 @@ export class Delegations {
    const ids=report.filter(r=>r.criteria.some(c=>c.status==='fail')).map(r=>r.childTaskId);
    if(!ids.length)throw new ValidationError('Review retry requires an explicit failed acceptance criterion');
    const children=await this.children(parent);
+   // H9-2: a retry starts each selected child again, so each must be within the growth limit.
+   if(children.some(c=>ids.includes(c.id)&&taskBodyBytes(c)>TASK_GROWTH_MAX_BYTES))throw new TaskBodyLimitError();
    try{return await this.requeue(parent,children,children.filter(c=>ids.includes(c.id)),{retry:true,report,usage:input.usage,reviewRetry:{executionId:input.executionId,generation:input.generation},deliveryReceipt});}
    catch(error){if(!(error instanceof ConflictError)||attempt===2)throw error;}
   }

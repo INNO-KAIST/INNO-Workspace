@@ -80,7 +80,7 @@ const TOOLS = Object.freeze([
   },
   {
     name: 'checkpoint_task',
-    description: 'Write a checkpoint while holding the current execution ID and generation. Set status completed only after producing and verifying the result.',
+    description: 'Write a checkpoint while holding the current execution ID and generation. Set status completed only after producing and verifying the result. A completion may add at most 800,000 UTF-8 bytes to the task (content is stored as the message, the checkpoint and, without a summary or artifacts, final.md): keep the summary short and store large outputs with artifact_task. Further growth stops once the task holds about 1 MB.',
     inputSchema: {
       type: 'object', required: ['taskId', 'executionId', 'generation', 'content'], additionalProperties: false,
       properties: {
@@ -91,7 +91,7 @@ const TOOLS = Object.freeze([
   },
   {
     name: 'artifact_task',
-    description: 'Store a generated artifact while holding the current execution ID and generation. Inline artifact JSON is limited to 500,000 UTF-8 bytes (about 375 KB raw when base64 encoded).',
+    description: 'Store a generated artifact while holding the current execution ID and generation. Inline artifact JSON is limited to 500,000 UTF-8 bytes (about 375 KB raw when base64 encoded), and artifacts stop being accepted once the task holds about 1 MB.',
     inputSchema: {
       type: 'object', required: ['taskId', 'executionId', 'generation', 'artifact'], additionalProperties: false,
       properties: {

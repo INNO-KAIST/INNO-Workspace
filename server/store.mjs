@@ -11,6 +11,7 @@ import {failureRecord} from '../public/core/failures.mjs';
 import {assertEvaluationAttachable,assertEvaluationBindingPreserved,evaluationBinding,reserveClaimBudget} from '../public/core/evaluation-claim.mjs';
 import {encodeStoredEvaluationBudget,parseStoredEvaluationBudget} from '../worker/evaluation-budgets.mjs';
 import { DatabaseSync } from 'node:sqlite';
+import {serializeTaskBody} from '../public/core/task-size.mjs';
 
 import {
   ConflictError,
@@ -39,6 +40,9 @@ export class ExecutionConflictError extends ConflictError {
 
 const EVALUATION_ATTACH=Symbol('evaluation attach');
 const BUDGET_COMMIT=Symbol('budget commit');
+
+// Actions that only change state stay allowed for a task above the growth limit.
+const growthOf=input=>['pause','resume','cancel'].includes(input?.action)?undefined:'grow';
 
 export class SqliteTaskStore {
   constructor(filename = ':memory:', options = {}) {
@@ -95,7 +99,7 @@ export class SqliteTaskStore {
     if(requestTaskId){task.id=requestTaskId;task.creationRequestHash=createHash('sha256').update(creationPayload(input)).digest('hex');}
     return this.transaction(() => {
       if(requestTaskId){const existing=this.getTask(requestTaskId);if(existing){if(existing.creationRequestHash!==task.creationRequestHash)throw new ConflictError('Creation request was already used with different content',existing.version);return existing;}}
-      this.insertTask.run(task.id, task.version, task.updatedAt, JSON.stringify(task));
+      this.insertTask.run(task.id, task.version, task.updatedAt, serializeTaskBody(task,{growth:'grow'}));
       this.incrementRevision.run();
       return task;
     });
@@ -127,7 +131,8 @@ export class SqliteTaskStore {
     };
   }
 
-  replaceTask(id, expectedVersion, updater, authorization) {
+  // growth: see public/core/task-size.mjs ('grow' or 'completion'; omitted for state changes).
+  replaceTask(id, expectedVersion, updater, authorization, {growth} = {}) {
     return this.transaction(() => {
       const current = this.requireTask(id);
       if (!Number.isInteger(expectedVersion)) throw new ValidationError('expectedVersion is required');
@@ -139,7 +144,7 @@ export class SqliteTaskStore {
         throw new Error('task updater must return the same task with version incremented once');
       }
       assertEvaluationBindingPreserved(current,next,authorization===EVALUATION_ATTACH);
-      const result = this.updateTaskStatement.run(next.version, next.updatedAt, JSON.stringify(next), id, expectedVersion);
+      const result = this.updateTaskStatement.run(next.version, next.updatedAt, serializeTaskBody(next,{current,growth}), id, expectedVersion);
       if (result.changes !== 1) throw new ConflictError('task changed during update', this.requireTask(id).version);
       const budget=authorization?.[BUDGET_COMMIT];
       if(budget){
@@ -162,7 +167,7 @@ export class SqliteTaskStore {
   }
 
   applyAction(id, input) {
-    return this.replaceTask(id, input?.expectedVersion, current => applyAction(current, input, {now: this.now, id: this.id}));
+    return this.replaceTask(id, input?.expectedVersion, current => applyAction(current, input, {now: this.now, id: this.id}), undefined, {growth:growthOf(input)});
   }
 
   applyExecutionAction(id, input) {
@@ -170,7 +175,7 @@ export class SqliteTaskStore {
     return this.replaceTask(id, snapshot.version, current => {
       this.assertExecution(current, input);
       return applyOwnedExecutionAction(current, {...input, expectedVersion: current.version}, {now: this.now, id: this.id});
-    });
+    }, undefined, {growth:growthOf(input)});
   }
 
   requestDecision(id, input) {
@@ -336,7 +341,7 @@ export class SqliteTaskStore {
           ...(executionEvidence?{executionEvidence:{...executionEvidence,wallElapsedMs:elapsed}}:{}),
         },
       };
-    });
+    }, undefined, {growth:'completion'});
   }
 
   leaveExecutionRunning(id, input) {

@@ -1,4 +1,5 @@
 import {usageCounts} from '../public/core/execution-usage.mjs';
+import {assertRunAdmission} from '../public/core/task-size.mjs';
 import {parseRevision} from '../public/core/sync.mjs';
 import {failureInput,runnerError} from '../public/core/failures.mjs';
 import {boundedContextDelivery} from '../public/core/context-delivery.mjs';
@@ -114,6 +115,8 @@ export function createInnoServer({
     assertProviderId(provider);
     if (!Number.isInteger(input.expectedVersion)) throw new ValidationError('expectedVersion is required');
     const materials = sanitizeMaterials(input.materials);
+    // H9-2: a run starts only while its result is sure to fit in the task.
+    assertRunAdmission(store.requireTask(taskId));
     const runner = runners[provider];
     if (!await runnerAvailable(runner)) {
       const task = store.markWaiting(taskId, {
@@ -279,6 +282,7 @@ export function createInnoServer({
       const status = error?.statusCode ?? 500;
       const body = {error: status === 500 ? 'internal server error' : error.message};
       if (error instanceof ConflictError && Number.isInteger(error.currentVersion)) body.currentVersion = error.currentVersion;
+      if (error?.code === 'TASK_BODY_LIMIT') body.code = error.code;
       sendJson(response, status, body, cors);
     }
   }

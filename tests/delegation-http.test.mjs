@@ -229,3 +229,46 @@ test('proof expiring inside the D1 batch cannot commit selected or fallback poli
   }
  }
 });
+// H9-2: a retry would start a child above the growth limit, so the review asks for a decision
+// instead and the desktop review result is still stored.
+test('a review retry of a child above the growth limit asks for a decision instead',async t=>{
+ const f=await fixture(t);await f.post('/api/desktop/poll',{models:observedModels()});
+ const {task}=await f.post('/api/tasks',{prompt:'independent checks'});await f.post(`/api/tasks/${task.id}/run`,{provider:'codex',expectedVersion:1});
+ const {claim}=await f.post('/api/desktop/poll',{});
+ await f.post(`/api/desktop/${task.id}/complete`,{...owner(claim),content:'planned',delegation:{independent:true,children}});
+ const parent=await f.store.requireTask(task.id);
+ for(const [index,assignment] of parent.delegation.children.entries()){
+  let child=await f.store.requireTask(assignment.taskId);
+  if(index===0)child=await f.store.replaceTask(child.id,child.version,current=>({...current,version:current.version+1,notes:'n'.repeat(600_000)}));
+  const c=child.status==='running'?owner(child.checkpoint):owner((await f.post('/api/desktop/poll',{})).claim);
+  const big=index===0?{artifacts:[{name:'big.txt',mime:'text/plain',encoding:'utf-8',content:'x'.repeat(500_000)}]}:{};
+  assert.equal((await f.post(`/api/desktop/${child.id}/complete`,{...c,content:'4',...big})).status,200);
+ }
+ const large=await f.store.requireTask(parent.delegation.children[0].taskId);
+ assert.equal(large.status,'completed');assert.ok(JSON.stringify(large).length>1_000_000);
+ const {claim:review}=await f.post('/api/desktop/poll',{});assert.equal(review.task.id,task.id);
+ const report=parent.delegation.children.map((c,i)=>({childTaskId:c.taskId,criteria:[{criterion:'equals 4',status:i===0?'fail':'pass',evidence:i===0?'wrong formatting':'recomputed 4'}]}));
+ const response=await f.post(`/api/desktop/${task.id}/complete`,{...owner(review),content:'Needs correction',reviewReport:report});
+ assert.equal(response.status,200);
+ const after=await f.store.requireTask(task.id);
+ assert.equal(after.status,'waiting_user');assert.equal(after.delegation.retryCount,0);
+ assert.equal((await f.store.requireTask(large.id)).version,large.version);
+});
+test('a review parent above the growth limit is paused like a user pause instead of starting its review',async t=>{
+ const f=await fixture(t);await f.post('/api/desktop/poll',{models:observedModels()});
+ const {task}=await f.post('/api/tasks',{prompt:'independent checks'});await f.post(`/api/tasks/${task.id}/run`,{provider:'codex',expectedVersion:1});
+ const {claim}=await f.post('/api/desktop/poll',{});
+ await f.post(`/api/desktop/${task.id}/complete`,{...owner(claim),content:'planned',delegation:{independent:true,children}});
+ let parent=await f.store.requireTask(task.id);
+ for(const assignment of parent.delegation.children){
+  const child=await f.store.requireTask(assignment.taskId);
+  const c=child.status==='running'?owner(child.checkpoint):owner((await f.post('/api/desktop/poll',{})).claim);
+  await f.post(`/api/desktop/${child.id}/complete`,{...c,content:'4'});
+ }
+ parent=await f.store.requireTask(task.id);assert.equal(parent.status,'queued_for_review');
+ parent=await f.store.replaceTask(task.id,parent.version,current=>({...current,version:current.version+1,notes:'n'.repeat(1_100_000)}));
+ assert.equal((await f.post('/api/desktop/poll',{})).claim,null);
+ const paused=await f.store.requireTask(task.id);
+ assert.equal(paused.status,'paused');assert.equal(paused.delegation.state,'paused');assert.equal(paused.delegation.epoch,parent.delegation.epoch+1);
+ assert.equal(paused.notes.length,1_100_000);
+});

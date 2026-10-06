@@ -8,6 +8,7 @@ import {executionUsage,usageHistory} from '../public/core/execution-usage.mjs';
 import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execution-evidence.mjs';
 import {ownedContextDelivery,suppliedContextDelivery,withRetrieval} from '../public/core/context-delivery.mjs';
 import {boundedLocalExecution} from '../public/core/local-execution.mjs';
+import {serializeTaskBody,taskBodyBytes,TASK_GROWTH_MAX_BYTES} from '../public/core/task-size.mjs';
 // Only the desktop runner of a bounded (evaluation) execution may supply its own local
 // observation; it is kept as evidence and never trusted from other callers (H6).
 const boundedLocalFor=(task,input,allowed)=>allowed&&task?.evaluationBudget&&input?.localExecution!==undefined?boundedLocalExecution(input.localExecution):null;
@@ -77,6 +78,9 @@ class D1NotFoundError extends Error {
   constructor() { super('task not found'); this.statusCode = 404; }
 }
 
+// Actions that only change state stay allowed for a task above the growth limit.
+const growthOf=input=>['pause','resume','cancel'].includes(input?.action)?undefined:'grow';
+
 export class D1TaskStore {
   constructor(database, options = {}) {
     if (!database) throw new Error('D1 database binding is required');
@@ -90,8 +94,9 @@ export class D1TaskStore {
     const requestTaskId=creationId(input);
     if(requestTaskId){
       task.id=requestTaskId;task.creationRequestHash=await digestText(creationPayload(input));
+      const body=serializeTaskBody(task,{growth:'grow'});
       await this.db.batch([
-        this.db.prepare('INSERT INTO tasks (id,version,updated_at,body) VALUES (?1,?2,?3,?4) ON CONFLICT(id) DO NOTHING').bind(task.id,task.version,task.updatedAt,JSON.stringify(task)),
+        this.db.prepare('INSERT INTO tasks (id,version,updated_at,body) VALUES (?1,?2,?3,?4) ON CONFLICT(id) DO NOTHING').bind(task.id,task.version,task.updatedAt,body),
         this.db.prepare("UPDATE metadata SET value=value+1 WHERE key='revision' AND changes()=1"),
       ]);
       const stored=await this.requireTask(requestTaskId);
@@ -100,7 +105,7 @@ export class D1TaskStore {
     }
     await this.db.batch([
       this.db.prepare('INSERT INTO tasks (id, version, updated_at, body) VALUES (?1, ?2, ?3, ?4)')
-        .bind(task.id, task.version, task.updatedAt, JSON.stringify(task)),
+        .bind(task.id, task.version, task.updatedAt, serializeTaskBody(task,{growth:'grow'})),
       this.db.prepare("UPDATE metadata SET value = value + 1 WHERE key = 'revision'"),
     ]);
     return task;
@@ -130,7 +135,8 @@ export class D1TaskStore {
     return {revision,tasks,usage:usage.results.map(row=>JSON.parse(row.body)),capabilities};
   }
 
-  async replaceTask(id, expectedVersion, updater, authorization, {deliveryReceipt} = {}) {
+  // growth: see public/core/task-size.mjs ('grow' or 'completion'; omitted for state changes).
+  async replaceTask(id, expectedVersion, updater, authorization, {deliveryReceipt, growth} = {}) {
     const current = await this.requireTask(id);
     if (!Number.isInteger(expectedVersion)) throw new ValidationError('expectedVersion is required');
     if (current.version !== expectedVersion) {
@@ -146,7 +152,7 @@ export class D1TaskStore {
     if(current.parentTaskId && next.status==='queued' && current.status!=='queued')throw new ConflictError('Child retry requires the delegation coordinator',current.version);
     const guard = current.parentTaskId ? ` AND EXISTS (SELECT 1 FROM tasks p WHERE p.id = ?6 AND json_extract(p.body,'$.status') = 'waiting_children' AND json_extract(p.body,'$.delegation.state') = 'waiting_children' AND json_extract(p.body,'$.delegation.batchId') = ?7 AND json_extract(p.body,'$.delegation.epoch') = ?8)` : '';
     if(current.parentTaskId && TERMINAL_STATUSES.includes(current.status))throw new ConflictError('Completed children are immutable',current.version);
-    const bindings=[next.version,next.updatedAt,JSON.stringify(next),id,expectedVersion];
+    const bindings=[next.version,next.updatedAt,serializeTaskBody(next,{current,growth}),id,expectedVersion];
     if(current.parentTaskId)bindings.push(current.parentTaskId,current.batchId,current.parentEpoch);
     const budget=authorization?.[BUDGET_COMMIT];
     if(deliveryReceipt!==undefined&&budget)throw new ValidationError('Evaluation budget cannot carry a desktop receipt');
@@ -252,7 +258,7 @@ export class D1TaskStore {
       throw new ConflictError('Versioned desktop result requires a delivery receipt',authoritative.version);
     const receipt=deliveryReceipt!==undefined?await prepareDeliveryReceipt(this.db,deliveryReceipt,authoritative,next,this.now(),{delegation:true,records}):null;
     next.delegation={...next.delegation,operationId:this.id()};
-    const values=[next.version,next.updatedAt,JSON.stringify(next),current.id,current.version];
+    const values=[next.version,next.updatedAt,serializeTaskBody(next),current.id,current.version];
     let guard='';
     for(const record of records){if(record.current){const n=values.length;values.push(record.current.id,record.current.version);guard+=` AND EXISTS (SELECT 1 FROM tasks c WHERE c.id = ?${n+1} AND c.version = ?${n+2})`;}}
     for(const check of metadataGuards){
@@ -279,8 +285,8 @@ export class D1TaskStore {
       if(!after)continue;
       const allowed=`EXISTS (SELECT 1 FROM tasks p WHERE p.id = ?5 AND json_extract(p.body,'$.delegation.operationId') = ?6)`;
       statements.push(before
-        ? this.db.prepare(`UPDATE tasks SET version = ?2, updated_at = ?3, body = ?4 WHERE id = ?1 AND ${allowed}`).bind(after.id,after.version,after.updatedAt,JSON.stringify(after),next.id,next.delegation.operationId)
-        : this.db.prepare(`INSERT INTO tasks (id,version,updated_at,body) SELECT ?1,?2,?3,?4 WHERE ${allowed}`).bind(after.id,after.version,after.updatedAt,JSON.stringify(after),next.id,next.delegation.operationId));
+        ? this.db.prepare(`UPDATE tasks SET version = ?2, updated_at = ?3, body = ?4 WHERE id = ?1 AND ${allowed}`).bind(after.id,after.version,after.updatedAt,serializeTaskBody(after),next.id,next.delegation.operationId)
+        : this.db.prepare(`INSERT INTO tasks (id,version,updated_at,body) SELECT ?1,?2,?3,?4 WHERE ${allowed}`).bind(after.id,after.version,after.updatedAt,serializeTaskBody(after),next.id,next.delegation.operationId));
     }
     for(const item of initialPolicies){
       statements.push(this.db.prepare(`INSERT INTO metadata(key,value) SELECT ?1,?2 WHERE EXISTS (SELECT 1 FROM tasks p WHERE p.id=?3 AND json_extract(p.body,'$.delegation.operationId')=?4)`).bind(item.key,item.text,next.id,next.delegation.operationId));
@@ -314,7 +320,7 @@ export class D1TaskStore {
       const next=applyAction(current,input,{now:this.now,id:this.id});
       if(input.action==='pause'&&current.status==='running'&&(providerHas(current.checkpoint?.provider,'cancellation','confirmation_required')||current.delegation?.state==='reviewing'))next.checkpoint={...next.checkpoint,status:'paused',confirmationRequired:{reason:'parent_pause',executionId:current.checkpoint.executionId,generation:current.checkpoint.generation,createdAt:next.updatedAt}};
       return next;
-    });
+    },undefined,{growth:growthOf(input)});
   }
 
   async applyExecutionAction(id, input) {
@@ -322,7 +328,7 @@ export class D1TaskStore {
     return this.replaceTask(id, snapshot.version, current => {
       this.assertExecution(current, input);
       return applyOwnedExecutionAction(current, {...input, expectedVersion: current.version}, {now: this.now, id: this.id});
-    });
+    },undefined,{growth:growthOf(input)});
   }
 
   async requestDecision(id, input, {deliveryReceipt} = {}) {
@@ -363,6 +369,7 @@ export class D1TaskStore {
     assertProviderId(provider);
     if (!Number.isFinite(leaseMs) || leaseMs < 1_000 || leaseMs > 60 * 60_000) throw new ValidationError('invalid execution lease');
     if(Object.keys(input).some(key=>key!=='executionBudgetVersion'&&(/budget|grant|reservation/i.test(key)||['jobId','phase','maxDurationMs','deadlineAtMs','deliveryReceiptVersion','workspaceId'].includes(key))))throw new ValidationError('unsupported execution budget option');
+    await this.pauseOverLimit(id,expectedVersion);
     const authorization={};
     if(deliveryReceiptVersion===1)authorization[CLAIM_RESERVATION]={workspaceId:options.workspaceId,...(options.claimNonce!==undefined?{claimNonce:options.claimNonce}:{})};
     let claim;
@@ -408,6 +415,21 @@ export class D1TaskStore {
     },authorization).then(task => ({...claim, task}));
   }
 
+  // H9-2: no execution starts above the growth limit, whatever queued it (run route, desktop
+  // queue, routine dispatch, review requeue, handoff target). The task is paused like a user
+  // pause, keeping everything stored, and the caller sees a conflict so its queue moves on.
+  async pauseOverLimit(id,expectedVersion){
+    const task=await this.getTask(id);
+    if(!task||task.parentTaskId||task.version!==expectedVersion||TERMINAL_STATUSES.includes(task.status)||['paused','running','waiting_children'].includes(task.status)||taskBodyBytes(task)<=TASK_GROWTH_MAX_BYTES)return;
+    const paused=await this.replaceTask(id,expectedVersion,current=>{
+      const now=this.now();
+      // Same delegation state as a user pause, so delegation resume and cancel treat it alike.
+      const delegation=current.delegation&&current.delegation.state!=='superseded'?{delegation:{...current.delegation,state:'paused',epoch:current.delegation.epoch+1}}:{};
+      return {...current,...delegation,status:'paused',version:current.version+1,updatedAt:now,checkpoint:{...(current.checkpoint??{}),status:'paused',storageLimitAt:now,updatedAt:now}};
+    });
+    throw Object.assign(new ConflictError('Task storage limit reached; the task was paused instead of starting',paused.version),{code:'TASK_BODY_LIMIT'});
+  }
+
   // True while a Claude sibling of this child's batch is running or awaits stop confirmation.
   async routineSiblingBusy(task) {
     return Boolean(task?.parentTaskId) && routineSiblingRunning(this.db, task);
@@ -433,7 +455,7 @@ export class D1TaskStore {
         if(deliveryReceipt!==undefined||task.checkpoint?.deliveryReceiptVersion===1)throw new ConflictError('Delivery receipt replay requires stored verification',task.version);
         return task;
       }
-      try{return await this.replaceTask(id,task.version,current=>handoffTask(current,input,{now:this.now,id:this.id,recoverInterrupted:true}),undefined,{deliveryReceipt});}
+      try{return await this.replaceTask(id,task.version,current=>handoffTask(current,input,{now:this.now,id:this.id,recoverInterrupted:true}),undefined,{deliveryReceipt,growth:'completion'});}
       catch(error){if(!(error instanceof ConflictError)||attempt===2)throw error;}
     }
   }
@@ -489,7 +511,7 @@ export class D1TaskStore {
         artifacts: [...current.artifacts, ...artifacts],
         checkpoint: {...checkpoint, ...(delivery?{contextDelivery:delivery}:{}), ...(local?{localExecution:local}:{}), ...pluginsFor(current,input), resultArtifactIds:[...current.artifacts.filter(a=>a.executionId===input.executionId&&a.generation===input.generation),...artifacts].map(a=>a.id), usage: executionUsage(current.checkpoint,input.usage,now), usageHistory: usageHistory(current.checkpoint,input.usage,now,{task:current,transition:'completion',contextDelivery:delivery??ownedContextDelivery(current,current.checkpoint?.contextDelivery)}), failure: undefined, status: 'completed', content: input.checkpoint ?? 'Execution completed.', completedAt: now, wallElapsedMs:elapsed, ...(executionEvidence?{executionEvidence:{...executionEvidence,wallElapsedMs:elapsed}}:{}), updatedAt: now},
       };
-    },undefined,{deliveryReceipt});
+    },undefined,{deliveryReceipt,growth:'completion'});
   }
 
   async leaveExecutionRunning(id, input) {
