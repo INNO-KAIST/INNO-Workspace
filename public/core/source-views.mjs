@@ -1,16 +1,6 @@
-import { MAX_EXTRACTED_CHARS, MAX_PDF_PAGES, extractConnectedText } from './extract.mjs';
+import { MAX_EXTRACTED_CHARS, MAX_PDF_PAGES, TEXT_BASED_FORMATS, connectedFormat, extractConnectedText } from './extract.mjs?v=formats-1';
 
-const TEXT_EXTENSIONS = new Set([
-  'csv', 'html', 'htm', 'json', 'jsonl', 'log', 'md', 'markdown', 'mjs', 'js',
-  'py', 'rst', 'text', 'toml', 'tsv', 'txt', 'xml', 'yaml', 'yml',
-]);
-const TEXT_MIME = /^(text\/|application\/(json|ld\+json|xml|x-ndjson|javascript)$)/;
 const HASH = /^[a-f0-9]{64}$/;
-
-function extensionOf(name) {
-  const match = typeof name === 'string' ? /\.([^.]+)$/.exec(name) : null;
-  return match ? match[1].toLowerCase() : '';
-}
 
 function validateFile(file) {
   if (!file || typeof file.name !== 'string' || !Number.isFinite(file.size) || file.size < 0 || typeof file.slice !== 'function') {
@@ -18,13 +8,11 @@ function validateFile(file) {
   }
 }
 
+// Byte ranges for text (and the raw text of RTF and notebooks) and page ranges for PDF; other
+// formats are read whole.
 function selectedFormat(file) {
-  const extension = extensionOf(file.name);
-  const extensionFormat = TEXT_EXTENSIONS.has(extension) ? 'text' : extension === 'pdf' ? 'pdf' : null;
-  const type = typeof file.type === 'string' ? file.type.toLowerCase().split(';', 1)[0].trim() : '';
-  const mimeFormat = TEXT_MIME.test(type) ? 'text' : type === 'application/pdf' ? 'pdf' : null;
-  if (extensionFormat && mimeFormat && extensionFormat !== mimeFormat) return null;
-  return mimeFormat || extensionFormat;
+  const { format } = connectedFormat(file);
+  return TEXT_BASED_FORMATS.has(format) ? 'text' : format === 'pdf' ? 'pdf' : null;
 }
 
 function unavailable(file, reason, bytesRead = 0) {

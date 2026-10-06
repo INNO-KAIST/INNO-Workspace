@@ -1549,7 +1549,7 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 수정: 기기와 무관한 안내(이 PC의 데스크톱 연결 화면에서 실행, .inno/DESKTOP-ACCESS.md 링크, 같은 작업에서 원본 다시 연결)로 바꾸고, 그런 작업을 열면 실행기 상태에도 미리 보인다. 시험 provider-ui 1건.
 - 반영(사용자 승인): 이 수정만 커밋·push하고 Pages만 게시(source-guidance-20261006). 진행 중인 프로젝트 기능 코드는 포함하지 않았고 Worker는 배포하지 않았다(개인 링크 화면은 다음 Worker 배포 때 반영).
 
-### 2026-10-06 CR-008 프로젝트·이름 바꾸기 (커밋 전, 운영 반영 전)
+### 2026-10-06 CR-008 프로젝트·이름 바꾸기 (509fa8e, 운영 반영)
 - 사용자 요청: ChatGPT·Claude처럼 작업을 프로젝트로 묶기(프로젝트에서 작업 시작, 기존 작업 이동), 프로젝트·작업 이름 사용자 지정. 결정: PRV-06 다음 바로, 묶기+공통 지침(공통 파일은 원본 비보관 원칙과 충돌해 제외), 프로젝트 삭제 시 작업 유지. 계획: docs/superpowers/plans/2026-10-06-projects.md.
 - 1단계 저장·API·행동:
   - public/core/projects.mjs(이름 80자, 지침 8,000자, 최대 100개, 하위 작업은 부모 프로젝트를 따름). D1 metadata 'project:<id>'에 저장(이전 파일 불필요), 생성·수정·삭제마다 작업실 revision을 올리고 전체·변경분 상태 응답에 프로젝트 목록을 싣는다. 수정·삭제는 읽은 원문 비교, 개수 상한은 같은 문장 안에서 확인.
@@ -1566,3 +1566,24 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 시험: projects 6건, project-instructions 6건, project-ui 4건(모듈과 함께 작성), delivery-receipt-http 1건, delegation-http 1건.
 - 검증: 전체 1508건 중 1507pass/0fail/기존 symlink 1skip, git diff --check, Wrangler dry-run.
 - 같은 날 사용자 요청 기록: 첨부 형식 확장(CR-009: HWP·HWPX·XLSX·개방형 문서·RTF·코드·HDF5·이미지 등 보편 확장자, 예전 오피스 형식은 뒤로), 차별점 문서(docs/DIFFERENTIATION-PROPOSAL.md, 결정 대기). 로컬 Codex CLI는 `exec -i/--image`로 이미지 입력을 받는 것을 도움말로 확인했다.
+- 운영 반영(사용자 승인): 509fa8e·1184796(차별점 문서) push → Pages 게시(projects-20261006, 스타일 판 포함) → Worker ff948ab8 배포(읽기 전용 확인: projects 기능 켜짐, 프로젝트 0, 작업 38, 연결기 online) → 사용자가 연결기 종료, 메인 체크아웃 db92b04→1184796 fast-forward, 사용자가 재실행("Delivery receipts: on", "connected" 확인). 이제 이 PC의 Codex 실행에도 프로젝트 공통 지침이 전달된다.
+
+### 2026-10-06 CR-009 첨부 형식 확장 1·2단계 (커밋 전, 운영 반영 전)
+- 사용자 요청: "보편적으로 사용하는 모든 확장자가 첨부 가능하길 원해"(HWP 거절 화면 계기). 범위 답변: .h5·PDF·서식 있는 문서 등 분야 무관 보편 확장자, A(한글·엑셀·개방형), C(이미지). jsfive 내려받기 승인.
+- 원칙 유지: 원본은 브라우저에서만 읽고 텍스트만 전송(원본 업로드·보관 없음), 유료 API 0, 새 형식도 기존 20개·600,000바이트·200,000자 한도 그대로.
+- 1단계(새 라이브러리 없음):
+  - public/core/extract.mjs: 형식 판정 하나(connectedFormat)로 통일(미리보기·범위 선택·실행 준비가 같은 규칙). 확장자와 MIME이 다르면 거절하되, 텍스트 확장자는 이상한 MIME 표기(.csv=Excel, .ts=MPEG 영상)보다 우선, .xlsx 등은 옛 Office MIME 표기여도 확장자로 읽음.
+  - 텍스트: 코드·데이터·설정·과학·공학 텍스트 확장자 약 300종. 모르는 확장자도 내용이 텍스트면 읽음(엄격 판정). 인코딩은 UTF-16(BOM 또는 0바이트 위치), UTF-8(잘못된 바이트 몇 개는 UTF-8 유지), CP949(옛 한글 Windows 파일) 순. 텍스트 확장자는 \x01 구분자·NUL 채움을 허용(NUL 제거).
+  - 새 판독기(public/core/extract-office.mjs, hwp.mjs): XLSX(한셀식 접두어 XML, 숫자 최단 표기), HWPX, ODT·ODS·ODP, EPUB, RTF(글꼴별 코드 페이지·\uN), Jupyter 노트북, HWP 5.0 바이너리(CFB·DIFAT·미니 스트림·raw deflate, 암호·배포용·HWP 3.0은 이유와 함께 거절). HWT·HWTX(서식 파일)도 같은 판독기.
+  - 옛 DOC·XLS·PPT와 이미지는 이유를 밝혀 거절(4·3단계 예정). 범위 선택은 UTF-8 텍스트(RTF·노트북 원문 포함)와 PDF만, 다른 형식이 한도를 넘으면 "나눠 연결" 안내, 비UTF-8 범위 실패 시 "UTF-8로 저장하거나 나눠 연결" 안내.
+- 2단계 HDF5(.h5·.hdf5·.he5): jsfive 0.4.2 ESM 빌드를 수정 없이 public/vendor/jsfive.mjs로 포함(npm tarball SHA-1 일치 확인, 공공 저작물 + pyfive BSD-3 + pako MIT/Zlib 고지 전문 JSFIVE-LICENSE.txt). public/core/hdf5.mjs가 그룹·데이터셋(형식·shape)·속성·작은 데이터셋 값(4,096개 이하, 앞 20개)을 구조 요약으로 만든다. 큰 데이터셋은 읽지 않음, 깊이 32·객체 5,000·순환 링크 1회 표시, 파일 256 MiB 초과는 거절. jsfive는 필요할 때만 불러온다.
+- 실물 검증:
+  - 설치된 한컴·MS 서식 파일 554개(HWP 55·HWT 334·HWTX 10·XLSX 56·XLTX 7·DOTX 23·POTX 6): 텍스트가 있는 파일은 모두 읽힘. 못 읽은 것은 빈 서식(구역·단 정의만 있는 쪽 설정 서식, 빈 양식 표, 글맵시만 있는 파일)임을 레코드 단위로 확인.
+  - 실제 HWP 389개 전부가 압축 데이터 뒤에 여분 바이트를 둔다(브라우저가 출력 후 오류를 냄) → 출력이 레코드 경계에서 정확히 끝날 때만 받아들이고, 중간에 손상된 구역은 거절.
+  - Excel·PowerPoint(숨김 실행, 사용자가 열어 둔 Word는 건드리지 않음)로 만든 ODS·ODP·RTF·CP949 CSV·UTF-16 텍스트, ScopeFoundry 예제 .h5(저장소에는 넣지 않음) 모두 정상. Chromium에서 같은 결과(deflate-raw·euc-kr·지연 로딩 확인).
+  - 이전 커밋 판독기와 DOCX·PPTX 29개 비교: 10개가 달라졌고 모두 개선(글상자 문단 분리, 중첩 구조 속 누락 텍스트 복구, 탭 정의가 탭 문자로 나오던 문제 제거).
+- 독립 검토(inno-opus) 1차: P1 스프레드시트 출력 증폭, P2 정규식 이차 시간·HWP 예산·RTF 중첩·비UTF-8 범위 막다른 안내 등 지적 → 전부 수정: 마크업을 indexOf 기반 토큰 한 번 훑기로 바꾸고, 출력이 입력보다 커질 수 있는 판독기는 남은 글자 수에서 멈추고 잘림 표시, HWP는 저장·전개 바이트 합산 30 MiB와 구역 1,000개 상한, RTF 깊이 512·\bin 건너뛰기·대체 문자 계산 수정.
+- 독립 검토 2차: P1 HDF5 청크 데이터셋 전개 폭증(작은 shape라도 청크·압축 해제가 무제한), P1 RTF가 한도에서 잘렸는데 줄 끝 정리 후 "전체"로 보고, P2 RTF 평문 누적·ODP 한도 문단 유실·CFB 사슬 끝까지 따라가기·한글이 드문 CP949 오판 지적 → 전부 수정: 청크 저장 데이터셋은 값 미표시, HDF5 전체 탐색 3초 한도, RTF는 잘림 여부를 따로 전달하고 64 KiB마다 해독, 사슬은 스트림에 필요한 섹터 수까지만 따라가며 반복 섹터는 순환으로 거절, HWP 예산 초과는 앞 구역을 남기고 잘림 표시, UTF-8 판정은 정상 비ASCII 문자가 오류보다 많을 때만, 속성 값 안의 ">"도 처리. 서비스 워커는 PDF·JSZip처럼 jsfive를 미리 받지 않는다(처음 쓸 때 캐시).
+- 시험: extract-formats 12건, extract-hostile 13건(악성 입력 3초 이내·한도 이하), hwp 8건(합성 CFB 작성기: DIFAT·공유 스트림·순환·손상·긴 사슬), hdf5 5건(jsfive 공개 시험 파일 + 경계·청크·시간 한도), source-views-ui·source-materials·extract 보강.
+- 검증: 전체 1547건 중 1546 pass/0 fail/기존 1 skip, git diff --check, Wrangler dry-run(Worker·server 변경 없음). 2차 수정 뒤 실물 554개·Office 생성 표본·이전 판독기 비교를 다시 돌려 결과 동일 확인.
+- 화면 판: app.mjs?v=formats-20261006, extract.mjs?v=formats-1(모든 가져오기 같은 주소), source-views ?v 갱신, 서비스 워커 캐시 inno-shell-v6.

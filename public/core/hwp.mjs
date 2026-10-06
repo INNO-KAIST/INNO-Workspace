@@ -1,0 +1,264 @@
+import { MAX_COMPRESSED_BYTES } from './extract-shared.mjs';
+
+// HWP 5.0 binary documents. The file is a compound file (CFB, the container of older Office
+// files); body text is in BodyText/Section0, Section1, ... streams, raw-deflated when the
+// FileHeader says so, as records whose PARA_TEXT payload is UTF-16 text with control codes.
+// Every length, chain and expansion is bounded so a damaged file fails instead of looping.
+
+const SIGNATURE = [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+const END_OF_CHAIN = 0xfffffffe;
+const NO_STREAM = 0xffffffff;
+const STORAGE = 1, STREAM = 2, ROOT = 5;
+
+function damaged(detail) {
+  return new Error(`the HWP file is damaged (${detail})`);
+}
+
+function compoundFile(bytes) {
+  if (bytes.length < 512 || SIGNATURE.some((byte, index) => bytes[index] !== byte)) throw damaged('not a compound file');
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const u32 = (offset) => view.getUint32(offset, true);
+  const sectorShift = view.getUint16(0x1e, true);
+  const miniShift = view.getUint16(0x20, true);
+  if ((sectorShift !== 9 && sectorShift !== 12) || miniShift !== 6) throw damaged('unexpected sector size');
+  const sectorSize = 1 << sectorShift, miniSize = 1 << miniShift;
+  const sectorCount = Math.floor(bytes.length / sectorSize) - 1;
+  const sectorOffset = (sector) => {
+    if (sector >= sectorCount) throw damaged('sector outside the file');
+    return (sector + 1) * sectorSize;
+  };
+  const perSector = sectorSize / 4;
+
+  // FAT sector numbers: 109 in the header, the rest along the DIFAT chain.
+  const fatSectors = [];
+  for (let index = 0; index < 109 && fatSectors.length < u32(0x2c); index += 1) fatSectors.push(u32(0x4c + index * 4));
+  let difat = u32(0x44);
+  for (let count = 0; count < u32(0x48) && difat < END_OF_CHAIN; count += 1) {
+    if (count > sectorCount) throw damaged('cyclic DIFAT chain');
+    const offset = sectorOffset(difat);
+    for (let index = 0; index < perSector - 1 && fatSectors.length < u32(0x2c); index += 1) fatSectors.push(u32(offset + index * 4));
+    difat = u32(offset + (perSector - 1) * 4);
+  }
+  if (fatSectors.length > sectorCount) throw damaged('FAT larger than the file');
+  const fat = new Uint32Array(fatSectors.length * perSector);
+  fatSectors.forEach((sector, index) => {
+    const offset = sectorOffset(sector);
+    for (let entry = 0; entry < perSector; entry += 1) fat[index * perSector + entry] = u32(offset + entry * 4);
+  });
+
+  // A sector chain, followed no further than `needed` sectors (a stream reads only its own
+  // length, however long a damaged chain runs); a repeated sector means a cycle.
+  const chain = (start, table, limit, needed = Infinity) => {
+    const sectors = [], seen = new Set();
+    for (let sector = start; sector !== END_OF_CHAIN && sectors.length < needed; sector = table[sector]) {
+      if (sector >= table.length || sectors.length >= limit) throw damaged('broken or cyclic sector chain');
+      if (seen.has(sector)) throw damaged('cyclic sector chain');
+      seen.add(sector);
+      sectors.push(sector);
+    }
+    return sectors;
+  };
+  const readRegular = (start, size) => {
+    if (size > bytes.length) throw damaged('stream larger than the file');
+    const out = new Uint8Array(size);
+    let written = 0;
+    for (const sector of chain(start, fat, sectorCount, Math.ceil(size / sectorSize))) {
+      if (written >= size) break;
+      const offset = sectorOffset(sector);
+      const piece = bytes.subarray(offset, offset + Math.min(sectorSize, size - written));
+      out.set(piece, written);
+      written += piece.length;
+    }
+    if (written < size) throw damaged('stream shorter than declared');
+    return out;
+  };
+  const readAll = (start) => {
+    const sectors = chain(start, fat, sectorCount);
+    return readRegular(start, sectors.length * sectorSize);
+  };
+
+  const directoryBytes = readAll(u32(0x30));
+  const directoryView = new DataView(directoryBytes.buffer);
+  const entries = [];
+  for (let base = 0; base + 128 <= directoryBytes.length; base += 128) {
+    const nameLength = Math.min(directoryView.getUint16(base + 64, true), 64);
+    let name = '';
+    for (let offset = 0; offset + 2 < nameLength; offset += 2) name += String.fromCharCode(directoryView.getUint16(base + offset, true));
+    entries.push({
+      name,
+      type: directoryBytes[base + 66],
+      left: directoryView.getUint32(base + 68, true),
+      right: directoryView.getUint32(base + 72, true),
+      child: directoryView.getUint32(base + 76, true),
+      start: directoryView.getUint32(base + 116, true),
+      size: directoryView.getUint32(base + 120, true),
+    });
+  }
+  const root = entries[0];
+  if (!root || root.type !== ROOT) throw damaged('missing root entry');
+  const cutoff = u32(0x38);
+  let miniStream = null, miniFat = null;
+  const readMini = (start, size) => {
+    if (!miniStream) {
+      miniStream = root.size ? readRegular(root.start, root.size) : new Uint8Array(0);
+      const fatBytes = u32(0x3c) < END_OF_CHAIN ? readAll(u32(0x3c)) : new Uint8Array(0);
+      miniFat = new Uint32Array(fatBytes.buffer, fatBytes.byteOffset, Math.floor(fatBytes.length / 4)).slice();
+    }
+    const out = new Uint8Array(size);
+    let written = 0;
+    for (const sector of chain(start, miniFat, Math.ceil(miniStream.length / miniSize), Math.ceil(size / miniSize))) {
+      if (written >= size) break;
+      const piece = miniStream.subarray(sector * miniSize, sector * miniSize + Math.min(miniSize, size - written));
+      out.set(piece, written);
+      written += piece.length;
+    }
+    if (written < size) throw damaged('stream shorter than declared');
+    return out;
+  };
+
+  const children = (index) => {
+    const found = [], seen = new Set(), stack = [entries[index]?.child];
+    while (stack.length) {
+      const id = stack.pop();
+      if (id === undefined || id === NO_STREAM || id >= entries.length) continue;
+      if (seen.has(id)) throw damaged('cyclic directory');
+      seen.add(id);
+      found.push(id);
+      stack.push(entries[id].left, entries[id].right);
+    }
+    return found;
+  };
+  const named = (parent, name, type) => children(parent).find((id) => entries[id].type === type && entries[id].name.toLowerCase() === name.toLowerCase());
+  const read = (id) => {
+    const entry = entries[id];
+    if (entry.size > MAX_COMPRESSED_BYTES) throw damaged('stream too large');
+    return entry.size < cutoff ? readMini(entry.start, entry.size) : readRegular(entry.start, entry.size);
+  };
+  return { entries, children, named, read };
+}
+
+// Raw inflate within a byte budget. Hancom's writer leaves bytes after the deflate stream in
+// nearly every section, which browsers report as an error after all output; the output is then
+// kept (complete: false) and the caller checks that it ends on a record boundary.
+async function inflateRaw(bytes, budget) {
+  const reader = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+  const chunks = [];
+  let total = 0, complete = true;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > budget) {
+        await reader.cancel().catch(() => {});
+        throw new RangeError('expanded HWP text exceeds the 30 MiB safety limit');
+      }
+      chunks.push(value);
+    }
+  } catch (error) {
+    if (error instanceof RangeError || !chunks.length) throw error;
+    complete = false;
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { out.set(chunk, offset); offset += chunk.byteLength; }
+  return { data: out, complete };
+}
+
+// Control codes below 32: these take eight code units (code, six of data, code again).
+const WIDE_CONTROLS = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 11, 12, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]);
+const PARA_TEXT = 67;
+const MAX_SECTIONS = 1000;
+
+function paragraphText(data) {
+  const units = [];
+  for (let offset = 0; offset + 1 < data.length;) {
+    const code = data[offset] | (data[offset + 1] << 8);
+    if (code >= 32) { units.push(code); offset += 2; continue; }
+    if (WIDE_CONTROLS.has(code)) {
+      if (code === 9) units.push(9);
+      offset += 16;
+      continue;
+    }
+    if (code === 10) units.push(10);
+    else if (code === 24) units.push(45);
+    else if (code === 30 || code === 31) units.push(32);
+    offset += 2;
+  }
+  let text = '';
+  for (let index = 0; index < units.length; index += 8192) text += String.fromCharCode(...units.slice(index, index + 8192));
+  return text;
+}
+
+// Paragraph text of one section, and whether its records end exactly at the end of the data.
+function sectionParagraphs(data) {
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const paragraphs = [];
+  let offset = 0;
+  while (offset + 4 <= data.length) {
+    const header = view.getUint32(offset, true);
+    offset += 4;
+    let size = header >>> 20;
+    if (size === 0xfff) {
+      if (offset + 4 > data.length) return { text: paragraphs.join('\n'), exact: false };
+      size = view.getUint32(offset, true);
+      offset += 4;
+    }
+    if (offset + size > data.length) return { text: paragraphs.join('\n'), exact: false };
+    if ((header & 0x3ff) === PARA_TEXT) {
+      const text = paragraphText(data.subarray(offset, offset + size));
+      if (text.trim()) paragraphs.push(text.trimEnd());
+    }
+    offset += size;
+  }
+  return { text: paragraphs.join('\n'), exact: offset === data.length };
+}
+
+export async function hwpSections(bytes, writer) {
+  if (new TextDecoder('latin1').decode(bytes.subarray(0, 23)).startsWith('HWP Document File V3')) {
+    throw new Error('HWP 3.0 documents are not read; save it as .hwpx or HWP 5.0 (.hwp)');
+  }
+  const file = compoundFile(bytes);
+  const headerId = file.named(0, 'FileHeader', STREAM);
+  const header = headerId === undefined ? null : file.read(headerId);
+  if (!header || header.length < 40 || new TextDecoder('latin1').decode(header.subarray(0, 17)) !== 'HWP Document File') {
+    throw damaged('no HWP 5.0 file header');
+  }
+  const flags = new DataView(header.buffer, header.byteOffset, header.byteLength).getUint32(36, true);
+  if (flags & 2) throw new Error('password-protected HWP documents are not read');
+  if (flags & 4) throw new Error('distribution-only HWP documents are not read');
+  const body = file.named(0, 'BodyText', STORAGE);
+  const sections = (body === undefined ? [] : file.children(body))
+    .map((id) => ({ id, match: /^Section(\d+)$/i.exec(file.entries[id].name) }))
+    .filter(({ id, match }) => match && file.entries[id].type === STREAM)
+    .sort((left, right) => Number(left.match[1]) - Number(right.match[1]));
+  if (!sections.length) throw damaged('no body text sections');
+  if (sections.length > MAX_SECTIONS) throw damaged(`more than ${MAX_SECTIONS} body text sections`);
+  // Stored and expanded bytes share one budget, so sections pointing at the same large stream
+  // or holding empty deflate blocks cannot multiply the work. Sections read before the budget
+  // runs out are kept and the result is marked truncated.
+  let budget = MAX_COMPRESSED_BYTES, hasText = false;
+  const spend = (bytes) => {
+    budget -= bytes;
+    if (budget < 0) throw new RangeError('HWP sections exceed the 30 MiB safety limit');
+  };
+  for (const [index, section] of sections.entries()) {
+    let data, complete = true;
+    try {
+      data = file.read(section.id);
+      spend(data.length);
+      if (flags & 1) {
+        ({ data, complete } = await inflateRaw(data, budget));
+        spend(data.length);
+      }
+    } catch (error) {
+      if (error instanceof RangeError && index > 0) { writer.cut(); break; }
+      throw error;
+    }
+    const { text, exact } = sectionParagraphs(data);
+    if (!complete && !exact) throw damaged('a compressed section ends in the middle of a record');
+    if (text) hasText = true;
+    if (!writer.add(`Section ${index + 1}`, text)) break;
+  }
+  return hasText;
+}

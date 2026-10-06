@@ -29,8 +29,8 @@ import {childRecoveryState,delegationPanel,delegationStateLabel,executionRecover
 import {AttachmentSession} from './core/attachments.mjs';
 import {SourceExecutionCoordinator} from './source-execution.mjs';
 import {collectDirectoryFiles,createSourcePickFence,matchesStoredSource,reconcileSourceSelection,sourceExecutionMessage,sourceExecutionRows,sourceReconnectLocked} from './source-execution-ui.mjs';
-import {extractConnectedText} from './core/extract.mjs';
-import {applyAttachmentView,canChangeSourceView,coverageDescription,createSourceViewDraftGuard,prepareSourceViewPreview,selectionFromValues,sourceViewKind} from './source-views-ui.mjs?v=source-view-2';
+import {extractConnectedText} from './core/extract.mjs?v=formats-1';
+import {applyAttachmentView,canChangeSourceView,coverageDescription,createSourceViewDraftGuard,prepareSourceViewPreview,selectionFromValues,sourceViewKind} from './source-views-ui.mjs?v=source-view-3';
 import {INTEGRATIONS,parseRefAtlas,parsePrismReport,searchPapers} from './core/research.mjs';
 
 const $=id=>document.getElementById(id);
@@ -54,7 +54,7 @@ const modelPolicyUI=createModelPolicyUI({dialog:$('model-policy-dialog'),getCont
 const deliveryRecoveryUI=createDeliveryRecoveryUI({dialog:$('delivery-recovery-dialog'),getClient:()=>client,getState:()=>state(),getTask:()=>current(),getEpoch:()=>selectionEpoch,onChange:()=>refresh()});
 const modelDiagnosticsUI=createModelDiagnosticsUI({root:$('model-diagnostics'),getContext:()=>({client,capabilities:state().capabilities})});
 const attachments=()=>current()?.attachments||draftAttachments;
-const sourceViews=()=>import('./core/source-views.mjs?v=source-view-1');
+const sourceViews=()=>import('./core/source-views.mjs?v=source-view-2');
 const bytes=n=>n<1024?`${n} B`:n<1048576?`${(n/1024).toFixed(1)} KB`:`${(n/1048576).toFixed(1)} MB`;
 const date=v=>formatShortDateTime(v);
 const recoveryReasonName=value=>({uncertain_fire:'외부 실행 시작 여부를 확인할 수 없습니다.',lease_expiry:'이전 실행 연결 시간이 만료됐습니다.',parent_pause:'부모 작업 일시정지로 이전 실행 종료 확인이 필요합니다.',connection:'실행 연결이 중단됐습니다.',unknown:'실행 종료 상태를 확인할 수 없습니다.',interrupted:'실행이 중단됐습니다.'})[value]||value||'외부 실행 상태를 확인해야 합니다.';
@@ -275,7 +275,7 @@ async function preview(id){
  const file=await session.getFile(id);const info=document.createElement('p');info.className='small-copy';info.textContent=`${a.path} · ${bytes(a.size)} · 원본 영구 저장 없음`;$('preview-content').append(info);
   const editor=appendSourceViewEditor(a,file);
   if(file.type.startsWith('image/')||file.type==='application/pdf'){const url=URL.createObjectURL(file);previewUrls.push(url);const element=document.createElement(file.type==='application/pdf'?'iframe':'img');element.src=url;if(element.tagName==='IFRAME')element.setAttribute('sandbox','');else element.alt=a.name;$('preview-content').append(element);}
-  else{const r=await extractConnectedText(file);const pre=document.createElement('pre');pre.textContent=r.status==='unavailable'?`이 형식은 원본 참조로 연결됩니다. 조회할 내용을 지원되는 일반 텍스트 또는 PDF 파일로 준비하세요.\n${r.reason||''}`:r.text;$('preview-content').append(pre);if(r.status==='truncated'){const p=document.createElement('p');p.textContent=`미리보기는 앞부분 ${bytes(r.bytesRead)}만 표시합니다.`;$('preview-content').append(p);}}
+  else{const r=await extractConnectedText(file);const pre=document.createElement('pre');pre.textContent=r.status==='unavailable'?`이 파일에서 읽을 수 있는 텍스트를 찾지 못해 원본 참조로만 연결됩니다.\n${r.reason||''}`:r.text;$('preview-content').append(pre);if(r.status==='truncated'){const p=document.createElement('p');p.textContent=`미리보기는 앞부분 ${r.text.length.toLocaleString('ko-KR')}자만 표시합니다.`;$('preview-content').append(p);}}
   openDialog('preview-dialog');await editor;return;
  }
  openDialog('preview-dialog');

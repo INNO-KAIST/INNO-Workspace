@@ -175,7 +175,11 @@ test('large compressed documents and unsupported formats fail without reading by
 
   const largeResult = await extractConnectedText(largeDocx, { JSZip: vendoredJsZip() });
   const largePdfResult = await extractConnectedText(largePdf, { pdfjs: { getDocument() {} } });
-  const binaryResult = await extractConnectedText(namedBlob('data.h5', ['binary'], 'application/x-hdf5'));
+  const binaryResult = await extractConnectedText(namedBlob('clip.mp4', ['binary'], 'video/mp4'));
+  // CR-009 stage 2: HDF5 is now read; damaged content is refused with an HDF5 reason.
+  const hdf5Result = await extractConnectedText(namedBlob('data.h5', ['binary'], 'application/x-hdf5'));
+  assert.equal(hdf5Result.status, 'unavailable');
+  assert.match(hdf5Result.reason, /HDF5/);
 
   assert.equal(largeResult.status, 'unavailable');
   assert.match(largeResult.reason, /30 MiB/i);

@@ -1,12 +1,10 @@
-const TEXT_EXTENSIONS=new Set(['csv','html','htm','json','jsonl','log','md','markdown','mjs','js','py','rst','text','toml','tsv','txt','xml','yaml','yml']);
+import {TEXT_BASED_FORMATS,connectedFormat} from './core/extract.mjs?v=formats-1';
 const integer=(value,label)=>{const number=Number(value);if(!Number.isInteger(number))throw new Error(`${label}은 정수로 입력하세요.`);return number;};
 const hash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/i.test(value)?value:null;
 
 export function sourceViewKind(file){
- const name=String(file?.name||''),type=String(file?.type||'').toLowerCase(),extension=name.includes('.')?name.split('.').pop().toLowerCase():'';
- const fromExtension=extension==='pdf'?'pdf':TEXT_EXTENSIONS.has(extension)?'text':null;
- const fromType=type==='application/pdf'?'pdf':type.startsWith('text/')||/^(application\/(json|ld\+json|xml|x-ndjson|javascript))$/.test(type)?'text':null;
- return fromExtension&&fromType&&fromExtension!==fromType?null:fromType||fromExtension;
+ const {format}=connectedFormat({name:String(file?.name||''),type:String(file?.type||'')});
+ return TEXT_BASED_FORMATS.has(format)?'text':format==='pdf'?'pdf':null;
 }
 
 export function selectionFromValues(kind,values){
@@ -40,7 +38,11 @@ export function storedSourceView(view){
 
 export async function prepareSourceViewPreview(file,selection,extract){
  const result=await extract(file,selection);
- if(result?.status!=='available'||!result.view||!result.coverage)throw new Error(result?.reason||'선택한 범위를 정확히 미리볼 수 없습니다. 범위를 줄이거나 지원되는 텍스트 또는 PDF를 연결하세요.');
+ if(result?.status!=='available'||!result.view||!result.coverage){
+  // Byte ranges need UTF-8; CP949 or UTF-16 files are read whole or must be converted or split.
+  if(/UTF-8/.test(result?.reason||''))throw new Error('이 범위는 UTF-8 텍스트로 읽을 수 없습니다. 범위 선택은 UTF-8 파일만 됩니다. CP949 등 다른 인코딩이면 UTF-8로 저장해 다시 연결하거나, 필요한 부분만 담은 파일로 나눠 연결하세요.');
+  throw new Error(result?.reason||'선택한 범위를 정확히 미리볼 수 없습니다. 범위를 줄이거나 지원되는 텍스트 또는 PDF를 연결하세요.');
+ }
  return {text:String(result.text??''),coverage:result.coverage,savedView:storedSourceView(result.view)};
 }
 
