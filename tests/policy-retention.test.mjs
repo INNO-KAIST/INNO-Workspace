@@ -53,7 +53,7 @@ for(const kind of ['D1','SQLite']){
   task(f,'malformed','paused','not-an-array');
   await assert.rejects(f.store.prune({profile,expectedStateVersion:1}),/invalid task evidence/);
   f.sql.prepare('DELETE FROM tasks WHERE id=?').run('malformed');
-  task(f,'unknown','paused',null,[[],[],[]]);
+  task(f,'unknown','paused',null,[[],[],[],[],[]]);
   await assert.rejects(f.store.prune({profile,expectedStateVersion:1}),/unsupported task selection shape/);
  });
 
@@ -79,7 +79,7 @@ for(const kind of ['D1','SQLite']){
   const added=await f.store.observe({profile,evidenceRef:observation('new'),expectedStateVersion:1});
   assert.equal(added.state.observations.length,1000);
   assert.ok(added.state.observations.some(x=>x.id==='parent-pin'));
-  task(f,'unexpected-parent','paused',null,[[],[],[]]);
+  task(f,'unexpected-parent','paused',null,[[],[],[],[],[]]);
   await assert.rejects(f.store.prune({profile,expectedStateVersion:2}),/deferred/i);
   assert.equal((await f.store.read(profile)).stateVersion,2);
  });
@@ -101,7 +101,7 @@ for(const kind of ['D1','SQLite']){
  test(`${kind} reports cleanup deferral and read-only diagnostics`,async t=>{
   const f=setup(kind);t.after(f.close);let state=await f.store.create({profile,baseline,expectedStateVersion:0});
   state={...state,observations:[evidence('old')]};await seed(f,state);
-  task(f,'bad-task','paused',null,[[],[],[]]);
+  task(f,'bad-task','paused',null,[[],[],[],[],[]]);
   const status=await f.store.cleanupBatch();
   assert.equal(status.status,'deferred');assert.equal(status.deferredCount,1);
   assert.equal((await f.store.read(profile)).observations.length,1);
@@ -112,7 +112,7 @@ for(const kind of ['D1','SQLite']){
 test('scheduled cleanup failure does not stop the baseline drain; status route is authenticated and read only',async t=>{
  const f=setup('D1');t.after(f.close);const worker=createWorker({fetchFn:async()=>{throw Error('offline');}}),env={DB:f.db,ACCESS_TOKEN:'retention-token-123456789012345'};
  const created=await f.store.create({profile,baseline,expectedStateVersion:0});await seed(f,{...created,observations:[evidence('old',0)]});
- task(f,'bad-task','paused',null,[[],[],[]]);
+ task(f,'bad-task','paused',null,[[],[],[],[],[]]);
  assert.deepEqual(await worker.scheduled({},env),{checked:0,failed:0});
  assert.equal((await worker.fetch(new Request('https://inno.test/api/model-policy-retention'),env)).status,401);
  const revision=f.sql.prepare("SELECT value FROM metadata WHERE key='revision'").get().value;

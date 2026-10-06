@@ -1,4 +1,5 @@
 import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
+import {DELEGATION_MIN_CHILDREN,DELEGATION_MAX_CHILDREN} from '../public/core/delegation.mjs';
 import {prepareReceiptReservation} from './delivery-reservations.mjs';
 import {providerHas} from '../public/core/providers.mjs';
 
@@ -72,9 +73,9 @@ export async function prepareDeliveryReceipt(db,receipt,current,next,acceptedAt,
  if(receipt.taskId!==current.id||next.id!==current.id||next.version!==current.version+1||!acceptedTransition(receipt,current,next,delegation))invalid();
  if(delegation){
   const frozen=next.delegation?.children;
-  if(!Array.isArray(frozen)||frozen.length!==2||!Array.isArray(records)||records.length!==2)invalid();
+  if(!Array.isArray(frozen)||frozen.length<DELEGATION_MIN_CHILDREN||frozen.length>DELEGATION_MAX_CHILDREN||!Array.isArray(records)||records.length!==frozen.length)invalid();
   const frozenIds=frozen.map(item=>item?.taskId),recordIds=records.map(item=>(item?.next??item?.current)?.id);
-  if(new Set(frozenIds).size!==2||new Set(recordIds).size!==2
+  if(new Set(frozenIds).size!==frozen.length||new Set(recordIds).size!==frozen.length
    ||frozenIds.some(id=>typeof id!=='string'||!recordIds.includes(id))
    ||records.some(item=>{const child=item?.next??item?.current;return child?.parentTaskId!==next.id||child?.batchId!==next.delegation.batchId;})
    ||(!current.delegation&&records.some(item=>item.current||!item.next)))invalid();

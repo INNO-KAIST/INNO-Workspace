@@ -1,4 +1,5 @@
 import {delegationProfile} from './allocation-policy.mjs';
+import {DELEGATION_MIN_CHILDREN,DELEGATION_MAX_CHILDREN} from '../public/core/delegation.mjs';
 import {sanitizeSourceView} from '../public/core/source-coverage.mjs';
 
 const refKeys=['parentTaskId','childTaskId','reviewExecutionId','reviewGeneration','childExecutionId','childGeneration'];
@@ -64,10 +65,11 @@ export async function verifyReviewObservation(store,evidenceRef,state){
  if(!matchesOwner(parent,evidenceRef.reviewExecutionId,evidenceRef.reviewGeneration)||!matchesOwner(child,evidenceRef.childExecutionId,evidenceRef.childGeneration)||review.executionId===owner.executionId||review.provider!==d.masterProvider||owner.provider!==child.assignment?.provider)return no('stale_execution_owner');
  if(child.parentTaskId!==parent.id||child.batchId!==d.batchId||child.parentEpoch!==d.epoch||typeof d.batchId!=='string'||!Number.isSafeInteger(d.epoch)||d.epoch<1)return no('stale_delegation_batch');
  const assignments=d.children,manifests=d.review?.children,report=d.reviewReport;
- if(!Array.isArray(assignments)||assignments.length!==2||!Array.isArray(manifests)||manifests.length!==2||!Array.isArray(report)||report.length!==2)return no('review_mapping_mismatch');
+ // One assignment, manifest and report row per frozen child (2 to 4).
+ if(!Array.isArray(assignments)||assignments.length<DELEGATION_MIN_CHILDREN||assignments.length>DELEGATION_MAX_CHILDREN||!Array.isArray(manifests)||manifests.length!==assignments.length||!Array.isArray(report)||report.length!==assignments.length)return no('review_mapping_mismatch');
  const assignmentIds=assignments.map(x=>x?.taskId);
- const sameIds=values=>new Set(values).size===2&&same([...values].sort(),[...assignmentIds].sort());
- if(assignmentIds.some(x=>typeof x!=='string'||!id.test(x))||new Set(assignmentIds).size!==2||!assignmentIds.includes(child.id)||!sameIds(manifests.map(x=>x?.taskId))||!sameIds(report.map(x=>x?.childTaskId)))return no('review_mapping_mismatch');
+ const sameIds=values=>new Set(values).size===assignmentIds.length&&same([...values].sort(),[...assignmentIds].sort());
+ if(assignmentIds.some(x=>typeof x!=='string'||!id.test(x))||new Set(assignmentIds).size!==assignmentIds.length||!assignmentIds.includes(child.id)||!sameIds(manifests.map(x=>x?.taskId))||!sameIds(report.map(x=>x?.childTaskId)))return no('review_mapping_mismatch');
  let targetAssignment,targetStatuses;
  for(const assignment of assignments){
   const row=report.find(x=>x.childTaskId===assignment.taskId),statuses=mapping(assignment,row);

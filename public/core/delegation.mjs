@@ -4,6 +4,9 @@ import {ConflictError,ValidationError,createTask} from './tasks.mjs';
 import {isAssignableProvider} from './providers.mjs';
 import {validatePluginSelection} from './plugins.mjs';
 const bounded=(value,label,max)=>{if(typeof value!=='string'||!value.trim()||value.length>max)throw new ValidationError(`Invalid delegation ${label}`);return value.trim();};
+// A master splits independent work into 2 to 4 children in any provider mix with
+// distinct roles (user decision 2026-10-06, H7).
+export const DELEGATION_MIN_CHILDREN=2,DELEGATION_MAX_CHILDREN=4;
 export function validateAssignments(parent,input,options={}){
  if(!input||typeof input!=='object'||Array.isArray(input))throw new ValidationError('Delegation input is required');
  if(parent.evaluationBudget)throw new ValidationError('Evaluation budget task cannot use ordinary delegation');
@@ -12,8 +15,8 @@ export function validateAssignments(parent,input,options={}){
  if(parent.parentTaskId)throw new ValidationError('A child cannot perform nested delegation');
  if(parent.checkpoint?.sourceBound&&(options.sourceDelegationVersion!==1||!parent.attachments?.length))throw new ValidationError('Source-bound executions cannot delegate');
  if((parent.attachments?.length&&options.sourceDelegationVersion!==1)||input.attachments?.length||input.materials?.length)throw new ValidationError('Delegation cannot transfer source attachments');
- if(input.independent!==true)throw new ValidationError('Two independent assignments are required');
- if(!Array.isArray(input.children)||input.children.length!==2)throw new ValidationError('Delegation requires exactly two children');
+ if(input.independent!==true)throw new ValidationError('Independent assignments are required');
+ if(!Array.isArray(input.children)||input.children.length<DELEGATION_MIN_CHILDREN||input.children.length>DELEGATION_MAX_CHILDREN)throw new ValidationError('Delegation requires 2 to 4 children');
  const children=input.children.map(c=>{
   if(!c||typeof c!=='object'||c.attachments?.length||c.materials?.length||c.dependencies?.length)throw new ValidationError('Independent source-free children are required');
   if(sourceUrl(c.instructions))throw new ValidationError('Source URLs are not supported in delegated instructions');
@@ -29,7 +32,7 @@ export function validateAssignments(parent,input,options={}){
   const plugins=c.plugins===undefined?[]:validatePluginSelection(c.plugins);
   return {...(sourceIds.length?{sourceIds}:{}),...(plugins.length?{plugins}:{}),role:bounded(c.role,'role',100),provider:c.provider,requestedModel,effort:c.effort,sufficientReason:bounded(c.sufficientReason,'sufficientReason',1000),acceptanceCriteria,instructions:bounded(c.instructions,'instructions',12000)};
  });
- if(new Set(children.map(c=>c.provider)).size!==2||new Set(children.map(c=>c.role)).size!==2)throw new ValidationError('One Codex and one Claude child with distinct roles are required');
+ if(new Set(children.map(c=>c.role)).size!==children.length)throw new ValidationError('Children require distinct roles');
  return children;
 }
 export function isDelegationReplay(parent,input){const d=parent.delegation;return !!d&&d.state!=='superseded'&&d.sourceExecutionId===input.executionId&&d.sourceGeneration===input.generation;}

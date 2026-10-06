@@ -1,6 +1,7 @@
 import {D1ModelPolicies} from './model-policies.mjs';
 import {verifyReviewObservation} from './review-observation.mjs';
 import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
+import {DELEGATION_MIN_CHILDREN,DELEGATION_MAX_CHILDREN} from '../public/core/delegation.mjs';
 
 const MAX_ATTEMPTS=3;
 const RECOVERY_KEYS=['batchId','epoch','expectedVersion','operation','reviewExecutionId','reviewGeneration'];
@@ -20,9 +21,9 @@ function recoverableRows(task,input){
   ||typeof d.batchId!=='string'||!savedId.test(d.batchId)||!positive(d.epoch)
   ||!sameIdentity(identity(task),input)||!sameIdentity(marker,input))throw new ConflictError('Review observation identity changed',task.version);
  const ids=d.children.map(x=>x.taskId),rows=marker.children;
- if(ids.some(id=>!savedId.test(id))||new Set(ids).size!==2||!Array.isArray(rows)||rows.length!==2
+ if(ids.some(id=>!savedId.test(id))||new Set(ids).size!==ids.length||!Array.isArray(rows)||rows.length!==ids.length
   ||rows.some(row=>!row||typeof row!=='object'||Array.isArray(row)||!ids.includes(row.childTaskId))
-  ||new Set(rows.map(row=>row.childTaskId)).size!==2)throw new ConflictError('Review observation child mapping changed',task.version);
+  ||new Set(rows.map(row=>row.childTaskId)).size!==ids.length)throw new ConflictError('Review observation child mapping changed',task.version);
  for(const row of rows){
   if(!['pending','retry','failed','recorded','duplicate','policy_missing','not_attributable'].includes(row.status)
    ||!Number.isSafeInteger(row.attempts)||row.attempts<0||row.attempts>MAX_ATTEMPTS
@@ -36,7 +37,7 @@ function recoverableRows(task,input){
 }
 const due=(row,now)=>['pending','retry'].includes(row.status)&&(!row.nextAt||row.nextAt<=now);
 const eligible=task=>task?.status==='completed'&&task.delegation?.state==='completed'&&
- Array.isArray(task.delegation.children)&&task.delegation.children.length===2&&
+ Array.isArray(task.delegation.children)&&task.delegation.children.length>=DELEGATION_MIN_CHILDREN&&task.delegation.children.length<=DELEGATION_MAX_CHILDREN&&
  task.delegation.children.every(x=>typeof x?.taskId==='string');
 const identity=task=>({reviewExecutionId:task.checkpoint?.executionId,reviewGeneration:task.checkpoint?.generation,batchId:task.delegation?.batchId,epoch:task.delegation?.epoch});
 const sameIdentity=(a,b)=>!!a&&!!b&&a.reviewExecutionId===b.reviewExecutionId&&a.reviewGeneration===b.reviewGeneration&&a.batchId===b.batchId&&a.epoch===b.epoch;
@@ -150,8 +151,8 @@ export function createReviewObservationPipeline(store,{policyMethods}={}){
   const query=after=>store.db.prepare(`SELECT id FROM tasks WHERE id > ?1
    AND json_extract(body,'$.status')='completed' AND json_extract(body,'$.delegation.state')='completed'
    AND ((json_type(body,'$.reviewObservation') IS NULL
-     AND (json_type(body,'$.delegation.children[0].selection.profile')='object'
-       OR json_type(body,'$.delegation.children[1].selection.profile')='object'))
+     AND EXISTS (SELECT 1 FROM json_each(json_extract(body,'$.delegation.children')) AS assigned
+       WHERE json_type(assigned.value,'$.selection.profile')='object'))
     OR EXISTS (SELECT 1 FROM json_each(json_extract(body,'$.reviewObservation.children')) AS child
       WHERE json_extract(child.value,'$.status') IN ('pending','retry')
       AND COALESCE(json_extract(child.value,'$.nextAt'),'') <= ?3))

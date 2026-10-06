@@ -7,9 +7,36 @@ function fixture(){
  return {tasks:[parent,child],capabilities:{sourceDelegationVersion:1,claudeRoutine:true}};
 }
 function setup(){const state=fixture();let sends=0,reads=0;const client={state,refresh:async()=>{},run:async()=>{sends++;}};const services={attemptLocks:{request:async(key,fn)=>fn()},attemptStorage:storage(),getClient:()=>client,connected:()=>true,getFile:async()=>{reads++;return {};},extractText:async()=>({status:'available',text:'PRIVATE_SOURCE'})};return {state,client,services,counts:()=>({sends,reads})};}
+test('a Claude source child waits while a Claude sibling of its batch is running or awaits confirmation (H7)',()=>{
+ const s=fixture(),t=s.tasks[1];
+ const sibling=(status,extra={})=>({id:'c2',version:3,status,parentTaskId:'p',batchId:'b',parentEpoch:1,assignment:{provider:'claude'},checkpoint:{provider:'claude',...extra}});
+ for(const busy of [sibling('running'),sibling('waiting_connection',{confirmationRequired:{reason:'uncertain_fire'}})]){
+  const state={...s,tasks:[...s.tasks,busy]};
+  assert.equal(sourceExecutionReadiness(t,state,()=>true).reason,'claude_sibling_running');
+ }
+ assert.equal(sourceExecutionReadiness(t,{...s,tasks:[...s.tasks,sibling('completed')]},()=>true).ready,true);
+ assert.equal(sourceExecutionReadiness(t,{...s,tasks:[...s.tasks,{...sibling('running'),batchId:'other'}]},()=>true).ready,true);
+});
+
 test('missing originals and provider capability block reads; reconnect becomes ready',()=>{const s=fixture(),t=s.tasks[1];assert.equal(sourceExecutionReadiness(t,s,()=>false).reason,'missing_sources');assert.equal(sourceExecutionReadiness(t,s,()=>true).ready,true);s.capabilities.sourceDelegationVersion=0;assert.equal(sourceExecutionReadiness(t,s,()=>true).ready,false);});
 test('duplicate refresh does not duplicate extraction or dispatch',async()=>{const x=setup();let release;x.services.getFile=()=>new Promise(r=>{release=r;});const coordinator=new SourceExecutionCoordinator(x.services);const first=coordinator.tick();assert.equal((await coordinator.tick()).status,'busy');while(!release)await new Promise(r=>setTimeout(r,1));release({});await first;await coordinator.tick();assert.equal(x.counts().sends,1);});
 for(const change of ['pause','epoch','client'])test(`fences ${change} during extraction`,async()=>{const x=setup();x.services.getFile=async()=>{if(change==='pause')x.state.tasks[0].status='paused';if(change==='epoch')x.state.tasks[0].delegation.epoch++;if(change==='client')x.services.getClient=()=>({state:x.state});return {};};const c=new SourceExecutionCoordinator({...x.services,getClient:()=>x.services.getClient()});assert.equal((await c.tick()).status,'stale');assert.equal(x.counts().sends,0);});
+test('a Claude sibling refusal is definitive: no uncertain hold, and the next tick may try again (H7)',async()=>{
+ const x=setup();let runs=0;
+ x.client.run=async()=>{runs++;if(runs===1)throw Object.assign(new Error('Another Claude child of this batch is running or awaits stop confirmation'),{status:409,code:'ROUTINE_SIBLING_BUSY'});};
+ const c=new SourceExecutionCoordinator(x.services);
+ assert.equal((await c.tick()).status,'waiting');assert.equal(c.entries().length,0);
+ assert.equal((await c.tick()).status,'submitted');assert.equal(runs,2);
+});
+
+test('the client keeps a server error code on the thrown error',async()=>{
+ const {WorkspaceClient}=await import('../public/core/client.mjs');
+ const realFetch=globalThis.fetch;
+ globalThis.fetch=async()=>new Response(JSON.stringify({error:'Another Claude child of this batch is running or awaits stop confirmation',code:'ROUTINE_SIBLING_BUSY'}),{status:409,headers:{'content-type':'application/json'}});
+ try{await assert.rejects(()=>new WorkspaceClient({remote:true,baseUrl:'https://example.test'}).request('/api/tasks/x/run',{}),error=>error.status===409&&error.code==='ROUTINE_SIBLING_BUSY');}
+ finally{globalThis.fetch=realFetch;}
+});
+
 test('lost acknowledgment is held without automatic retry or storing source text',async()=>{const x=setup();x.client.run=async()=>{throw Error('PRIVATE_SOURCE network failure');};const c=new SourceExecutionCoordinator(x.services);assert.equal((await c.tick()).status,'uncertain');assert.equal((await c.tick()).status,'waiting');assert.equal(c.entries().length,1);assert.equal(JSON.stringify(c.entries()).includes('PRIVATE_SOURCE'),false);});
 test('fresh state before POST fences a pause on the server',async()=>{const x=setup();let refreshes=0;x.client.refresh=async()=>{if(++refreshes===2)x.state.tasks[0].status='paused';};assert.equal((await new SourceExecutionCoordinator(x.services).tick()).status,'stale');assert.equal(x.counts().sends,0);});
 test('review uses master provider and terminal state clears retained attempt',async()=>{const x=setup(),p=x.state.tasks[0];p.status='queued_for_review';p.delegation.state='queued_for_review';p.delegation.masterProvider='claude';p.attachments=x.state.tasks[1].attachments;x.state.tasks.splice(1);let provider;x.client.run=async(id,input)=>{provider=input.provider;};const c=new SourceExecutionCoordinator(x.services);assert.equal((await c.tick()).status,'submitted');assert.equal(provider,'claude');p.status='completed';p.version++;await c.tick();assert.equal(c.entries().length,0);});

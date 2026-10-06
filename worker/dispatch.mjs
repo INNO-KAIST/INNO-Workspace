@@ -13,18 +13,31 @@ const queued=t=>['queued','queued_for_review'].includes(t.status)&&usesTransport
 const owns=(task,claim)=>task.status==='running'&&task.checkpoint?.executionId===claim.executionId&&task.checkpoint?.generation===claim.generation;
 // A durable claim precedes the external side effect. Ambiguous outcomes require
 // confirmation; neither a request retry nor the normal failed-work retry fires again.
-export async function dispatchRemote({store,taskId,adapterFor,waitUntil}){
+// onSettled(taskId) runs after a child's launch ends without a live session (a definitive
+// failure frees its Claude slot), so the next queued sibling can start without waiting
+// for the cron drain.
+export async function dispatchRemote({store,taskId,adapterFor,waitUntil,onSettled}){
  let task=await store.requireTask(taskId),claim,adapter;
  for(let attempt=0;attempt<3;attempt++){
   if(!queued(task)||task.attachments?.length)return task;
+  // A Claude sibling of the same batch holds the slot: stay queued (H7).
+  if(task.parentTaskId&&typeof store.routineSiblingBusy==='function'&&await store.routineSiblingBusy(task))return task;
   const provider=task.checkpoint.provider;adapter=adapterFor(provider);
   if(!adapter?.configured)return store.markWaiting(task.id,{expectedVersion:task.version,provider,reason:adapter?.unavailableReason??'Remote provider is not configured.'});
   try{claim=await store.claimExecution(task.id,{provider,expectedVersion:task.version});break;}
-  catch(error){if(!(error instanceof ConflictError)||attempt===2)throw error;task=await store.requireTask(task.id);}
+  catch(error){if(error?.code==='ROUTINE_SIBLING_BUSY')return task;if(!(error instanceof ConflictError)||attempt===2)throw error;task=await store.requireTask(task.id);}
  }
- const execution=runRemoteClaim({store,claim,launch:adapter.launch});
+ const execution=runRemoteClaim({store,claim,launch:adapter.launch}).then(()=>settleRemoteChild(store,claim,onSettled));
  if(waitUntil)waitUntil(execution);else await execution;
  return claim.task;
+}
+
+// After a child's launch ends without a live session, let the next queued sibling start.
+// Failures here only delay that start until the scheduled drain.
+export async function settleRemoteChild(store,claim,onSettled){
+ if(!onSettled||!claim?.task?.parentTaskId)return;
+ try{if((await store.requireTask(claim.task.id)).status!=='running')await onSettled(claim.task.id);}
+ catch(error){console.warn('INNO: next child dispatch deferred to the scheduled drain:',error?.message??error);}
 }
 
 export async function runRemoteClaim({store,claim,launch}){

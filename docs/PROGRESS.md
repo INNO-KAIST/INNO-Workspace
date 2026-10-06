@@ -1303,3 +1303,38 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
   - Office 렌더링 품질은 확인하지 않았다.
   - 실제 연구 자료, 긴 문헌 집합, 데이터 계보, 지원서·제안서는 시험하지 않았다.
 - 후속 후보: 이 PC에 무료 Office 렌더러가 없다. 렌더링 확인은 렌더러 설치 여부를 사용자와 정한 뒤에 한다.
+
+### 2026-10-06 H7 하위 작업 2~4개와 Claude 순차 실행 (커밋 전, 운영 반영 전)
+- 사용자 결정:
+  - 하위 작업은 2~4개이고, 제공자 구성은 자유다. 역할은 서로 달라야 한다.
+  - Claude 하위 작업은 같은 배치에서 한 번에 1개만 실행한다.
+  - 계획: docs/superpowers/plans/2026-10-06-variable-children.md
+- 탐색: 고정 2 가정이 검증 3곳, 검토 입력, 복구, receipt, 초기 정책, 관측 파이프라인·UI, 정책 보존 SQL, 프롬프트·MCP 스키마에 있었다.
+  - 이 중 정책 보존은 3개 이상이면 전체 정리를 미뤘다.
+  - Claude 하위 작업을 순서대로 실행하는 장치는 없었다.
+- 변경:
+  - H7-1: 공통 상한 DELEGATION_MIN/MAX_CHILDREN(2/4). 역할 중복은 금지하고 제공자 짝 규칙은 없앴다. 마스터 정책, Codex·Claude 프롬프트, MCP 스키마(자식·검토 보고 최대 4)를 바꿨다. 자식 프롬프트는 바꾸지 않았다(경로 조건 계약 1 유지).
+  - H7-2: 리뷰 입력은 데스크톱 1~4, 클라우드는 고정 자식과 대조한다. 리뷰 복구는 모든 자식이 완료돼야 한다. receipt 고정 자식은 2~4다. 첫 배정의 초기 정책은 최대 4개다.
+  - H7-3: Claude 순차 실행. 슬롯은 같은 배치의 Claude 형제가 실행 중이거나 종료 확인을 기다리면 잡힌 것으로 본다.
+    - claim에서 사전 확인하고, replaceTask SQL `NOT EXISTS`로 경쟁을 막는다(ROUTINE_SIBLING_BUSY).
+    - dispatchRemote는 대기로 남긴다. 실행이 살아 있지 않게 끝나면 settleRemoteChild로 reconcile해서 다음 형제를 시작한다(/run 경로 포함).
+    - 결정 요청(request_decision)으로 멈춘 자식도 슬롯을 놓는다.
+    - 원본 조정기는 대기 사유 claude_sibling_running을 쓴다. 409 ROUTINE_SIBLING_BUSY는 불확실이 아니라 대기로 처리한다(코드를 응답과 클라이언트 오류에 전달).
+  - H7-4: 관측 검증·파이프라인(정리 SQL json_each), 정책 보존(자식 4개 열, 5개 이상은 계속 막음), 관측 UI를 2~4로 바꿨다.
+  - 문서: USER-GUIDE-KO "하위 작업 나누기", PRD 6절 메모, HANDOFF H7, REQUIREMENTS-STATUS.
+- TDD: 새 시험이 먼저 실패하는 것을 확인했다.
+  - variable-children 6건, variable-children-review 5건, claude-serial 7건, source-execution 3건.
+  - 이전 규칙을 고정한 시험 3곳을 고쳤다: 제공자 짝 메시지, 정책 보존의 3자식 비지원 → 5자식, 리뷰 입력 fixture에 고정 자식 추가.
+- D1 바인딩: 자식 4개일 때 위임 갱신은 약 25개, reconcile 13개, 누락 검사 18개다. 제한 100개 안이다.
+- 독립 검증(inno-opus): P1 없음. P2 1건과 P3 6건이 나왔다.
+  - 반영: P2(원본 조정기가 409를 불확실로 남기던 문제), P3(결정 요청·/run 뒤 다음 시작, 오류 로그)
+  - 남김(경미):
+    - 원본 없는 하위 작업 화면의 대기 사유 표시
+    - 역할 대소문자 정규화
+    - 데스크톱 리뷰 입력 하한 1
+    - 부모 일시정지 오류 표시 가림
+- 호환성: 운영 연결기 코드(afaecd6)를 새 Worker와 메모리에서 함께 실행했다. 완료·한도 실패가 정상이었고 남은 것이 없었다.
+- 검증: 전체 1422건 중 1421pass/0fail/기존 symlink 1skip, git diff --check, Wrangler dry-run.
+- 남김:
+  - 실구독 확인. 마스터가 하위 작업 수를 근거 있게 고르는지와 실제 Claude 순차 실행을 본다.
+  - 하위 작업별 재시도 예산. 현재는 배치당 1회다.

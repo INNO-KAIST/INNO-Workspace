@@ -1,3 +1,4 @@
+import {DELEGATION_MIN_CHILDREN,DELEGATION_MAX_CHILDREN} from './core/delegation.mjs';
 const savedId=/^[A-Za-z0-9][A-Za-z0-9._:-]{0,99}$/;
 const positive=value=>Number.isSafeInteger(value)&&value>=1&&value<=1_000_000;
 const escape=value=>String(value).replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
@@ -55,7 +56,7 @@ function description(row){
 export function reviewObservationSection(task,{recovery}={}){
  if(!task||task.parentTaskId||task.status!=='completed'||task.delegation?.state!=='completed')return '';
  const assignments=task.delegation.children;
- if(!Array.isArray(assignments)||assignments.length!==2)return '<section class="delegation-child" aria-label="정책 관측 기록"><strong>정책 관측 기록</strong><p class="small-copy">관측 상태 미확인</p></section>';
+ if(!Array.isArray(assignments)||assignments.length<DELEGATION_MIN_CHILDREN||assignments.length>DELEGATION_MAX_CHILDREN)return '<section class="delegation-child" aria-label="정책 관측 기록"><strong>정책 관측 기록</strong><p class="small-copy">관측 상태 미확인</p></section>';
  const rows=trustedRows(task);
  const action=recovery&&rows&&[...rows.values()].some(row=>row.status==='failed')?`<p class="small-copy">저장된 검토 결과로 관측 기록만 다시 수집합니다. AI를 다시 실행하지 않습니다. 다음 정기 처리에서 저장 상태가 갱신됩니다.</p><button type="button" class="secondary-button" ${recovery.mode==='verify'?'data-review-observation-check':'data-review-observation-retry'}${recovery.disabled?' disabled':''}>${recovery.mode==='verify'?'상태 다시 확인':'관측 기록 다시 수집'}</button>`:'';
  return `<section class="delegation-child" aria-label="정책 관측 기록"><strong>정책 관측 기록</strong><p class="small-copy">작업 결과와 별도인 정책 관측 저장 상태입니다. 저장 여부는 품질 통과나 자동 승격을 뜻하지 않습니다.</p>${assignments.map(assignment=>`<p class="review-observation-row small-copy"><strong>${shortRole(assignment?.role)}</strong> · ${escape(description(rows?.get(assignment?.taskId)))}</p>`).join('')}${action}</section>`;
@@ -67,7 +68,7 @@ export function createReviewObservationRecovery({getContext,onChange=()=>{},onNo
  const sameIdentity=(a,b)=>a.reviewExecutionId===b.reviewExecutionId&&a.reviewGeneration===b.reviewGeneration&&a.batchId===b.batchId&&a.epoch===b.epoch;
  const snapshot=()=>{
   const context=getContext(),task=context?.task;
-  if(context?.capabilities?.reviewObservationRecovery!==true||!context.client?.remote||!task||task.parentTaskId||task.status!=='completed'||task.delegation?.state!=='completed'||!Array.isArray(task.delegation.children)||task.delegation.children.length!==2||!Number.isSafeInteger(task.version)||task.version<1)return null;
+  if(context?.capabilities?.reviewObservationRecovery!==true||!context.client?.remote||!task||task.parentTaskId||task.status!=='completed'||task.delegation?.state!=='completed'||!Array.isArray(task.delegation.children)||task.delegation.children.length<DELEGATION_MIN_CHILDREN||task.delegation.children.length>DELEGATION_MAX_CHILDREN||!Number.isSafeInteger(task.version)||task.version<1)return null;
   const rows=trustedRows(task);
   if(!rows||[...rows.values()].some(row=>!['pending','retry','failed','recorded','duplicate','policy_missing','not_attributable'].includes(row.status)||!Number.isSafeInteger(row.attempts)||row.attempts<0||row.attempts>3||row.reason!==undefined&&(typeof row.reason!=='string'||row.reason.length>100)||row.nextAt!=null&&(typeof row.nextAt!=='string'||row.nextAt.length>64||!Number.isFinite(Date.parse(row.nextAt))))||![...rows.values()].some(row=>row.status==='failed'))return null;
   return {client:context.client,id:task.id,epoch:context.epoch,version:task.version,identity:identity(task)};
@@ -78,7 +79,7 @@ export function createReviewObservationRecovery({getContext,onChange=()=>{},onNo
  };
  const selected=token=>{
   const context=getContext(),task=context?.task;
-  return Boolean(sameTask(token)&&task.status==='completed'&&task.delegation?.state==='completed'&&Array.isArray(task.delegation.children)&&task.delegation.children.length===2&&trustedRows(task)&&sameIdentity(token.identity,identity(task)));
+  return Boolean(sameTask(token)&&task.status==='completed'&&task.delegation?.state==='completed'&&Array.isArray(task.delegation.children)&&task.delegation.children.length>=DELEGATION_MIN_CHILDREN&&task.delegation.children.length<=DELEGATION_MAX_CHILDREN&&trustedRows(task)&&sameIdentity(token.identity,identity(task)));
  };
  const control=()=>{
   const now=snapshot();if(!now)return null;

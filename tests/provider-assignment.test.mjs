@@ -22,7 +22,9 @@ test('delegation results validate each child against its provider catalog', () =
   assert.throws(() => validateDelegationResult(delegation(child('codex', 'gpt-5.4', 'low'), child('claude', 'sonnet')), rows), {message: 'Assigned Codex effort is not present in the account catalog for gpt-5.4: low'});
   assert.throws(() => validateDelegationResult(delegation(child('codex', 'gpt-5.4'), child('gemini', 'pro')), rows), {message: 'Invalid delegation provider'});
   assert.throws(() => validateDelegationResult(delegation(child('codex', 'gpt-5.4'), {...child('claude', 'sonnet'), provider: undefined}), rows), {message: 'Invalid delegation provider'});
-  assert.throws(() => validateDelegationResult(delegation(child('claude', 'opus'), child('claude', 'sonnet')), rows), {message: 'Invalid delegation: one Codex and one Claude child with distinct roles are required'});
+  // H7: any provider mix is allowed, but roles must stay distinct.
+  assert.throws(() => validateDelegationResult(delegation(child('claude', 'opus'), child('claude', 'sonnet')), rows), {message: 'Invalid delegation: children require distinct roles'});
+  assert.equal(validateDelegationResult(delegation(child('claude', 'opus'), {...child('claude', 'sonnet'), role: 'second claude role'}), rows).children.length, 2);
   assert.match(delegationRoutingPolicy(rows), /Claude subscription role-model candidates: \["haiku","sonnet","opus"\]/);
 });
 

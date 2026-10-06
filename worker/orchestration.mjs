@@ -4,7 +4,7 @@ import {reviewInputs} from './review-inputs.mjs';
 // adapterFor(provider) resolves the cloud adapter; hasRoutine/fire remain for the single-Routine callers.
 export function createOrchestration({store,delegations,hasRoutine,fire,waitUntil,adapterFor}){
  const remote=adapterFor??(()=>legacyRoutineAdapter({hasRoutine,fire}));
- async function dispatch(taskId){return dispatchRemote({store,taskId,adapterFor:remote,waitUntil});}
+ async function dispatch(taskId){return dispatchRemote({store,taskId,adapterFor:remote,waitUntil,onSettled:reconcileTask});}
  async function dispatchChildren(result){
   for(const child of result.children??[])if(usesTransport(child.assignment?.provider,'routine_fire')&&child.status==='queued')await dispatch(child.id);
   if(result.parent?.status==='queued_for_review'&&usesTransport(result.parent.checkpoint?.provider,'routine_fire'))await dispatch(result.parent.id);

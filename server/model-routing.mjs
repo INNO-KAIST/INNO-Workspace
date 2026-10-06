@@ -3,6 +3,7 @@ import {spawn} from 'node:child_process';
 import {isAssignableProvider,providerModels} from '../public/core/providers.mjs';
 import {CLAUDE_ROLE_MODELS} from '../public/core/claude-routing.mjs';
 import {validatePluginSelection} from '../public/core/plugins.mjs';
+import {DELEGATION_MIN_CHILDREN,DELEGATION_MAX_CHILDREN} from '../public/core/delegation.mjs';
 const EFFORTS=new Set(['none','minimal','low','medium','high','xhigh','max','ultra']);
 const DELEGATION_EFFORTS=new Set(['none','minimal','low','medium','high','xhigh','max']);
 export function modelCatalogRows(rows){
@@ -87,7 +88,7 @@ function boundedAssignmentText(value,label,max){
  return value.trim();
 }
 export function validateDelegationResult(value,rows,options={}){
- if(!value||typeof value!=='object'||Array.isArray(value)||value.independent!==true||!Array.isArray(value.children)||value.children.length!==2)throw new Error('Invalid delegation: exactly two independent children are required');
+ if(!value||typeof value!=='object'||Array.isArray(value)||value.independent!==true||!Array.isArray(value.children)||value.children.length<DELEGATION_MIN_CHILDREN||value.children.length>DELEGATION_MAX_CHILDREN)throw new Error('Invalid delegation: 2 to 4 independent children are required');
  const children=value.children.map(child=>{
   if(!child||typeof child!=='object'||!isAssignableProvider(child.provider))throw new Error('Invalid delegation provider');
   if(!DELEGATION_EFFORTS.has(child.effort))throw new Error(`Invalid delegation effort: ${child.effort??''}`);
@@ -109,7 +110,7 @@ export function validateDelegationResult(value,rows,options={}){
   if(declared.catalog==='built_in_roles'&&!declared.roles.includes(normalized.requestedModel))throw new Error(`Assigned Claude role model is not supported: ${normalized.requestedModel}`);
   return normalized;
  });
- if(new Set(children.map(child=>child.provider)).size!==2||new Set(children.map(child=>child.role)).size!==2)throw new Error('Invalid delegation: one Codex and one Claude child with distinct roles are required');
+ if(new Set(children.map(child=>child.role)).size!==children.length)throw new Error('Invalid delegation: children require distinct roles');
  return {independent:true,children};
 }
 export function delegationRoutingPolicy(rows,{sourceDelegationVersion=0}={}){
@@ -118,8 +119,8 @@ export function delegationRoutingPolicy(rows,{sourceDelegationVersion=0}={}){
  if(!models.length)return 'Managed parallel delegation is unavailable because the Codex account model catalog could not be verified. Work directly with the current master. Do not spawn native subagents, hand off, or guess model names. Return the ordinary result JSON without delegation.';
  return [
   'MANAGED PARALLEL ALLOCATION (existing subscriptions only):',
-  'First understand the latest request and decide whether two independent, '+(sourceAware?'source-scoped':'source-free')+' results materially help. Respect explicit no-subagent or direct-work requests. Simple, indivisible, '+(sourceAware?'':'attachment-backed, ')+'or URL-backed requests stay with the master. The task role plan contains static suggestions only; decide their relevance from the actual objective and do not allocate roles merely because they are listed.',
-  'Do not spawn native subagents or call another provider. If parallel work is useful, return delegation in the final JSON so INNO Workspace can persist and run it. Delegation must be {"independent":true,"children":[exactly two assignments]} with exactly one codex and one claude assignment. Each assignment must contain role, provider, requestedModel, effort, sufficientReason, acceptanceCriteria (1-8 exact strings), and bounded instructions. The two roles must be distinct and independently executable '+(sourceAware?'using only assigned transient materials and no task dependencies':'without source originals or dependencies')+'.',
+  'First understand the latest request and decide whether 2 to 4 independent, '+(sourceAware?'source-scoped':'source-free')+' results materially help. Respect explicit no-subagent or direct-work requests. Simple, indivisible, '+(sourceAware?'':'attachment-backed, ')+'or URL-backed requests stay with the master. The task role plan contains static suggestions only; decide their relevance from the actual objective and do not allocate roles merely because they are listed.',
+  'Do not spawn native subagents or call another provider. If parallel work is useful, return delegation in the final JSON so INNO Workspace can persist and run it. Delegation must be {"independent":true,"children":[2 to 4 assignments]} using codex and/or claude in any mix; use the fewest children that cover the independent parts. Each assignment must contain role, provider, requestedModel, effort, sufficientReason, acceptanceCriteria (1-8 exact strings), and bounded instructions. Roles must be distinct and independently executable '+(sourceAware?'using only assigned transient materials and no task dependencies':'without source originals or dependencies')+'. Codex children run one at a time on the desktop and Claude children run one at a time in the cloud, so more children do not always finish sooner.',
   sourceAware?SOURCE_DELEGATION_POLICY:'',
   'Verified Codex account models and efforts: '+JSON.stringify(models),
   'Claude subscription role-model candidates: '+JSON.stringify([...CLAUDE_ROLE_MODELS])+'. Claude child effort is planning intent; the Routine wrapper must report whether it can apply it and must not invent an unsupported per-Agent effort control.',

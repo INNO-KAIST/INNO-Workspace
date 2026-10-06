@@ -17,7 +17,11 @@ export function sourceExecutionReadiness(task,state,connected){
  }
  const c=state.capabilities||{};
  if(c.sourceDelegationVersion!==1)return no('unsupported');
- if(usesTransport(provider,'routine_fire')){if(!providerAvailable(provider,c))return no('provider_unavailable');}
+ if(usesTransport(provider,'routine_fire')){
+  if(!providerAvailable(provider,c))return no('provider_unavailable');
+  // Claude children of one batch run one at a time (H7); the server enforces the same rule.
+  if(task.parentTaskId&&state.tasks.some(s=>s.id!==task.id&&s.parentTaskId===task.parentTaskId&&s.batchId===task.batchId&&usesTransport(s.checkpoint?.provider,'routine_fire')&&(s.status==='running'||s.checkpoint?.confirmationRequired)))return no('claude_sibling_running');
+ }
  else if(usesTransport(provider,'desktop_bridge')){
   if(!c.desktopSources||c.desktopSourceDelegationVersion!==1)return no('provider_unavailable');
   const desktop=state.localDesktop;
@@ -125,6 +129,13 @@ export class SourceExecutionCoordinator{
    catch{return {status:'uncertain',taskId:snapshot.id};}
    return {status:'submitted',taskId:snapshot.id};
   }catch(error){
+   // The server refused the claim because a Claude sibling holds the batch slot (H7):
+   // nothing started, so drop the hold and wait for the next tick.
+   if(dispatched&&sameSession()&&error?.status===409&&error.code==='ROUTINE_SIBLING_BUSY'){
+    try{await this.#journal(client,entries=>{const a=entries.get(snapshot.id);if(a?.version===snapshot.version&&a.status==='uncertain')entries.delete(snapshot.id);});}
+    catch{return {status:'uncertain',taskId:snapshot.id};}
+    return {status:'waiting',taskId:snapshot.id};
+   }
    const status=!sameSession()?'stale':dispatched?'uncertain':error.code==='STALE_SOURCE_TASK'?'stale':'source_error';
    if(snapshot&&status==='source_error'){
     try{await this.#journal(client,entries=>{if(!entries.has(snapshot.id)&&entries.size<100)entries.set(snapshot.id,{taskId:snapshot.id,version:snapshot.version,status});});}

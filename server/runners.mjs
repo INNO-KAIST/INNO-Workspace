@@ -190,7 +190,7 @@ function promptText(task, materials, ownership, context, selected) {
     ownership.modelPolicy && !ownership.claude ? 'Return one JSON object with summary, checkpoint, artifacts (at most 9), and routing as specified above. Shape before adding routing:' : 'Return either a plain final answer or one JSON object with this shape:',
     '{"summary":"user-facing answer","checkpoint":"verified progress","artifacts":[{"name":"file.ext","mime":"type/subtype","path":"relative/output/path"}]}',
     ...(ownership.allowDelegation&&ownership.pluginCatalog?.length?[pluginCatalogContext(ownership.pluginCatalog)]:[]),
-    ownership.allowDelegation ? 'When managed parallel allocation is useful, add delegation:{"independent":true,"children":[{"role":"...","provider":"codex|claude","requestedModel":"...","effort":"...","sufficientReason":"...","acceptanceCriteria":["..."],"instructions":"..."}, {"...":"..."}]}. Exactly one child must use each provider.' : '',
+    ownership.allowDelegation ? 'When managed parallel allocation is useful, add delegation:{"independent":true,"children":[{"role":"...","provider":"codex|claude","requestedModel":"...","effort":"...","sufficientReason":"...","acceptanceCriteria":["..."],"instructions":"..."}, {"...":"..."}]} with 2 to 4 children in any provider mix and distinct roles.' : '',
     ownership.mode === 'review' ? 'For review completion, add reviewReport:[{"childTaskId":"...","criteria":[{"criterion":"exact assigned string","status":"pass|fail|unverifiable","evidence":"concrete evidence"}]}]. Include every child and every assigned criterion exactly once.' : '',
     'For generated files, return a relative path inside this isolated run directory. Small text may instead use content plus encoding utf-8.',
     'Never label text as DOCX, PPTX, PDF, or an image. If the required generator or renderer is unavailable, report that limitation and return text only.',
@@ -387,7 +387,7 @@ function codexReviewPolicy(task){
   return [
     'PARENT REVIEW PHASE:',
     'Work directly with the current master. Do not spawn native subagents, split or delegate the task, or request a provider handoff.',
-    'Inspect the generated child files and summaries, compare both results, and evaluate every exact assigned acceptance criterion.',
+    'Inspect the generated child files and summaries, compare all child results, and evaluate every exact assigned acceptance criterion.',
     'A failed or unverifiable criterion must include actionable evidence for a targeted retry; do not describe the parent as verified or complete.',
     'Assigned criteria: '+JSON.stringify(criteria),
   ].join('\n');

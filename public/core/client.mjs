@@ -48,7 +48,7 @@ export class WorkspaceClient {
     try{
       const r=await fetch(this.baseUrl+path,{method:body===undefined?'GET':'POST',headers:{...(this.token?{Authorization:`Bearer ${this.token}`} :{}),...(body===undefined?{}:{'Content-Type':'application/json'}),...(options.deliveryReceiptVersion===1?{'x-inno-workspace-id':options.workspaceId,'x-inno-delivery-receipt-version':'1'}:{})},body:body===undefined?undefined:JSON.stringify(body),signal:controller.signal,cache:'no-store',redirect:'error'});
       let d;try{d=await r.json();}catch{throw new Error('서버 응답을 읽을 수 없습니다. API 주소를 확인하세요.');}
-      if(!r.ok){const e=new Error(d.error?.message||d.error||d.message||`요청 실패 (${r.status})`);e.status=r.status;throw e;}
+      if(!r.ok){const e=new Error(d.error?.message||d.error||d.message||`요청 실패 (${r.status})`);e.status=r.status;if(typeof d.code==='string'&&/^[A-Z_]{1,64}$/.test(d.code))e.code=d.code;throw e;}
       return d;
     }finally{clearTimeout(timeout);}
   }

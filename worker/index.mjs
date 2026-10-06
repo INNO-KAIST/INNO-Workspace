@@ -2,7 +2,7 @@ import {assertProviderId,providerManifest,providerTransport,providersByTransport
 import {sourceDelegationVersionFromEnvironment} from '../public/core/source-delegation-gate.mjs';
 import {deliveryReceiptVersionFromEnvironment} from '../public/core/delivery-receipt-gate.mjs';
 import {verifyMaterialViews} from '../public/core/source-coverage.mjs';
-import {runRemoteClaim} from './dispatch.mjs';
+import {runRemoteClaim,settleRemoteChild} from './dispatch.mjs';
 import {createRemoteAdapters} from './remote-adapters.mjs';
 import {createPluginRegistry} from './plugins.mjs';
 import {isRootMaster} from '../public/core/plugins.mjs';
@@ -309,7 +309,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
             return responseJson({error: unavailable, task}, 503, headers);
           }
           const claim = await store.claimExecution(taskId, {provider: input.provider, expectedVersion: input.expectedVersion,sourceBound:materials.length>0});
-          const execution=runRemoteClaim({store,claim,launch:owner=>remote.launch(owner,{materials})});
+          const execution=runRemoteClaim({store,claim,launch:owner=>remote.launch(owner,{materials})}).then(()=>settleRemoteChild(store,claim,orchestration.reconcileTask));
           if(context.waitUntil)context.waitUntil(execution);else await execution;
           return responseJson({task: claim.task}, 202, headers);
         }
@@ -318,7 +318,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
       } catch (error) {
         const status = error?.statusCode ?? 500;
         const result = {error: status === 500 ? 'internal server error' : error.message};
-        if(error?.code==='DESKTOP_DELIVERY_CAPACITY')result.code=error.code;
+        if(['DESKTOP_DELIVERY_CAPACITY','ROUTINE_SIBLING_BUSY'].includes(error?.code))result.code=error.code;
         if (error instanceof ConflictError && Number.isInteger(error.currentVersion)) result.currentVersion = error.currentVersion;
         return responseJson(result, status, headers);
       }

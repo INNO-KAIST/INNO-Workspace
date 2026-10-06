@@ -2,13 +2,13 @@ import {sanitizeResumeState} from '../public/core/context-resume.mjs';
 import {creationId,creationPayload,digestText} from '../public/core/create-requests.mjs';
 import {validateOfficeArtifact} from '../public/core/office-container.mjs';
 import {sanitizeArtifactChecks} from '../public/core/artifact-checks.mjs';
-import {validateReviewReport} from '../public/core/delegation.mjs';
+import {validateReviewReport,DELEGATION_MAX_CHILDREN} from '../public/core/delegation.mjs';
 import {handoffTask,isHandoffReplay} from '../public/core/provider-handoff.mjs';
 import {executionUsage,usageHistory} from '../public/core/execution-usage.mjs';
 import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execution-evidence.mjs';
 import {ownedContextDelivery,suppliedContextDelivery,withRetrieval} from '../public/core/context-delivery.mjs';
 import {ownedPluginDelivery} from '../public/core/plugins.mjs';
-import {assertProviderId,providerHas,usesTransport} from '../public/core/providers.mjs';
+import {assertProviderId,providerHas,providersByTransport,usesTransport} from '../public/core/providers.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
 import {assertEvaluationAttachable,assertEvaluationBindingPreserved,evaluationBinding,reserveClaimBudget} from '../public/core/evaluation-claim.mjs';
 import {encodeStoredEvaluationBudget,parseStoredEvaluationBudget} from './evaluation-budgets.mjs';
@@ -29,6 +29,15 @@ import {
 
 // Not exported: generic updates cannot authorize uncertainty recovery.
 const REMOTE_RECOVERY = Symbol('remote recovery');
+// Claude (routine_fire) children of one batch run one at a time (H7): a sibling that is
+// running or awaits stop confirmation holds the slot.
+const ROUTINE_PROVIDERS = JSON.stringify(providersByTransport('routine_fire'));
+const routineSiblingClause = (self, parent, batch, providers) => `SELECT 1 FROM tasks s WHERE s.id <> ?${self} AND json_extract(s.body,'$.parentTaskId') = ?${parent} AND json_extract(s.body,'$.batchId') = ?${batch} AND json_extract(s.body,'$.checkpoint.provider') IN (SELECT value FROM json_each(?${providers})) AND (json_extract(s.body,'$.status') = 'running' OR json_extract(s.body,'$.checkpoint.confirmationRequired') IS NOT NULL)`;
+async function routineSiblingRunning(db, task) {
+  const row = await db.prepare(`${routineSiblingClause(1, 2, 3, 4)} LIMIT 1`).bind(task.id, task.parentTaskId, task.batchId, ROUTINE_PROVIDERS).first();
+  return Boolean(row);
+}
+const routineSiblingBusy = version => Object.assign(new ConflictError('Another Claude child of this batch is running or awaits stop confirmation', version), {code: 'ROUTINE_SIBLING_BUSY'});
 const EVALUATION_ATTACH = Symbol('evaluation attach');
 const BUDGET_COMMIT = Symbol('budget commit');
 const CLAIM_RESERVATION = Symbol('desktop claim reservation');
@@ -145,7 +154,11 @@ export class D1TaskStore {
     if(budget)bindings.push(budget.key,budget.raw);
     const capacityGuard=reservation?reservationCapacityGuard(reservation,bindings.length+1):null;
     if(capacityGuard)bindings.push(capacityGuard.value);
-    const statements=[this.db.prepare('UPDATE tasks SET version = ?1, updated_at = ?2, body = ?3 WHERE id = ?4 AND version = ?5' + guard + budgetGuard+(capacityGuard?.sql??'')).bind(...bindings)];
+    // Race backstop for the one-Claude-child-at-a-time rule; ?4/?6/?7 are id, parent and batch.
+    const siblingGate=Boolean(current.parentTaskId)&&next.status==='running'&&current.status!=='running'&&usesTransport(next.checkpoint?.provider,'routine_fire');
+    const siblingGuard=siblingGate?` AND NOT EXISTS (${routineSiblingClause(4,6,7,bindings.length+1)})`:'';
+    if(siblingGate)bindings.push(ROUTINE_PROVIDERS);
+    const statements=[this.db.prepare('UPDATE tasks SET version = ?1, updated_at = ?2, body = ?3 WHERE id = ?4 AND version = ?5' + guard + budgetGuard+(capacityGuard?.sql??'')+siblingGuard).bind(...bindings)];
     if(budget)statements.push(this.db.prepare(`UPDATE metadata SET value=?1 WHERE key=?2 AND value=?3 AND changes()=1 AND EXISTS (SELECT 1 FROM tasks t WHERE t.id=?4 AND t.version=?5 AND json_extract(t.body,'$.checkpoint.executionId')=?6 AND json_extract(t.body,'$.checkpoint.generation')=?7)`).bind(budget.nextRaw,budget.key,budget.raw,id,next.version,next.checkpoint.executionId,next.checkpoint.generation));
     statements.push(this.db.prepare("UPDATE metadata SET value = value + 1 WHERE key = 'revision' AND changes() = 1"));
     if(budget&&!reservation)statements.push(this.db.prepare("INSERT INTO metadata (key,value) SELECT 'revision',0 WHERE changes()!=1"));
@@ -167,6 +180,7 @@ export class D1TaskStore {
     }
     if (Number(results[0]?.meta?.changes ?? 0) !== 1) {
       const latest = await this.requireTask(id);
+      if(siblingGate&&latest.version===expectedVersion&&await routineSiblingRunning(this.db,current))throw routineSiblingBusy(latest.version);
       if(reservation&&await reservationCapacity(this.db,reservation.workspaceId)>=MAX_DESKTOP_DELIVERIES)throw new DesktopDeliveryCapacityError();
       throw new ConflictError('task changed during update', latest.version);
     }
@@ -193,7 +207,7 @@ export class D1TaskStore {
       throw new ValidationError('Invalid initial policy plan');
     const metadataGuards=Array.isArray(policyPlan)?policyPlan:policyPlan.guards;
     const proposed=Array.isArray(policyPlan)?[]:policyPlan.initialPolicies;
-    if(!Array.isArray(metadataGuards)||!Array.isArray(proposed)||proposed.length>2)throw new ValidationError('Invalid initial policy plan');
+    if(!Array.isArray(metadataGuards)||!Array.isArray(proposed)||proposed.length>DELEGATION_MAX_CHILDREN)throw new ValidationError('Invalid initial policy plan');
     const initialPolicies=[];
     const seenPolicyKeys=new Set();
     for(const item of proposed){
@@ -362,6 +376,7 @@ export class D1TaskStore {
       if(current.parentTaskId && current.status!=='queued')throw new ConflictError('Child must be queued by the delegation retry coordinator',current.version);
       if(current.delegation && current.delegation.state!=='superseded' && provider!==current.delegation.masterProvider)throw new ValidationError('Review provider must match the master provider');
       if(current.parentTaskId && provider !== current.assignment.provider)throw new ValidationError('Child provider cannot change');
+      if(current.parentTaskId && usesTransport(provider,'routine_fire') && await this.routineSiblingBusy(current))throw routineSiblingBusy(current.version);
       if (TERMINAL_STATUSES.includes(current.status) || ['paused','waiting_children'].includes(current.status)) {
         throw new ConflictError(`task cannot run from ${current.status}`, current.version);
       }
@@ -387,6 +402,11 @@ export class D1TaskStore {
         },
       };
     },authorization).then(task => ({...claim, task}));
+  }
+
+  // True while a Claude sibling of this child's batch is running or awaits stop confirmation.
+  async routineSiblingBusy(task) {
+    return Boolean(task?.parentTaskId) && routineSiblingRunning(this.db, task);
   }
 
   assertExecution(task, input) {
@@ -501,9 +521,9 @@ export class D1TaskStore {
     if(snapshot.parentTaskId)throw new ValidationError('Use the child recovery coordinator for a child task');
     const review=snapshot.delegation&&snapshot.delegation.state!=='superseded';
     if(review){
-      if(!['reviewing','queued_for_review','paused'].includes(snapshot.delegation.state)||snapshot.delegation.review?.children?.length!==2)throw new ConflictError('Only an existing master review can be recovered',snapshot.version);
+      if(!['reviewing','queued_for_review','paused'].includes(snapshot.delegation.state)||snapshot.delegation.review?.children?.length!==snapshot.delegation.children?.length)throw new ConflictError('Only an existing master review can be recovered',snapshot.version);
       const children=await Promise.all(snapshot.delegation.children.map(c=>this.requireTask(c.taskId)));
-      if(children.length!==2||children.some(c=>c.status!=='completed'||c.parentTaskId!==id||c.batchId!==snapshot.delegation.batchId))throw new ConflictError('Review recovery requires both completed children',snapshot.version);
+      if(children.length!==snapshot.delegation.children.length||children.some(c=>c.status!=='completed'||c.parentTaskId!==id||c.batchId!==snapshot.delegation.batchId))throw new ConflictError('Review recovery requires every child completed',snapshot.version);
     }
     return this.replaceTask(id,input.expectedVersion,current=>{
       const checkpoint=current.checkpoint??{},confirmation=checkpoint.confirmationRequired;

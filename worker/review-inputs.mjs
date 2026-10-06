@@ -1,4 +1,5 @@
 import {ConflictError,ValidationError} from '../public/core/tasks.mjs';
+import {DELEGATION_MIN_CHILDREN,DELEGATION_MAX_CHILDREN} from '../public/core/delegation.mjs';
 const size=s=>new TextEncoder().encode(s).byteLength;
 function byteLength(a){
  if(a.encoding!=='base64')return size(a.content);
@@ -8,8 +9,10 @@ function byteLength(a){
 export async function reviewInputs(store,parent){
  if(parent.delegation?.state!=='reviewing')return [];
  const manifests=parent.delegation.review?.children;
- if(!Array.isArray(manifests)||manifests.length!==2)throw new ValidationError('Review child manifest missing');
- if(new Set(manifests.map(m=>m.taskId)).size!==2)throw new ValidationError('Duplicate review child');
+ // One manifest per frozen child (2 to 4), each naming a distinct frozen child.
+ const frozen=(parent.delegation.children??[]).map(c=>c?.taskId);
+ if(!Array.isArray(manifests)||manifests.length<DELEGATION_MIN_CHILDREN||manifests.length>DELEGATION_MAX_CHILDREN||manifests.length!==frozen.length)throw new ValidationError('Review child manifest missing');
+ if(new Set(manifests.map(m=>m.taskId)).size!==manifests.length||manifests.some(m=>!frozen.includes(m.taskId)))throw new ValidationError('Duplicate review child');
  let bytes=0,count=0;
  const results=[];
  for(const m of manifests){

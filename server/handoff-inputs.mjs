@@ -1,5 +1,6 @@
 import {writeFile} from 'node:fs/promises';
 import path from 'node:path';
+import {DELEGATION_MAX_CHILDREN} from '../public/core/delegation.mjs';
 export async function prepareHandoffInputs(task,directory){
  const ids=task.checkpoint?.handoff?.artifactIds??[];
  if(!Array.isArray(ids)||ids.length>20||new Set(ids).size!==ids.length)throw Error('Invalid handoff artifact manifest');
@@ -33,7 +34,7 @@ function reviewBytes(artifact){
  return bytes;
 }
 export async function prepareReviewInputs(reviewInputs,directory){
- if(!Array.isArray(reviewInputs)||reviewInputs.length<1||reviewInputs.length>2)throw Error('Review inputs require one or two completed children');
+ if(!Array.isArray(reviewInputs)||reviewInputs.length<1||reviewInputs.length>DELEGATION_MAX_CHILDREN)throw Error('Review inputs require one to four completed children');
  const seen=new Set(),files=[];let total=0;
  const manifest=reviewInputs.map((child,childIndex)=>{
   if(!child||typeof child!=='object'||child.attachments?.length||child.materials?.length)throw Error('Review inputs may contain generated artifacts only');
