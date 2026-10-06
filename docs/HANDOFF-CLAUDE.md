@@ -189,6 +189,16 @@
 
 ### H6. 추가 비교 평가의 실행 제한·정산 (MOD-06 / 승인된 기반, 운영 미완료)
 
+**2026-10-06 갱신(사용자 결정: 기반만, 예산 0, Codex만, Windows 기본 도구):** 계획은 docs/superpowers/plans/2026-10-06-evaluation-foundation.md에 있다.
+- 구현한 것:
+  - server/process-tree.mjs: 종료(일시정지·시간 초과·제한 실행 마감) 때 Codex 프로세스 묶음 전체를 끝낸다. 남은 프로세스가 없는지 확인해 verified/survivors/unavailable로 기록한다. 실제 연결기에서만 켠다.
+  - 제한 실행의 localExecution(종료 증명 포함)을 완료·실패 기록에 실어 저장한다(desktop_bridge 실행자만).
+  - verified 증명으로만 정산한다(afterComplete와 예약 작업에서 재시도). 그 밖에는 예약을 유지한다.
+  - 일반 대기열이 제한 실행 작업을 가져가지 않는다(claim 루프 정지 위험 제거).
+- 남은 것(아래는 당시 기록):
+  - 비교 작업 생성(기준선·후보 모델 고정)과 화면
+  - 예산을 켜는 사용자 결정
+
 **구현됨:** 불변 job 한도·예약/정산 reducer, local/D1 CAS ledger, task claim+reserve 원자 결합, Codex 내부 deadline/close 관측, bound 실행의 일반 delegation/handoff 우회 방지.
 
 **남음:** Windows 프로세스 트리 containment 및 종료 입증 → durable trusted completion receipt → 원자 정산 → 전용 comparison job 생성/기준선·후보·독립검토/모든 phase 예약 → 예산·예약·초과·미확인 UI. `rootProcessClosed`는 자식 프로세스/원격 추론/과금 종료 증거가 아니다. 이를 종료 capability 광고나 자동 정산 근거로 승격하지 않는다. Claude의 강제 시간 종료 능력이 검증되지 않으면 그 비교 경로를 시작하지 않는다.

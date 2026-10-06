@@ -47,9 +47,10 @@ export function remainingExecutionMs(deadline, wallNow, monotonicNow) {
   return remaining;
 }
 
-export function localExecutionObservation(startedAt, closedAt, {rootProcessClosed=false,deadlineExceeded=false}={}) {
+export function localExecutionObservation(startedAt, closedAt, {rootProcessClosed=false,deadlineExceeded=false,tree}={}) {
   // Local root close is not proof that descendants or remote inference stopped; never settle a ledger from this.
+  // The optional tree proof (H6) records whether every local descendant was observed gone.
   const elapsedMs=Number.isFinite(startedAt)&&Number.isFinite(closedAt)&&closedAt>=startedAt&&
     Number.isSafeInteger(Math.ceil(closedAt-startedAt))?Math.ceil(closedAt-startedAt):null;
-  return {started:startedAt!==null,rootProcessClosed,elapsedMs,deadlineExceeded};
+  return {started:startedAt!==null,rootProcessClosed,elapsedMs,deadlineExceeded,...(tree?{tree}:{})};
 }

@@ -1,3 +1,5 @@
+import {resolveCodexCommand} from '../server/codex-command.mjs';
+import {createProcessTree} from '../server/process-tree.mjs';
 import {createContextAccess} from '../server/context-access.mjs';
 import {createModelCatalog} from '../server/model-routing.mjs';
 import {RunStorage} from '../server/run-storage.mjs';
@@ -6,7 +8,7 @@ import {spawn} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
 import {createDesktopServer} from '../server/desktop-http.mjs';
 import {acquireBridgeLock,startupPortMessage,deliveryStopMessage} from '../server/bridge-runtime.mjs';
-import {readFileSync,writeFileSync,existsSync,mkdirSync,readdirSync,statSync} from 'node:fs';
+import {readFileSync,writeFileSync,existsSync,mkdirSync} from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {withoutApiEnvironment,createCodexRunner} from '../server/runners.mjs';
@@ -30,17 +32,10 @@ const token=readFileSync(path.join(privateDir,'cloud-access-token.txt'),'utf8').
 const pendingPath=path.join(privateDir,'desktop-pending.json');
 const outbox=createFileOutbox(pendingPath);
 const request=createCloudRequest({endpoint,token});
-let codexCommand='codex';
-if(process.platform==='win32'&&process.env.LOCALAPPDATA){
- const binRoot=path.join(process.env.LOCALAPPDATA,'OpenAI','Codex','bin');
- if(existsSync(binRoot)){
-  const installed=readdirSync(binRoot,{withFileTypes:true}).filter(e=>e.isDirectory()).map(e=>path.join(binRoot,e.name,'codex.exe')).filter(existsSync).sort((a,b)=>statSync(b).mtimeMs-statSync(a).mtimeMs);
-  if(installed.length)codexCommand=installed[0];
- }
-}
-const spawnCodex=(command,args,options)=>spawn(command==='codex'?codexCommand:command,args,options);
+// The Codex app can replace its bundled CLI while the connector runs: resolve per spawn.
+const spawnCodex=(command,args,options)=>spawn(command==='codex'?resolveCodexCommand():command,args,options);
 const contextAccess=createContextAccess();
-const runner=createCodexRunner({contextAccess,contextUrl:'http://127.0.0.1:4175/api/desktop/context',spawnProcess:spawnCodex,modelCatalog:createModelCatalog({spawnProcess:spawnCodex,env:withoutApiEnvironment(),cwd:root}),cwd:path.join(privateDir,'desktop-runs'),managedDelivery:true,sourceDelegationVersion:sourceDelegationVersionFromEnvironment(process.env)});
+const runner=createCodexRunner({processTree:createProcessTree(),contextAccess,contextUrl:'http://127.0.0.1:4175/api/desktop/context',spawnProcess:spawnCodex,modelCatalog:createModelCatalog({spawnProcess:spawnCodex,env:withoutApiEnvironment(),cwd:root}),cwd:path.join(privateDir,'desktop-runs'),managedDelivery:true,sourceDelegationVersion:sourceDelegationVersionFromEnvironment(process.env)});
 let lock;try{lock=await acquireBridgeLock();}catch(error){const message=startupPortMessage(error);if(!message)throw error;console.error(message);process.exit(1);}
 const readDeliveryBinding=async()=>({origin:endpoint,workspaceId:(await request('/api/desktop/identity')).workspaceId});
 // The claim journal is used only with delivery receipts (version 1).

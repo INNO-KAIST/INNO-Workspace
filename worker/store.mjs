@@ -7,6 +7,10 @@ import {handoffTask,isHandoffReplay} from '../public/core/provider-handoff.mjs';
 import {executionUsage,usageHistory} from '../public/core/execution-usage.mjs';
 import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execution-evidence.mjs';
 import {ownedContextDelivery,suppliedContextDelivery,withRetrieval} from '../public/core/context-delivery.mjs';
+import {boundedLocalExecution} from '../public/core/local-execution.mjs';
+// Only the desktop runner of a bounded (evaluation) execution may supply its own local
+// observation; it is kept as evidence and never trusted from other callers (H6).
+const boundedLocalFor=(task,input,allowed)=>allowed&&task?.evaluationBudget&&input?.localExecution!==undefined?boundedLocalExecution(input.localExecution):null;
 import {ownedPluginDelivery} from '../public/core/plugins.mjs';
 import {assertProviderId,providerHas,providersByTransport,usesTransport} from '../public/core/providers.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
@@ -396,7 +400,7 @@ export class D1TaskStore {
         ...current, status: 'running', version: current.version + 1, updatedAt: now,
         ...(current.delegation?.state==='queued_for_review'?{delegation:{...current.delegation,state:'reviewing'}}:{}),
         checkpoint: {
-          ...previous, ...(previous.handoff?{handoff:{...previous.handoff,dispatched:true}}:{}), failure: undefined, executionEvidence: undefined, contextDelivery: undefined, pluginDelivery: undefined, wallElapsedMs: undefined, completedAt: undefined, ...claim, provider, sourceBound, status: 'running', claimedAt: now, deliveryReceiptVersion:deliveryReceiptVersion===1?1:undefined,
+          ...previous, ...(previous.handoff?{handoff:{...previous.handoff,dispatched:true}}:{}), failure: undefined, executionEvidence: undefined, contextDelivery: undefined, pluginDelivery: undefined, localExecution: undefined, wallElapsedMs: undefined, completedAt: undefined, ...claim, provider, sourceBound, status: 'running', claimedAt: now, deliveryReceiptVersion:deliveryReceiptVersion===1?1:undefined,
           ...(reserved?{evaluationBudget:reserved.checkpoint}:{}),
           expiresAt: new Date(nowMs + leaseMs).toISOString(), updatedAt: now,
         },
@@ -450,6 +454,7 @@ export class D1TaskStore {
       const now = this.now();
       const elapsed=wallElapsedMs(current.checkpoint?.claimedAt,now);
       const executionEvidence=allowDesktopEvidence&&input.executionEvidence?validateOwnedExecutionEvidence(current,input.executionEvidence):null;
+      const local=boundedLocalFor(current,input,allowDesktopEvidence);
       // Cloud executions report no delivery on completion; the Worker supplies the
       // re-reads it counted for this owner, merged into the record made at dispatch.
       const delivery=suppliedContextDelivery(current,input.contextDelivery)
@@ -482,7 +487,7 @@ export class D1TaskStore {
         ...(reviewReport?{reviewObservation:{createdAt:now,reviewExecutionId:current.checkpoint.executionId,reviewGeneration:current.checkpoint.generation,batchId:current.delegation.batchId,epoch:current.delegation.epoch,children:current.delegation.children.map(child=>({childTaskId:child.taskId,...(child.selection?.profile?{status:'pending',attempts:0}:{status:'not_attributable',reason:'saved_profile_missing',attempts:0,nextAt:null})}))}}:{}),
         messages: [...current.messages, {id: this.id(), role: 'assistant', content, createdAt: now}],
         artifacts: [...current.artifacts, ...artifacts],
-        checkpoint: {...checkpoint, ...(delivery?{contextDelivery:delivery}:{}), ...pluginsFor(current,input), resultArtifactIds:[...current.artifacts.filter(a=>a.executionId===input.executionId&&a.generation===input.generation),...artifacts].map(a=>a.id), usage: executionUsage(current.checkpoint,input.usage,now), usageHistory: usageHistory(current.checkpoint,input.usage,now,{task:current,transition:'completion',contextDelivery:delivery??ownedContextDelivery(current,current.checkpoint?.contextDelivery)}), failure: undefined, status: 'completed', content: input.checkpoint ?? 'Execution completed.', completedAt: now, wallElapsedMs:elapsed, ...(executionEvidence?{executionEvidence:{...executionEvidence,wallElapsedMs:elapsed}}:{}), updatedAt: now},
+        checkpoint: {...checkpoint, ...(delivery?{contextDelivery:delivery}:{}), ...(local?{localExecution:local}:{}), ...pluginsFor(current,input), resultArtifactIds:[...current.artifacts.filter(a=>a.executionId===input.executionId&&a.generation===input.generation),...artifacts].map(a=>a.id), usage: executionUsage(current.checkpoint,input.usage,now), usageHistory: usageHistory(current.checkpoint,input.usage,now,{task:current,transition:'completion',contextDelivery:delivery??ownedContextDelivery(current,current.checkpoint?.contextDelivery)}), failure: undefined, status: 'completed', content: input.checkpoint ?? 'Execution completed.', completedAt: now, wallElapsedMs:elapsed, ...(executionEvidence?{executionEvidence:{...executionEvidence,wallElapsedMs:elapsed}}:{}), updatedAt: now},
       };
     },undefined,{deliveryReceipt});
   }
@@ -499,17 +504,18 @@ export class D1TaskStore {
     });
   }
 
-  async failExecution(id, input, {deliveryReceipt, recoverInterrupted = false} = {}) {
+  async failExecution(id, input, {deliveryReceipt, recoverInterrupted = false, allowDesktopEvidence = false} = {}) {
     const snapshot = await this.requireTask(id);
     return this.replaceTask(id, snapshot.version, current => {
       if (!(recoverInterrupted && leaseInterruptedOwner(current, input))) this.assertExecution(current, input);
       const delivery = suppliedContextDelivery(current, input.contextDelivery);
+      const local = boundedLocalFor(current, input, allowDesktopEvidence);
       const now = this.now();
       const failure = failureRecord(input, now);
       const status = failure.kind === 'quota' ? 'waiting_quota' : failure.kind === 'authentication' ? 'waiting_connection' : 'failed';
       return {
         ...current, status, version: current.version + 1, updatedAt: now,
-        checkpoint: {...current.checkpoint, ...(delivery?{contextDelivery:delivery}:{}), ...pluginsFor(current,input), usageHistory:usageHistory(current.checkpoint,input.usage,now,{task:current,transition:'failure',contextDelivery:delivery??ownedContextDelivery(current,current.checkpoint?.contextDelivery)}), status, failure, updatedAt: now},
+        checkpoint: {...current.checkpoint, ...(delivery?{contextDelivery:delivery}:{}), ...(local?{localExecution:local}:{}), ...pluginsFor(current,input), usageHistory:usageHistory(current.checkpoint,input.usage,now,{task:current,transition:'failure',contextDelivery:delivery??ownedContextDelivery(current,current.checkpoint?.contextDelivery)}), status, failure, updatedAt: now},
       };
     },undefined,{deliveryReceipt});
   }

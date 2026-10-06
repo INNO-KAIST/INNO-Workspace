@@ -42,7 +42,7 @@ export function withoutApiEnvironment(processEnv = process.env) {
   return Object.fromEntries(Object.entries(processEnv).filter(([key]) => !API_ENVIRONMENT_KEYS.has(key.toUpperCase())&&!key.toUpperCase().startsWith('INNO_CONTEXT_')));
 }
 
-function collectProcess(child, {input, signal, timeoutMs, onTimeout, onClose, stdoutCollector=createTailCollector(1024*1024)} = {}) {
+function collectProcess(child, {input, signal, timeoutMs, onTimeout, onClose, onTerminate, stdoutCollector=createTailCollector(1024*1024)} = {}) {
   return new Promise((resolve, reject) => {
     const stderrCollector=createTailCollector();
     let outputError;
@@ -62,6 +62,8 @@ function collectProcess(child, {input, signal, timeoutMs, onTimeout, onClose, st
       terminationRequested=true;
       // A signal request is not proof of exit. Retain ownership until close.
       try {child.kill?.('SIGTERM');} catch (killError) {outputError.cause ??= killError;}
+      // Descendants (shell commands, helpers) would otherwise outlive the root.
+      try {onTerminate?.();} catch {}
     };
     const abort = () => {
       const error = new Error('execution aborted');
@@ -438,6 +440,7 @@ export function createCodexRunner({
   mcpToken,
   now = Date.now,
   monotonicNow = () => performance.now(),
+  processTree,
 } = {}) {
   const env = withoutApiEnvironment(processEnv);
   const readCatalog=async()=>{
@@ -454,7 +457,14 @@ export function createCodexRunner({
       const plugins=boundedOfferedPlugins(offeredPlugins),pluginDelivery=boundedPluginDelivery(pluginDeliveryRecord(plugins,pluginsSkipped)),pluginCatalog=(()=>{try{return boundedPluginCatalog(catalogInput);}catch{return [];}})();
       let contextLease,delivery,measuredDelivery=()=>delivery;
       let deadline,processStartedMono=null,processClosedMono=null,rootProcessClosed=false,deadlineExceeded=false;
-      const observation=()=>localExecutionObservation(processStartedMono,processClosedMono,{rootProcessClosed,deadlineExceeded});
+      // H6: with a configured process tree, termination ends descendants too, and a bounded
+      // run records whether every local descendant was observed gone.
+      let treeProof,terminationProof,tracker,sampler;
+      const unavailableTree=()=>({outcome:'unavailable',recorded:0,survivors:[],reason:'termination_failed'});
+      const endTree=()=>Promise.resolve().then(()=>tracker.terminate()).catch(unavailableTree);
+      const stopSampling=()=>{if(sampler!==undefined){clearInterval(sampler);sampler=undefined;tracker.stop();}};
+      const settleTree=async()=>{stopSampling();if(tracker&&deadline&&!treeProof)treeProof=await (terminationProof??endTree());};
+      const observation=()=>localExecutionObservation(processStartedMono,processClosedMono,{rootProcessClosed,deadlineExceeded,tree:treeProof});
       try {
       if(task?.evaluationBudget||executionBudgetVersion!==undefined)
         deadline=validateExecutionDeadline(task,{executionId,generation,executionBudgetVersion},now(),monotonicNow());
@@ -534,6 +544,8 @@ export function createCodexRunner({
       }
       const processStartedAt=now();
       if(deadline)remainingExecutionMs(deadline,processStartedAt,monotonicNow());
+      // Real wall clock: the process tree compares it with the OS creation time of the root.
+      const spawnedAt=Date.now();
       const child = spawnProcess('codex', codexArgs, {
         cwd: executionDirectory,
         env: runEnv,
@@ -542,6 +554,17 @@ export function createCodexRunner({
         stdio: ['pipe', 'pipe', 'pipe'],
       });
       if(deadline && child.pid)processStartedMono=monotonicNow();
+      if(processTree&&child.pid){
+        // Windows keeps a PID while a handle is open. Node sets exitCode or signalCode and
+        // emits 'exit' before it closes the root's handle, so until then the PID is ours.
+        let rootReleasedAt;
+        child.once?.('exit',()=>{rootReleasedAt=Date.now();});
+        const heldUntil=()=>child.exitCode===null&&child.signalCode===null?Infinity:rootReleasedAt??-Infinity;
+        // Learn the tree while it is alive: once at spawn, then every 30 s (60 s unbound).
+        tracker=processTree.track(child.pid,{spawnedAt,heldUntil});
+        tracker.sample().catch(()=>{});
+        sampler=setInterval(()=>{tracker.sample().catch(()=>{});},deadline?30_000:60_000);sampler.unref?.();
+      }
       let timeoutMs;
       if(deadline){
         try {timeoutMs=remainingExecutionMs(deadline,now(),monotonicNow());}
@@ -551,7 +574,8 @@ export function createCodexRunner({
         onTimeout:()=>{deadlineExceeded=true;},onClose:deadline?()=>{
           rootProcessClosed=true;processClosedMono=monotonicNow();
           try {remainingExecutionMs(deadline,now(),processClosedMono);} catch {deadlineExceeded=true;}
-        }:undefined,stdoutCollector:createEventCollector()});
+        }:undefined,onTerminate:()=>{if(tracker&&!terminationProof)terminationProof=endTree();},stdoutCollector:createEventCollector()});
+      await settleTree();
       if(deadlineExceeded){const error=new Error('evaluation deadline exceeded');error.name='TimeoutError';throw error;}
       const processFinishedAt=now();
       const elapsed=processFinishedAt-processStartedAt;
@@ -612,11 +636,11 @@ export function createCodexRunner({
         await rmdir(executionDirectory).catch(()=>{});
       }
       } catch(error) {
-        if(task?.evaluationBudget)error.localExecution=observation();
+        if(task?.evaluationBudget){await settleTree();error.localExecution=observation();}
         if(delivery&&error&&typeof error==='object'&&error.contextDelivery===undefined)error.contextDelivery=measuredDelivery();
         if(delivery&&pluginDelivery&&error&&typeof error==='object'&&error.pluginDelivery===undefined)error.pluginDelivery=pluginDelivery;
         throw error;
-      } finally {contextLease?.revoke();}
+      } finally {stopSampling();contextLease?.revoke();}
     },
   };
 }

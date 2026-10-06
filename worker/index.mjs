@@ -8,6 +8,7 @@ import {createPluginRegistry} from './plugins.mjs';
 import {isRootMaster} from '../public/core/plugins.mjs';
 import {authorizeExecution,scopedRead} from './execution-scope.mjs';
 import {countContextRead,sweepContextReads,withContextReads} from './context-reads.mjs';
+import {settleBoundedExecution,sweepBoundedSettlements} from './evaluation-settlement.mjs';
 import {ModelCatalog} from './model-catalog.mjs';
 import {OfficialModelDiscovery} from './model-discovery.mjs';
 import {Delegations} from './delegations.mjs';
@@ -85,7 +86,9 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
     const afterComplete=async task=>{
       const recovery=orchestration.reconcileTask(task.id).catch(()=>null);
       const observation=task.status==='completed'&&task.delegation?.state==='completed'?reviewObservations.process(task.id).catch(()=>null):Promise.resolve(null);
-      if(context.waitUntil){context.waitUntil(recovery);context.waitUntil(observation);}else await Promise.all([recovery,observation]);
+      // A bounded execution settles its reservation from the proof stored with this result.
+      const settlement=task.evaluationBudget?settleBoundedExecution(store,task):Promise.resolve(null);
+      if(context.waitUntil){context.waitUntil(recovery);context.waitUntil(observation);context.waitUntil(settlement);}else await Promise.all([recovery,observation,settlement]);
     };
     const delegate=async(taskId,input,options)=>orchestration.allocate(taskId,input,options);
     return {store,bridge,orchestration,hydrate,adapterFor,remoteFlags,plugins,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement};
@@ -99,8 +102,9 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
       const observations=reviewObservations.drain().catch(()=>null);
       const retention=policyRetention.cleanupBatch().catch(()=>null);
       const reads=sweepContextReads(store.db,store.now());
-      if(context.waitUntil){context.waitUntil(refresh);context.waitUntil(observations);context.waitUntil(retention);context.waitUntil(reads);return drain;}
-      const [result]=await Promise.allSettled([drain,refresh,observations,retention,reads]);
+      const settlements=sweepBoundedSettlements(store);
+      if(context.waitUntil){context.waitUntil(refresh);context.waitUntil(observations);context.waitUntil(retention);context.waitUntil(reads);context.waitUntil(settlements);return drain;}
+      const [result]=await Promise.allSettled([drain,refresh,observations,retention,reads,settlements]);
       if(result.status==='rejected')throw result.reason;
       return result.value;
     },

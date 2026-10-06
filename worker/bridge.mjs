@@ -45,11 +45,13 @@ export class CloudBridge {
       const now=this.store.now();return {...t,status:'queued',version:t.version+1,updatedAt:now,checkpoint:{...t.checkpoint,provider,status:'queued',updatedAt:now}};
     });
   }
+  // Bounded (evaluation) tasks need a budget-capable desktop path; the generic queue never
+  // claims them, so one cannot stall every poll with a budget validation error.
   async claim(claimOptions){
     await this.seen();
     const expired=await this.store.db.prepare("SELECT body FROM tasks WHERE json_extract(body,'$.status')='running' AND json_extract(body,'$.checkpoint.provider') IN (SELECT value FROM json_each(?2)) AND json_extract(body,'$.checkpoint.expiresAt') < ?1 ORDER BY updated_at ASC LIMIT 1").bind(this.store.now(),DESKTOP_PROVIDER_LIST).first();
     if(expired){const t=JSON.parse(expired.body);try{await this.store.replaceTask(t.id,t.version,current=>({...current,status:'paused',version:current.version+1,updatedAt:this.store.now(),checkpoint:{...current.checkpoint,status:'paused',interruptedBy:'lease_expiry',interruptedVersion:current.version+1,failure:failureRecord({failure:{kind:'interrupted'}},this.store.now())}}));}catch(e){if(!(e instanceof ConflictError))throw e;}}
-    const row=await this.store.db.prepare("SELECT q.body FROM tasks q WHERE json_extract(q.body,'$.status') IN ('queued','queued_for_review') AND json_extract(q.body,'$.checkpoint.provider') IN (SELECT value FROM json_each(?1)) AND COALESCE(json_array_length(q.body,'$.attachments'),0)=0 AND (json_extract(q.body,'$.parentTaskId') IS NULL OR EXISTS (SELECT 1 FROM tasks p WHERE p.id=json_extract(q.body,'$.parentTaskId') AND json_extract(p.body,'$.status')='waiting_children' AND json_extract(p.body,'$.delegation.state')='waiting_children' AND json_extract(p.body,'$.delegation.batchId')=json_extract(q.body,'$.batchId') AND json_extract(p.body,'$.delegation.epoch')=json_extract(q.body,'$.parentEpoch'))) ORDER BY q.updated_at ASC LIMIT 1").bind(DESKTOP_PROVIDER_LIST).first();
+    const row=await this.store.db.prepare("SELECT q.body FROM tasks q WHERE json_extract(q.body,'$.status') IN ('queued','queued_for_review') AND json_extract(q.body,'$.checkpoint.provider') IN (SELECT value FROM json_each(?1)) AND COALESCE(json_array_length(q.body,'$.attachments'),0)=0 AND json_type(q.body,'$.evaluationBudget') IS NULL AND (json_extract(q.body,'$.parentTaskId') IS NULL OR EXISTS (SELECT 1 FROM tasks p WHERE p.id=json_extract(q.body,'$.parentTaskId') AND json_extract(p.body,'$.status')='waiting_children' AND json_extract(p.body,'$.delegation.state')='waiting_children' AND json_extract(p.body,'$.delegation.batchId')=json_extract(q.body,'$.batchId') AND json_extract(p.body,'$.delegation.epoch')=json_extract(q.body,'$.parentEpoch'))) ORDER BY q.updated_at ASC LIMIT 1").bind(DESKTOP_PROVIDER_LIST).first();
     if(!row)return null;
     const t=JSON.parse(row.body);
     if(!DESKTOP_PROVIDERS.includes(t.checkpoint?.provider))return null;
@@ -76,7 +78,7 @@ export class CloudBridge {
         if(deliveryReceipt!==undefined||t.checkpoint?.deliveryReceiptVersion===1)throw new ConflictError('Delivery receipt replay requires stored verification',t.version);
         return t;
       }
-      return this.store.failExecution(id,input,{deliveryReceipt,recoverInterrupted:true});
+      return this.store.failExecution(id,input,{deliveryReceipt,recoverInterrupted:true,allowDesktopEvidence:true});
     });
   }
   async complete(id,input,{deliveryReceipt}={}){
