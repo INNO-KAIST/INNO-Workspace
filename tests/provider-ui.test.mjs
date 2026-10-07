@@ -15,6 +15,8 @@ test('provider names and run options come from the registry', () => {
   assert.equal(providerName(undefined), '제공자 미기재');
   assert.equal(providerName(''), '제공자 미기재');
   assert.deepEqual(providerOptions(), [
+    // CR-010: "auto" needs the cloud workspace; without it the option is shown but cannot be chosen.
+    {value: 'auto', label: '자동 · PC 우선, 꺼져 있으면 클라우드 Claude', disabled: true},
     {value: 'codex', label: 'Codex · 현재 구독'},
     {value: 'claude', label: 'Claude · 클라우드 Routine'},
     // A provider still in its conformance trial is listed but cannot be chosen.

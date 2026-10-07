@@ -15,7 +15,8 @@ const literatureAudits=new WeakMap();
 import {buildLiteratureWorkflow} from './core/literature-workflow.mjs';
 import {createStorageUI} from './run-storage.mjs';
 import {failureGuidance} from './core/failures.mjs';
-import {executorStatusText,handoffLine,providerAvailable,providerName,providerOptions,queuedText,recoveryConfirmText,usageCardModels,SOURCE_TASK_NEEDS_DESKTOP_PAGE} from './provider-ui.mjs';
+import {autoExecutorText,crossCheckButton,crossCheckLines,executorStatusText,pickProvider,statusProvider,handoffLine,providerAvailable,providerName,providerOptions,queuedText,recoveryConfirmText,usageCardModels,SOURCE_TASK_NEEDS_DESKTOP_PAGE} from './provider-ui.mjs';
+import {AUTO_PROVIDER} from './core/cloud-routing.mjs';
 import {usesTransport} from './core/providers.mjs';
 import {contextDeliveryText,contextHistoryRows} from './core/context-delivery.mjs';
 import {createRecordImportUI} from './record-import.mjs';
@@ -40,6 +41,8 @@ const typeNames={general:'일반 작업',literature:'문헌 · 아이디어',ana
 const names={workspace:'작업실',research:'연구 자료',integrations:'연결 앱',usage:'사용량'};
 const session=new AttachmentSession();
 const selectedPapers=new Set();
+// CR-010: whether the person picked a runner in this page; until then the picker follows auto.
+let providerChosen=false;
 let client,activeId=null,view='workspace',draftAttachments=[],papers=[],prismReports=[],busy=false,refreshing=false,previewUrls=[],lastRendered='',pendingRecovery=null;
 let sourceStatus='',sourceTickRunning=false,selectionEpoch=0,pendingFilePick=null,contextHistoryOpen=new Set();
 const sourcePickFence=createSourcePickFence(()=>({taskId:activeId,client,epoch:selectionEpoch}));
@@ -65,6 +68,23 @@ function openDialog(id){$(id).showModal();}
 function closeSidebar(){$('sidebar').classList.remove('open');$('sidebar-scrim').classList.remove('open');}
 function setView(next){view=next;for(const key of Object.keys(names))$(`${key}-view`).classList.toggle('hidden',key!==next);$('view-title').textContent=names[next];document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===next));closeSidebar();if(next==='research')renderResearch();if(next==='usage')renderUsage();}
 function selectTask(id){modelPolicyUI.close();deliveryRecoveryUI.close();selectionEpoch++;activeId=id;lastRendered='';localStorage.setItem('inno-active-task',id||'');setView('workspace');render();$('conversation-scroll').scrollTop=$('conversation-scroll').scrollHeight;}
+// Differentiation ①: the cross-check button and the links between a result and its verifications.
+function renderCrossChecks(t){
+ const cross=crossCheckButton(t,state().capabilities),button=$('cross-check-button');
+ button.hidden=cross.hidden;button.disabled=cross.disabled||busy;button.textContent=cross.label;button.title=cross.title;
+ const box=$('cross-check-lines'),rows=[];
+ // Why it cannot be used is shown as text and tied to the button for screen readers.
+ if(cross.reason&&!cross.hidden){const note=document.createElement('p');note.id='cross-check-reason';note.className='small-copy';note.textContent=cross.reason;rows.push(note);button.setAttribute('aria-describedby','cross-check-reason');}else button.removeAttribute('aria-describedby');
+ const link=(text,id,verdict)=>{const item=document.createElement('button');item.type='button';item.className='text-button cross-check-line'+(verdict?' verdict-'+verdict:'');item.textContent=text;item.onclick=()=>selectTask(id);return item;};
+ for(const line of crossCheckLines(t,state().tasks))rows.push(link(line.text,line.taskId,line.verdict));
+ if(t?.crossCheckOf){const original=state().tasks.find(task=>task.id===t.crossCheckOf.taskId);rows.push(link(`검증 대상: ${original?.title??'원래 작업'}`,t.crossCheckOf.taskId));}
+ box.replaceChildren(...rows);
+}
+async function crossCheck(){
+ const t=current();if(!t)return;
+ const {crossCheck:created,startError}=await client.crossCheck(t.id,{expectedVersion:t.version});
+ await refresh();toast(startError?`교차 검증 작업을 만들었지만 시작하지 못했습니다: ${startError.message} 그 작업을 열어 확인하세요.`:created?.status==='ready'?'교차 검증 작업을 만들었지만 시작하지 못했습니다. 그 작업을 열어 실행하세요.':`교차 검증을 요청했습니다. 결과는 "${created?.title??'교차 검증'}" 작업에 남습니다.`);
+}
 function newTask(){modelPolicyUI.close();deliveryRecoveryUI.close();selectionEpoch++;activeId=null;localStorage.removeItem('inno-active-task');draftAttachments=[];lastRendered='';$('prompt').value='';setView('workspace');render();$('prompt').focus();}
 function renderList(){
  const query=$('task-search').value.toLowerCase();const filter=projectFilter(),ordered=[...state().tasks].filter(task=>taskInProjectFilter(task,state(),filter)).sort((a,b)=>new Date(b.updatedAt)-new Date(a.updatedAt));const groups=taskListGroups(ordered,query);renderProjects();
@@ -134,17 +154,20 @@ function renderPlan(){
  renderDelegation();
 }
 function renderControls(){
- for(const option of providerOptions(state().capabilities)){const element=[...$('provider').options].find(item=>item.value===option.value);if(element){element.textContent=option.label;element.disabled=!!option.disabled;}}
+ for(const option of providerOptions(state().capabilities,{task:current()})){const element=[...$('provider').options].find(item=>item.value===option.value);if(element){element.textContent=option.label;element.disabled=!!option.disabled;}}
+ // CR-010: when "auto" cannot be used for this task, the first runner that can is chosen instead.
+ $('provider').value=pickProvider([...$('provider').options].map(item=>({value:item.value,disabled:item.disabled})),$('provider').value,providerChosen);
  renderProviderManagement();
  $('storage-button').hidden=!state().capabilities?.runStorage;
  $('local-records-button').hidden=!state().capabilities?.localRecordImport;
  const t=current(),c=state().capabilities||{},provider=$('provider').value,controls=taskControlState(t,state().tasks,busy);
  const running=t?.status==='running'||t?.status==='claimed'||t?.status==='queued';const terminal=t?.status==='cancelled'||t?.status==='completed',child=Boolean(t?.parentTaskId),delegated=Boolean(t?.delegation)&&!['superseded','cancelled'].includes(t.delegation.state),confirmationRequired=Boolean(t?.checkpoint?.confirmationRequired),executionRecovery=executionRecoveryState(t);
  $('run-button').disabled=controls.runDisabled;
+ renderCrossChecks(t);
  const delegatedRunLabel=t?.status==='waiting_children'?'하위 작업 진행 중':t?.status==='queued_for_review'?'결과 검토 대기':t?.status==='running'?'결과 검토 중':t?.status==='paused'?'아래에서 재개':'병렬 작업 관리';
  $('run-button').innerHTML=`${child?'부모 작업에서 실행':delegated?delegatedRunLabel:confirmationRequired?'확인 후 조치 필요':t?.status==='queued'?'데스크톱 실행 대기':running?'실행 중':t?.status==='paused'?'이어서 실행':'작업 실행'} <span>↗</span>`;
  $('provider').disabled=busy||child||delegated;
- $('executor-status').textContent=child?'하위 작업의 실행 조건과 재개는 부모 작업에서 관리합니다.':client?.remote&&!state().capabilities?.desktopSources&&t?.attachments?.length&&!t.parentTaskId&&usesTransport(provider,'desktop_bridge')&&['ready','paused','failed','completed','waiting_user','waiting_quota','waiting_connection'].includes(t.status)?SOURCE_TASK_NEEDS_DESKTOP_PAGE:taskNearLimit(t)?'이 작업의 저장 기록이 상한(약 1MB)에 도달해 새 메시지와 실행을 받을 수 없습니다. 기존 기록은 그대로 있으니, 새 작업을 만들어 이어 가세요.':delegated?'요청 모델과 배정 상태는 아래 병렬 위임 기록에서 확인하세요.':confirmationRequired?'외부 호출 여부를 확인할 수 없어 자동으로 다시 실행하지 않습니다. 작업 기록을 확인해 주세요.':client?.remote?executorStatusText(provider,c,{desktopOnline:!!state().desktop?.online,desktopNotReady:state().desktop?.notReady,desktopProviders:state().desktop?.providers}):'실행기를 연결하세요. 현재는 작업을 기록할 수 있습니다.';
+ $('executor-status').textContent=child?'하위 작업의 실행 조건과 재개는 부모 작업에서 관리합니다.':autoExecutorText(t,provider)||(client?.remote&&!state().capabilities?.desktopSources&&t?.attachments?.length&&!t.parentTaskId&&usesTransport(provider,'desktop_bridge')&&['ready','paused','failed','completed','waiting_user','waiting_quota','waiting_connection'].includes(t.status)?SOURCE_TASK_NEEDS_DESKTOP_PAGE:taskNearLimit(t)?'이 작업의 저장 기록이 상한(약 1MB)에 도달해 새 메시지와 실행을 받을 수 없습니다. 기존 기록은 그대로 있으니, 새 작업을 만들어 이어 가세요.':delegated?'요청 모델과 배정 상태는 아래 병렬 위임 기록에서 확인하세요.':confirmationRequired?'외부 호출 여부를 확인할 수 없어 자동으로 다시 실행하지 않습니다. 작업 기록을 확인해 주세요.':client?.remote?executorStatusText(statusProvider(provider,t),c,{desktopOnline:!!state().desktop?.online,desktopNotReady:state().desktop?.notReady,desktopProviders:state().desktop?.providers}):'실행기를 연결하세요. 현재는 작업을 기록할 수 있습니다.');
  $('pause-button').disabled=!t||busy||terminal||child||t.status==='paused';$('cancel-button').disabled=!t||busy||terminal||child;
  $('edit-plan').disabled=controls.editPlanDisabled;
  $('prompt').placeholder=t?t.status==='waiting_user'?'선택 또는 수정 요청을 남겨주세요.':child?'하위 작업은 부모 작업에서 지시를 관리합니다.':delegated?'새 지시를 남기면 현재 배정 세대를 다시 계획합니다.':'추가 요청이나 방향을 남겨주세요.':'어떤 작업을 함께할까요?';
@@ -310,6 +333,12 @@ async function run(){
  let t=current();if(!t)return;
  const runTaskId=t.id;
  const c=state().capabilities||{},provider=$('provider').value;
+ // CR-010: the cloud picks the runner for "auto"; the task carries no originals.
+ if(provider===AUTO_PROVIDER){
+  if(!client.remote||!c.cloud){showSettings();toast('자동 배정은 클라우드 작업실에서 쓸 수 있습니다.');return;}
+  if(t.status==='paused'||t.status==='failed'||t.status==='waiting_connection'||t.status==='waiting_quota'){await act('resume');if(activeId!==runTaskId)throw new Error('실행할 작업이 바뀌었습니다. 다시 확인하세요.');t=current();}
+  await client.run(t.id,{provider,materials:[],expectedVersion:t.version});await refresh();toast('자동 배정으로 실행 요청을 보냈습니다.');return;
+ }
  if(!client.remote||!providerAvailable(provider,c)){showSettings();toast('선택한 AI 실행기가 연결된 서버를 설정하세요.');return;}
  if(usesTransport(provider,'desktop_bridge')&&c.cloudCodex&&!c.desktopSources&&t.attachments?.length)throw new Error(SOURCE_TASK_NEEDS_DESKTOP_PAGE);
  if(usesTransport(provider,'desktop_bridge')&&c.desktopSources&&t.attachments?.some(a=>a.source==='url'))throw new Error('링크만으로 원문을 읽을 수는 없습니다. 해당 문서 파일을 연결한 뒤 링크 참조를 해제하세요.');
@@ -361,7 +390,7 @@ for(const id of ['file-input','folder-input'])$(id).onchange=e=>{const token=pen
 $('add-link').onclick=()=>{if(sourceReconnectLocked(current())){toast('이 작업은 저장된 원본만 다시 연결할 수 있습니다.');return;}openDialog('link-dialog');};$('link-form').onsubmit=e=>{e.preventDefault();guarded(async()=>{const a=session.addUrl($('link-url').value);await updateAttachments([...attachments().filter(x=>x.id!==a.id),a]);$('link-dialog').close();$('link-url').value='';});};
 $('recovery-confirm').onchange=()=>{$('recovery-submit').disabled=!$('recovery-confirm').checked;};
 $('recovery-form').onsubmit=e=>{e.preventDefault();if(!pendingRecovery||!$('recovery-confirm').checked)return;guarded(()=>performRecovery(pendingRecovery,true));};
- $('provider').replaceChildren(...providerOptions().map(option=>new Option(option.label,option.value)));$('provider').onchange=renderControls;$('run-button').onclick=()=>guarded(run);$('pause-button').onclick=()=>guarded(()=>act('pause'));$('cancel-button').onclick=()=>guarded(()=>act('cancel'));$('delegation-resume').onclick=()=>guarded(resumeDelegation);$('execution-recover').onclick=()=>guarded(beginExecutionRecovery);
+ $('provider').replaceChildren(...providerOptions().map(option=>new Option(option.label,option.value)));$('provider').onchange=()=>{providerChosen=true;renderControls();};$('run-button').onclick=()=>guarded(run);$('cross-check-button').onclick=()=>guarded(crossCheck);$('pause-button').onclick=()=>guarded(()=>act('pause'));$('cancel-button').onclick=()=>guarded(()=>act('cancel'));$('delegation-resume').onclick=()=>guarded(resumeDelegation);$('execution-recover').onclick=()=>guarded(beginExecutionRecovery);
 $('model-policy-open').onclick=()=>{if(current()?.id)void modelPolicyUI.open(current().id);};
 $('plugin-open').onclick=()=>void pluginUI.open();
 $('delivery-recovery-open').onclick=()=>{if(current()?.id)void deliveryRecoveryUI.open();};

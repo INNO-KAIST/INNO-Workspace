@@ -62,3 +62,5 @@ body.dark{--bg:#1b2422;--surface:#232f2c;--soft:#2b3731;--text:#dce5db;--muted:#
 .project-list{flex-shrink:0}
 .project-section{align-items:center}
 .routine-model{margin:0 0 30px}.routine-current{font-size:13px;margin:0 0 6px}.routine-options{list-style:none;margin:0 0 14px;padding:0;display:grid;gap:10px}.routine-options li{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:13px}.routine-options .provider-hint{flex:1 1 260px}
+
+.cross-check-lines{display:flex;flex-direction:column;align-items:flex-start;gap:4px;margin:6px 0}.cross-check-lines:empty{display:none}.cross-check-line{min-height:32px;text-align:left;font-size:13px;overflow-wrap:anywhere}.cross-check-line.verdict-fail{color:var(--danger);font-weight:600}.cross-check-line.verdict-partial{font-weight:600}

@@ -49,6 +49,11 @@ const routineSiblingBusy = version => Object.assign(new ConflictError('Another C
 const EVALUATION_ATTACH = Symbol('evaluation attach');
 const BUDGET_COMMIT = Symbol('budget commit');
 const CLAIM_RESERVATION = Symbol('desktop claim reservation');
+// CR-010: the auto-routing record a claim stores (or clears with null). Only server code can
+// set it: a JSON request body cannot carry a symbol key.
+export const AUTO_ROUTING = Symbol('auto routing');
+// Any claim means the task started: its auto record no longer has a time to move.
+const startedRouting = ({switchAfter, ...routing}) => routing;
 // Optional executor evidence of plugin delivery: kept only for the task's own selections.
 const pluginsFor = (task, input) => { const delivery = ownedPluginDelivery(task, input?.pluginDelivery); return delivery ? {pluginDelivery: delivery} : {}; };
 // The owner whose automatic lease-expiry pause is still the latest task change.
@@ -489,6 +494,7 @@ export class D1TaskStore {
         checkpoint: {
           ...previous, ...(previous.handoff?{handoff:{...previous.handoff,dispatched:true}}:{}), failure: undefined, executionEvidence: undefined, contextDelivery: undefined, pluginDelivery: undefined, localExecution: undefined, wallElapsedMs: undefined, completedAt: undefined, ...claim, provider, sourceBound, status: 'running', claimedAt: now, deliveryReceiptVersion:deliveryReceiptVersion===1?1:undefined,
           ...(reserved?{evaluationBudget:reserved.checkpoint}:{}),
+          ...(Object.hasOwn(input,AUTO_ROUTING)?{routing:input[AUTO_ROUTING]??undefined}:previous.routing?{routing:startedRouting(previous.routing)}:{}),
           expiresAt: new Date(nowMs + leaseMs).toISOString(), updatedAt: now,
         },
       };

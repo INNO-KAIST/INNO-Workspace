@@ -132,6 +132,8 @@ export class WorkspaceClient {
     const {applyAction}=await import('./tasks.mjs');const saved=await localMutate(state=>{const index=state.tasks.findIndex(t=>t.id===id);if(index<0)throw new Error('작업을 찾을 수 없습니다.');const task=applyAction(state.tasks[index],input);state.tasks[index]=task;return task;});this.state=saved.state;return saved.result;
   }
   async run(id,input){if(!this.remote)throw new Error('AI 실행기를 연결하세요. 작업과 첨부 참조는 이 기기에 저장돼 있습니다.');return this.request(`/api/tasks/${encodeURIComponent(id)}/run`,input);}
+  // Differentiation ①: another company's model verifies a completed result (cloud workspace only).
+  async crossCheck(id,input){if(!this.remote)throw new Error('교차 검증은 클라우드 작업실에서 쓸 수 있습니다.');return this.request(`/api/tasks/${encodeURIComponent(id)}/cross-check`,input);}
   async resumeDelegation(id,expectedVersion){
     if(!this.remote)throw new Error('병렬 작업 재개에는 서버 연결이 필요합니다.');
     const {task}=await this.request(`/api/tasks/${encodeURIComponent(id)}/delegation/resume`,{expectedVersion});

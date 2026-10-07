@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 import {checkedDeliveryBinding,deliveryBindingConflict} from './delivery-binding.mjs';
 import {usesTransport} from '../public/core/providers.mjs';
+import {AUTO_PROVIDER} from '../public/core/cloud-routing.mjs';
 const MIME={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.mjs':'text/javascript; charset=utf-8','.js':'text/javascript; charset=utf-8','.json':'application/json','.svg':'image/svg+xml','.webmanifest':'application/manifest+json'};
 const json=(res,status,data)=>{res.writeHead(status,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(data));};
 const RUN_BODY_BYTES=44*1024*1024;
@@ -130,6 +131,11 @@ export function createDesktopServer({token,publicDir,request,bridge,localRecords
      // Anything bound for the cloud keeps the earlier size limit and may not carry images.
      const input=await body(req,RUN_BODY_BYTES);
      if(usesTransport(input.provider,'desktop_bridge'))return json(res,202,{task:await bridge.startTask(decodeURIComponent(run[1]),input)});
+     // CR-010: "auto" is decided by the cloud and never carries originals from this PC.
+     if(input.provider===AUTO_PROVIDER){
+      if(Array.isArray(input.materials)&&input.materials.length)return json(res,400,{error:'원본 파일이 연결된 작업은 자동 배정을 쓸 수 없습니다. 이 PC 실행기를 고르세요.'});
+      return json(res,202,await request(p,input));
+     }
      if(usesTransport(input.provider,'routine_fire')){
       if(Array.isArray(input.materials)&&input.materials.some(m=>m&&typeof m==='object'&&m.image!==undefined))return json(res,400,{error:'이미지는 이 PC의 Codex 실행으로만 전달됩니다. Claude로는 보내지 않습니다.'});
       if(Buffer.byteLength(JSON.stringify(input))>750000)return json(res,413,{error:'Request exceeds supported byte limit'});
@@ -143,6 +149,8 @@ export function createDesktopServer({token,publicDir,request,bridge,localRecords
     if(req.method==='POST'&&(/^\/api\/plugins\/(?:import|approve|disable|remove)$/.test(p)||/^\/api\/tasks\/[^/]+\/plugins$/.test(p)))return json(res,200,await request(p,await body(req)));
     if(/^\/api\/tasks\/[^/]+\/review-observations$/.test(p)&&['GET','POST'].includes(req.method))return json(res,200,await request(p,req.method==='POST'?await body(req):undefined));
     if(req.method==='POST'&&(p==='/api/tasks'||/^\/api\/tasks\/[^/]+\/actions$/.test(p)))return json(res,p==='/api/tasks'?201:200,await request(p,await body(req)));
+    // Differentiation ①: cross-check is decided and run by the cloud; no source bytes are involved.
+    if(req.method==='POST'&&/^\/api\/tasks\/[^/]+\/cross-check$/.test(p))return json(res,202,await request(p,await body(req)));
     // CR-008 projects and PRV-06 provider settings are cloud writes the page makes through here.
     if(req.method==='POST'&&(p==='/api/projects'||/^\/api\/projects\/[^/]+$/.test(p)||p==='/api/providers/settings'))return json(res,200,await request(p,await body(req)));
     return json(res,404,{error:'not found'});

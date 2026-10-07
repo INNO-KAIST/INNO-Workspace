@@ -1,4 +1,36 @@
 import {PROVIDER_IDS,isAssignableProvider,isProviderId,providerHas,providerLabel,providerManifest,usesTransport} from './core/providers.mjs';
+import {AUTO_PROVIDER,autoRoutingBlocker,routingText} from './core/cloud-routing.mjs';
+import {crossCheckVerdict,crossCheckVerifier} from './core/cross-check.mjs';
+
+// Differentiation ①: one line per verification of this result (newest first), with the verifier,
+// its state and the verdict read from its answer.
+const VERDICT_TEXT={pass:'통과',partial:'부분 통과',fail:'실패',unverifiable:'확인 불가'};
+export function crossCheckLines(task,tasks=[]){
+ return (task?.crossChecks??[]).map(item=>{
+  const check=tasks.find(other=>other?.id===item.taskId),verdict=check?crossCheckVerdict(check):null;
+  const state=!check?'찾을 수 없음':verdict?VERDICT_TEXT[verdict]:check.status==='completed'?'판정 없음':check.status==='ready'?'시작 안 됨 (열어서 실행)':['queued','running'].includes(check.status)?'검증 중':check.status==='waiting_quota'?'한도 대기':check.status==='waiting_connection'?'연결 대기':'검증 중단';
+  // A verification of an earlier run of this task is marked as such.
+  const earlier=Boolean(check?.crossCheckOf?.executionId&&task.checkpoint?.executionId&&check.crossCheckOf.executionId!==task.checkpoint.executionId);
+  return {taskId:item.taskId,verdict,text:`교차 검증 · ${providerName(item.provider)} · ${state}${earlier?' (이전 결과)':''}`};
+ });
+}
+
+// When "auto" cannot be used, the PC runner is chosen before the cloud.
+export function fallbackProvider(options){
+ const usable=options.filter(option=>!option.disabled&&option.value!==AUTO_PROVIDER);
+ return (usable.find(option=>usesTransport(option.value,'desktop_bridge'))??usable[0])?.value;
+}
+// With auto selected, a task that waits or runs is described by its own runner.
+export function statusProvider(selected,task){
+ return selected===AUTO_PROVIDER&&['queued','running'].includes(task?.status)&&isProviderId(task.checkpoint?.provider)?task.checkpoint.provider:selected;
+}
+// The picker's value: until the person chooses a runner it follows auto (back to auto as soon
+// as auto can be used); a chosen runner stays unless it is auto and cannot be used.
+export function pickProvider(options,current,chosen){
+ const autoUsable=options.some(option=>option.value===AUTO_PROVIDER&&!option.disabled);
+ if(!chosen)return autoUsable?AUTO_PROVIDER:fallbackProvider(options)??current;
+ return current===AUTO_PROVIDER&&!autoUsable?fallbackProvider(options)??current:current;
+}
 
 // Provider copy for the screen, derived from the registry (CR-006 S1). The
 // wording depends on the transport: a desktop provider needs the PC, a cloud
@@ -14,10 +46,25 @@ export const SOURCE_TASK_NEEDS_DESKTOP_PAGE='원본 파일이 연결된 작업�
 // PRV-06: a provider the person turned off stays listed but cannot be chosen.
 const turnedOff=(provider,capabilities)=>(capabilities?.disabledProviders??[]).includes(lower(provider));
 // CR-006 S2: a provider still in its conformance trial is listed but cannot be chosen.
-export function providerOptions(capabilities){return PROVIDER_IDS.map(id=>{
- const trial=!isAssignableProvider(id),off=turnedOff(id,capabilities);
- return {value:id,label:providerManifest(id).ui.option+(trial?' (준비 중)':off?' (사용 중지)':''),...(trial||off?{disabled:true}:{})};
-});}
+// CR-010: "auto" comes first in the cloud workspace, for source-free top-level tasks only.
+export function providerOptions(capabilities,{task}={}){
+ const auto=!capabilities?.cloud||Boolean(autoRoutingBlocker(task));
+ return [{value:AUTO_PROVIDER,label:'자동 · PC 우선, 꺼져 있으면 클라우드 Claude',...(auto?{disabled:true}:{})},...PROVIDER_IDS.map(id=>{
+  const trial=!isAssignableProvider(id),off=turnedOff(id,capabilities);
+  return {value:id,label:providerManifest(id).ui.option+(trial?' (준비 중)':off?' (사용 중지)':''),...(trial||off?{disabled:true}:{})};
+ })];
+}
+
+// The executor line for auto: the recorded decision while the task waits or runs, otherwise
+// what auto will do. Empty for other choices.
+export function autoExecutorText(task,provider){
+ const routing=task?.checkpoint?.routing;
+ if(routing?.mode==='auto'&&task.status==='running')return `자동 배정: ${usesTransport(routing.provider,'desktop_bridge')?'이 PC':'클라우드'} ${providerName(routing.provider)}에서 실행 중입니다.`;
+ if(routing?.mode==='auto'&&task.status==='queued')return autoRoutingBlocker(task)?`자동 배정: 이 PC(${providerName(routing.provider)}) — 원본이 연결돼 클라우드로 옮기지 않습니다.`:routingText(routing);
+ // A task already waiting or running without an auto record keeps its own state line.
+ if(['queued','running'].includes(task?.status))return '';
+ return provider===AUTO_PROVIDER?'자동: PC 실행기가 준비돼 있으면 이 PC로, 아니면 클라우드 Claude로 보냅니다. PC로 보낸 작업이 10분 안에 시작되지 않으면 클라우드로 한 번 옮깁니다.':'';
+}
 
 // Availability is any of the server state flags the manifest declares.
 export function providerAvailable(provider,capabilities){
@@ -68,4 +115,14 @@ export function usageCardModels(records){
   const manifest=providerManifest(provider);
   return {provider,vendor:manifest.vendor,label:manifest.label,usageUrl:manifest.ui.usageUrl,record:(records||[]).find(row=>lower(row?.provider)===provider)||{}};
  });
+}
+
+// Differentiation ①: the cross-check button for a completed result in the cloud workspace.
+export function crossCheckButton(task,capabilities){
+ const c=capabilities||{};
+ if(!c.cloud||!task||task.status!=='completed'||task.crossCheckOf)return {hidden:true,disabled:true,label:'',title:''};
+ const choice=crossCheckVerifier(task,{available:id=>providerAvailable(id,c),disabled:c.disabledProviders??[]});
+ if(choice.blocked)return {hidden:false,disabled:true,label:'교차 검증',title:choice.blocked,reason:choice.blocked};
+ const name=providerName(choice.provider);
+ return {hidden:false,disabled:false,label:`${name}로 교차 검증`,title:`다른 회사 모델(${name})이 이 결과를 검증합니다. 구독 사용량을 씁니다.`};
 }

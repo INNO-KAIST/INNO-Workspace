@@ -24,7 +24,11 @@ import {RecordImporter} from './imports.mjs';
 import {CloudBridge} from './bridge.mjs';
 import { ConflictError, ValidationError, sanitizeMaterials } from '../public/core/tasks.mjs';
 import { handleMcp } from '../server/mcp.mjs';
-import { D1TaskStore } from './store.mjs';
+import { AUTO_ROUTING, D1TaskStore } from './store.mjs';
+import {AUTO_PROVIDER,autoRouting,autoRoutingBlocker,chooseAutoProvider} from '../public/core/cloud-routing.mjs';
+import {moveWaitingAutoTasks} from './cloud-routing.mjs';
+import {CROSS_CHECK_LIMITS,crossCheckPrompt,crossCheckVerifier} from '../public/core/cross-check.mjs';
+import {digestText} from '../public/core/create-requests.mjs';
 import {createReviewObservationPipeline} from './review-observation-pipeline.mjs';
 import {D1ModelPolicies} from './model-policies.mjs';
 import {createTaskPolicyManagement} from './policy-management.mjs';
@@ -102,7 +106,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
   }
   return {
     async scheduled(event,env,context={}) {
-      const {store,orchestration,discovery,pluginDiscovery,reviewObservations,policyRetention}=runtime(env,context);
+      const {store,orchestration,discovery,pluginDiscovery,reviewObservations,policyRetention,adapterFor}=runtime(env,context);
       // CR-003 MOD-02: an official-only, bounded daily refresh runs independently of orchestration.
       // CR-007 S4 (PLG-05): the allowed plugin catalogs are read on the same daily schedule.
       const refresh=Promise.all([discovery.refresh().catch(()=>null),pluginDiscovery.refresh().catch(()=>null)]);
@@ -111,8 +115,10 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
       const retention=policyRetention.cleanupBatch().catch(()=>null);
       const reads=sweepContextReads(store.db,store.now());
       const settlements=sweepBoundedSettlements(store);
-      if(context.waitUntil){context.waitUntil(refresh);context.waitUntil(observations);context.waitUntil(retention);context.waitUntil(reads);context.waitUntil(settlements);return drain;}
-      const [result]=await Promise.allSettled([drain,refresh,observations,retention,reads,settlements]);
+      // CR-010: auto tasks that waited past their time on the PC move once to the cloud.
+      const autoMoves=moveWaitingAutoTasks({store,adapterFor,dispatch:id=>orchestration.dispatch(id)}).catch(()=>null);
+      if(context.waitUntil){context.waitUntil(refresh);context.waitUntil(observations);context.waitUntil(retention);context.waitUntil(reads);context.waitUntil(settlements);context.waitUntil(autoMoves);return drain;}
+      const [result]=await Promise.allSettled([drain,refresh,observations,retention,reads,settlements,autoMoves]);
       if(result.status==='rejected')throw result.reason;
       return result.value;
     },
@@ -135,6 +141,31 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
           if (!authorized(request, env)) return responseJson({error: 'unauthorized'}, 401, {...headers, 'www-authenticate': 'Bearer'});
         }
         const {store,bridge,orchestration,hydrate,adapterFor,remoteFlags,plugins,handoff,afterComplete,catalog,discovery,pluginDiscovery,delegate,reviewObservations,policyRetention,policyManagement}=runtime(env,context);
+        // Starts one run of a task on a named provider (a desktop queue entry or a cloud fire);
+        // routing is the server-built auto record, or null to clear an earlier one (CR-010).
+        const startRun=async(taskId,input,routing)=>{
+          assertProviderId(input.provider);
+          const materials = sanitizeMaterials(input.materials);
+          const transport=providerTransport(input.provider);
+          // H9-2: a run starts only while its result is sure to fit in the task.
+          assertRunAdmission(await store.requireTask(taskId));
+          if(!providerEnabled(await store.providerSettings(),input.provider))throw providerDisabledError(input.expectedVersion);
+          if(transport==='routine_fire'){
+            const task=await store.requireTask(taskId);
+            if((task.parentTaskId||task.delegation?.state==='queued_for_review')&&materials.length&&(sourceDelegationVersion!==1||!task.attachments?.length))throw new ValidationError('Declared source delegation is not enabled for this execution');
+            await verifyMaterialViews(task,materials);
+          }
+          if (transport === 'desktop_bridge') return {status:202,body:{task:await bridge.enqueue(taskId,{...input,materials},{routing})}};
+          const remote=adapterFor(input.provider),unavailable=remote?.unavailableReason??'Remote provider is not configured.';
+          if (!remote?.configured) {
+            const task = await store.markWaiting(taskId, {expectedVersion: input.expectedVersion, provider: input.provider, reason: unavailable});
+            return {status:503,body:{error: unavailable, task}};
+          }
+          const claim = await store.claimExecution(taskId, {provider: input.provider, expectedVersion: input.expectedVersion,sourceBound:materials.length>0,[AUTO_ROUTING]:routing});
+          const execution=runRemoteClaim({store,claim,launch:owner=>remote.launch(owner,{materials})}).then(()=>settleRemoteChild(store,claim,orchestration.reconcileTask));
+          if(context.waitUntil)context.waitUntil(execution);else await execution;
+          return {status:202,body:{task: claim.task}};
+        };
         const capabilities = {desktopDeliveryRecovery:deliveryReceiptVersion===1,sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,reviewObservationRecovery:true,cloudCodex: true, localCodex: false, ...remoteFlags, cloud: true, connected: true, pluginRegistry: true, projects: true};
         const bridgeMatch=pathname.match(/^\/api\/desktop\/([^/]+)\/(start|renew|complete|fail|ack|reservations|discard|legacy-status)$/);
         const recoveryRoute=bridgeMatch&&['reservations','discard','legacy-status'].includes(bridgeMatch[2]);
@@ -341,28 +372,44 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
         if (request.method === 'POST' && runMatch) {
           const taskId = decodeURIComponent(runMatch[1]);
           const input = await body(request);
-          assertProviderId(input.provider);
           if (!Number.isInteger(input.expectedVersion)) throw new ValidationError('expectedVersion is required');
-          const materials = sanitizeMaterials(input.materials);
-          const transport=providerTransport(input.provider);
-          // H9-2: a run starts only while its result is sure to fit in the task.
-          assertRunAdmission(await store.requireTask(taskId));
-          if(!providerEnabled(await store.providerSettings(),input.provider))throw providerDisabledError(input.expectedVersion);
-          if(transport==='routine_fire'){
-            const task=await store.requireTask(taskId);
-            if((task.parentTaskId||task.delegation?.state==='queued_for_review')&&materials.length&&(sourceDelegationVersion!==1||!task.attachments?.length))throw new ValidationError('Declared source delegation is not enabled for this execution');
-            await verifyMaterialViews(task,materials);
+          // CR-010: "auto" picks the runner here (PC first) and records why; an explicit choice clears the record.
+          let routing=null;
+          if(input.provider===AUTO_PROVIDER){
+            const blocker=autoRoutingBlocker(await store.requireTask(taskId));
+            if(blocker||(Array.isArray(input.materials)&&input.materials.length))throw new ValidationError(blocker??'원본 파일이 연결된 작업은 자동 배정을 쓸 수 없습니다. 이 PC 실행기를 고르세요.');
+            const decision=chooseAutoProvider({desktop:await bridge.presence(),settings:await store.providerSettings(),cloudConfigured:Boolean(adapterFor(providersByTransport('routine_fire')[0])?.configured)});
+            input.provider=decision.provider;routing=autoRouting(decision,store.now());
           }
-          if (transport === 'desktop_bridge') return responseJson({task:await bridge.enqueue(taskId,{...input,materials})},202,headers);
-          const remote=adapterFor(input.provider),unavailable=remote?.unavailableReason??'Remote provider is not configured.';
-          if (!remote?.configured) {
-            const task = await store.markWaiting(taskId, {expectedVersion: input.expectedVersion, provider: input.provider, reason: unavailable});
-            return responseJson({error: unavailable, task}, 503, headers);
-          }
-          const claim = await store.claimExecution(taskId, {provider: input.provider, expectedVersion: input.expectedVersion,sourceBound:materials.length>0});
-          const execution=runRemoteClaim({store,claim,launch:owner=>remote.launch(owner,{materials})}).then(()=>settleRemoteChild(store,claim,orchestration.reconcileTask));
-          if(context.waitUntil)context.waitUntil(execution);else await execution;
-          return responseJson({task: claim.task}, 202, headers);
+          const started=await startRun(taskId,input,routing);
+          return responseJson(started.body,started.status,headers);
+        }
+        // Differentiation ①: a person asks another company's model to verify a completed result.
+        // The verification task is created once per result version (a fixed creation id), linked
+        // to the result with a version-checked write, and run on the verifier's runner.
+        const crossMatch=pathname.match(/^\/api\/tasks\/([^/]+)\/cross-check$/);
+        if(request.method==='POST'&&crossMatch){
+          const taskId=decodeURIComponent(crossMatch[1]),input=await body(request);
+          if(!Number.isInteger(input.expectedVersion))throw new ValidationError('expectedVersion is required');
+          const original=await store.requireTask(taskId);
+          if(original.version!==input.expectedVersion)throw new ConflictError('The result changed; reload before cross-checking.',original.version);
+          const settings=await store.providerSettings();
+          const choice=crossCheckVerifier(original,{available:id=>providerTransport(id)==='desktop_bridge'||Boolean(adapterFor(id)?.configured),disabled:settings.disabled});
+          if(choice.blocked)throw new ValidationError(choice.blocked);
+          const hex=await digestText(`cross-check:${original.id}:${original.version}`);
+          const requestId=`${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20,32)}`;
+          // A removed project is not carried over: the verification would otherwise fail to be created.
+          const project=original.projectId?await store.projectForTask(original):null;
+          const created=await store.createTask({requestId,prompt:crossCheckPrompt(original),title:`교차 검증: ${original.title}`,type:'verification',...(project?{projectId:original.projectId}:{})});
+          const now=store.now();
+          // The verification names its result first, so a link that fails later still leaves it identifiable.
+          const verification=created.crossCheckOf?created:await store.replaceTask(created.id,created.version,current=>({...current,version:current.version+1,updatedAt:now,crossCheckOf:{taskId:original.id,version:original.version,provider:original.checkpoint.provider,executionId:original.checkpoint.executionId??null,generation:original.checkpoint.generation??null}}));
+          await store.replaceTask(original.id,original.version,current=>({...current,version:current.version+1,updatedAt:now,crossChecks:[{taskId:created.id,provider:choice.provider,requestedAt:now},...(current.crossChecks??[])].slice(0,CROSS_CHECK_LIMITS.records)}));
+          // Created and linked: a run that could not start leaves the task ready for the person to run.
+          let started=null,startError=null;
+          try{started=await startRun(verification.id,{provider:choice.provider,expectedVersion:verification.version},null);}
+          catch(error){startError={code:error?.code??null,message:error?.statusCode&&error.statusCode<500?String(error.message).slice(0,300):'검증 작업을 시작하지 못했습니다.'};console.warn('INNO: cross-check verification not started:',error?.message??error);}
+          return responseJson({task:await store.requireTask(original.id),crossCheck:started?.body?.task??await store.requireTask(verification.id),...(startError?{startError}:{})},202,headers);
         }
         if (env.ASSETS && request.method === 'GET') return env.ASSETS.fetch(request);
         return responseJson({error: 'not found'}, 404, headers);
