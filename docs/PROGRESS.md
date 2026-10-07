@@ -1676,3 +1676,12 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 실구독 시험(S2d) 전에 확인할 것: 사용자의 CLI 로그인(`claude auth login`), 계정의 추가 사용량 꺼짐, 이용 조건 판단. 시험에서 실제 init 이벤트 필드·도구 목록·rate_limit 이벤트 형식과, 실행 폴더 밖 읽기(상위 CLAUDE.md·로그인 파일)·쓰기 시도가 거절되는지 확인.
 - 시험: claude-code-runner 13건, desktop-providers 13건, 적합성(claude-code receipt v0·v1 포함) 53건. 전체 1638건 중 1637 pass/0 fail/기존 1 skip, git diff --check, Wrangler dry-run(자산 89개, 519.67KiB).
 - 반영 시 순서: Worker 먼저(새 poll 필드·준비 상태·플래그) → Pages → 연결기 재시작. INNO_CLAUDE_CODE를 켜지 않으면 연결기는 지금처럼 Codex만 실행한다.
+- 운영 반영(사용자 승인 "커밋+Worker+Pages+데스크톱"): a0daa59 push → Worker 먼저 배포(d0be3f32, 예약 */5) → Pages 게시(provider-runners-20261007) → 연결기가 꺼진 것을 확인하고 메인 체크아웃 2d59126→a0daa59 fast-forward, 연결기 파일 구문 검사 통과. 운영 읽기 확인: desktop 오프라인(재실행 대기), localClaudeCode 없음, 사용 중지 없음. INNO_CLAUDE_CODE는 켜지 않았다.
+
+### 2026-10-07 MCP 형식 플러그인 설계, CR-010 제안, 최종 재감사 (문서, 커밋 전)
+- MCP 형식 플러그인(설계만, 사용자 결정 반영 순서 7): docs/MCP-PLUGIN-DESIGN.md. 실행기별 붙이는 방법(Codex `-c mcp_servers`, Claude Code `--mcp-config`+`--strict-mcp-config`+`mcp__서버__도구` 허용 규칙, Claude Routine은 INNO가 설정할 수 없어 제외), 원격·로컬 서버의 위험(Windows 샌드박스 부재), 원칙(허용 출처·판·무결성 고정, 권한 선언, 도구 설명 해시 승인, 원본 작업 차단, 비밀값 비보관, 유료 API 서버 제외, 호출 횟수 기록), 단계 M1(원격·읽기 도구)·M2(로컬 stdio, 격리 결정 필요)·M3, 사용자 결정 4가지.
+- CR-010 제안(순서 8): docs/CLOUD-ROUTING-PROPOSAL.md, CHANGE_REQUESTS에 CR-008·CR-009(완료)와 CR-010(제안, 승인 대기) 행 추가. 원본 없는 최상위 작업의 "자동" 실행기(시작 시 PC 실행기 준비면 PC, 아니면 클라우드 Claude Routine; PC를 오래 기다리면 실행 전 상태에서 한 번만 전환). 원본·실행 중·확인 필요·명시 선택·자식 배정 제외, 한 번만, 사용 중지 존중.
+- 최종 재감사(순서 9): docs/REQUIREMENTS-STATUS.md에 2026-10-07 절. 요구 ID 32개 중 완료 16, 부분 16, 미완료 0(2026-10-05: 14/15/3).
+  - 바뀐 판정: CTX-02·PRV-02 부분→완료, PRV-06·PLG-04·PLG-05 미완료→부분. REL-01은 완료로 올렸다가 독립 검증 지적으로 부분 유지.
+  - 독립 검증(inno-opus): REL-01 과대 판정(H9-5·b77e3e1·H9-4 릴리스에 독립 검토 또는 dry-run 기록 없음, 이미지 첨부는 반영 직후 실구독 확인, 카탈로그 가져오기는 운영 미사용) → 부분 유지와 예외 명시. PRV-02 근거 보강(제공자별 준비 상태, 실행 시점 API 변수 제거), CTX-02 고정 시험을 수치로 고정(tests/context-delivery.test.mjs: 전문 60,141B 중 32,148B 전달, 27,965B 절감), 판정 기준·표를 2026-10-07 절로 옮기고 2026-10-05 절은 이력으로 표시, 남은 결정 누락 3건(연결기 재실행, 공식 카탈로그 실제 가져오기·플러그인 실구독 실행, S2 이용 조건 판단) 추가. CTX-05에 H3의 인계 단계 전달 기록 빈틈을 남은 것으로 적고 별도 작업으로 분리했다.
+  - 재감사 중 운영 읽기 확인(토큰은 메모리에서만): `/api/plugin-recommendations` — openai 카탈로그 fresh(커밋 49f948f…), 후보 39개, 가져올 수 있는 스킬 0개(하위 폴더·스크립트 포함). anthropics 카탈로그는 첫 조회 http_error(이 PC에서 같은 GitHub API는 200, 미인증 남은 한도 56 — Cloudflare 공유 IP의 미인증 한도로 보임), 백오프 재시도 중. `/api/state` — 데스크톱 오프라인(재실행 대기), localClaudeCode 없음, 사용 중지 없음.

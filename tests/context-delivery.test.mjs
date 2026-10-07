@@ -21,6 +21,9 @@ test('selected, over-budget and blocked packets keep their distinct outcomes',as
  t.messages.push({role:'user',content:'next'});
  const selected=contextDelivery(await buildTaskContext(t,{selection:'resume',readerAvailable:true}),{provider:'claude',promptBytes:null,materialBytes:null,reader:true});
  assert.equal(selected.readiness,'selected_ready');assert.ok(selected.selectionSavedBytes>0);assert.ok(selected.omittedMessages>=1);assert.equal(selected.reader,true);
+ // CTX-02 fixture measurement, pinned: the omitted 30 000-byte reply is replaced by the verified resume summary and its
+ // references, so the sent history is 32 148 of 60 141 bytes and the selection saves 27 965 bytes (UTF-8 bytes, no tokenizer).
+ assert.deepEqual([selected.originalBytes,selected.contextBytes,selected.selectionSavedBytes],[60141,32148,27965]);
  const over=contextDelivery(await buildTaskContext(task(150000)),{provider:'codex',promptBytes:200000,materialBytes:10,reader:false});
  assert.equal(over.readiness,'full_over_budget');assert.ok(over.contextBytes>96000);
  const blocked=contextDelivery(await buildTaskContext(task(400000)),{provider:'codex',promptBytes:null,materialBytes:null,reader:false});
