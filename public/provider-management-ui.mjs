@@ -16,13 +16,22 @@ const CAPABILITY_TEXT={
 };
 const AUTH={subscription_cli:'구독 로그인 (이 PC의 CLI)',subscription_cloud_routine:'구독 Routine (클라우드)'};
 const MODELS={account_catalog:'계정에서 확인한 모델 목록',built_in_roles:'역할별 기본 모델'};
-const NOT_READY={codex_login:'로그인 확인 필요',run_storage:'저장 공간 정리 필요'};
+const NOT_READY={codex_login:'로그인 확인 필요',claude_login:'Claude Code 로그인 필요 (claude auth login)',claude_cli:'Claude Code CLI 없음',run_storage:'저장 공간 정리 필요'};
 
 function connectionText(id,manifest,capabilities,desktop){
  const local=manifest.execution.location==='local';
  if(!providerAvailable(id,capabilities))return local?'이 서버에 연결되지 않음':'서버에 Routine 설정 필요';
  if(!local)return 'Routine 설정됨';
- if(desktop?.online)return desktop.notReady?`연결됨 · ${NOT_READY[desktop.notReady]??'준비 안 됨'}`:'연결됨';
+ if(desktop?.online){
+  // CR-006 S2: a connector that reports its runners shows each one's own state.
+  const report=desktop.providers;
+  if(report&&desktop.notReady!=='run_storage'){
+   const reason=report.notReady?.[id];
+   if(reason)return `연결됨 · ${NOT_READY[reason]??'준비 안 됨'}`;
+   return report.ready?.includes(id)?'연결됨':'연결됨 · 이 PC 연결기에서 쓸 수 없음';
+  }
+  return desktop.notReady?`연결됨 · ${NOT_READY[desktop.notReady]??'준비 안 됨'}`:'연결됨';
+ }
  return `오프라인${desktop?.lastSeen?` · 마지막 확인 ${formatShortDateTime(desktop.lastSeen)}`:''}`;
 }
 

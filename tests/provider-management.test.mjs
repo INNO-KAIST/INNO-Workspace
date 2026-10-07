@@ -83,7 +83,9 @@ test('a sign-in failure marks only that provider as needing connection, and the 
 test('the screen shows each provider and marks a turned-off one everywhere it can be chosen',()=>{
  const capabilities={cloudCodex:true,claudeRoutine:true,disabledProviders:[CLAUDE]};
  const cards=providerCards({tasks:[],capabilities,desktop:{online:false,lastSeen:null}});
- assert.deepEqual(cards.map(card=>card.id),[CODEX,CLAUDE]);
+ assert.deepEqual(cards.map(card=>card.id),[CODEX,CLAUDE,'claude-code']);
+ // The Claude Code pilot is shown as in its conformance trial and is not assigned work.
+ assert.match(cards[2].conformance,/미통과/);assert.equal(providerOptions(capabilities).find(option=>option.value==='claude-code').disabled,true);
  const codex=cards[0],claude=cards[1];
  assert.equal(codex.location,'이 PC');assert.equal(claude.location,'클라우드');
  assert.match(codex.status,/오프라인/);assert.equal(claude.enabled,false);assert.match(claude.status,/사용 중지/);

@@ -1,7 +1,7 @@
 import {prepareTaskMaterials} from './core/source-materials.mjs';
 import {taskNearLimit} from './core/task-size.mjs';
 import {formatClock,formatShortDateTime} from './core/time-format.mjs';
-import {providerCards,renderProviderCards,renderRoutineModel,routineModelView} from './provider-management-ui.mjs?v=routine-model-1';
+import {providerCards,renderProviderCards,renderRoutineModel,routineModelView} from './provider-management-ui.mjs?v=provider-runners-1';
 import {NO_PROJECT,normalizeProjectFilter,taskInProjectFilter,projectListModel,creationProject,renderProjectList} from './project-ui.mjs';
 import {projectForTask} from './core/projects.mjs';
 import {artifactCheckSummary,sanitizeArtifactChecks} from './core/artifact-checks.mjs';
@@ -144,7 +144,7 @@ function renderControls(){
  const delegatedRunLabel=t?.status==='waiting_children'?'하위 작업 진행 중':t?.status==='queued_for_review'?'결과 검토 대기':t?.status==='running'?'결과 검토 중':t?.status==='paused'?'아래에서 재개':'병렬 작업 관리';
  $('run-button').innerHTML=`${child?'부모 작업에서 실행':delegated?delegatedRunLabel:confirmationRequired?'확인 후 조치 필요':t?.status==='queued'?'데스크톱 실행 대기':running?'실행 중':t?.status==='paused'?'이어서 실행':'작업 실행'} <span>↗</span>`;
  $('provider').disabled=busy||child||delegated;
- $('executor-status').textContent=child?'하위 작업의 실행 조건과 재개는 부모 작업에서 관리합니다.':client?.remote&&!state().capabilities?.desktopSources&&t?.attachments?.length&&!t.parentTaskId&&usesTransport(provider,'desktop_bridge')&&['ready','paused','failed','completed','waiting_user','waiting_quota','waiting_connection'].includes(t.status)?SOURCE_TASK_NEEDS_DESKTOP_PAGE:taskNearLimit(t)?'이 작업의 저장 기록이 상한(약 1MB)에 도달해 새 메시지와 실행을 받을 수 없습니다. 기존 기록은 그대로 있으니, 새 작업을 만들어 이어 가세요.':delegated?'요청 모델과 배정 상태는 아래 병렬 위임 기록에서 확인하세요.':confirmationRequired?'외부 호출 여부를 확인할 수 없어 자동으로 다시 실행하지 않습니다. 작업 기록을 확인해 주세요.':client?.remote?executorStatusText(provider,c,{desktopOnline:!!state().desktop?.online,desktopNotReady:state().desktop?.notReady}):'실행기를 연결하세요. 현재는 작업을 기록할 수 있습니다.';
+ $('executor-status').textContent=child?'하위 작업의 실행 조건과 재개는 부모 작업에서 관리합니다.':client?.remote&&!state().capabilities?.desktopSources&&t?.attachments?.length&&!t.parentTaskId&&usesTransport(provider,'desktop_bridge')&&['ready','paused','failed','completed','waiting_user','waiting_quota','waiting_connection'].includes(t.status)?SOURCE_TASK_NEEDS_DESKTOP_PAGE:taskNearLimit(t)?'이 작업의 저장 기록이 상한(약 1MB)에 도달해 새 메시지와 실행을 받을 수 없습니다. 기존 기록은 그대로 있으니, 새 작업을 만들어 이어 가세요.':delegated?'요청 모델과 배정 상태는 아래 병렬 위임 기록에서 확인하세요.':confirmationRequired?'외부 호출 여부를 확인할 수 없어 자동으로 다시 실행하지 않습니다. 작업 기록을 확인해 주세요.':client?.remote?executorStatusText(provider,c,{desktopOnline:!!state().desktop?.online,desktopNotReady:state().desktop?.notReady,desktopProviders:state().desktop?.providers}):'실행기를 연결하세요. 현재는 작업을 기록할 수 있습니다.';
  $('pause-button').disabled=!t||busy||terminal||child||t.status==='paused';$('cancel-button').disabled=!t||busy||terminal||child;
  $('edit-plan').disabled=controls.editPlanDisabled;
  $('prompt').placeholder=t?t.status==='waiting_user'?'선택 또는 수정 요청을 남겨주세요.':child?'하위 작업은 부모 작업에서 지시를 관리합니다.':delegated?'새 지시를 남기면 현재 배정 세대를 다시 계획합니다.':'추가 요청이나 방향을 남겨주세요.':'어떤 작업을 함께할까요?';

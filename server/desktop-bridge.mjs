@@ -14,9 +14,18 @@ const deliveryOf=value=>{try{const delivery=boundedContextDelivery(value);return
 const pluginsOf=value=>{try{const delivery=boundedPluginDelivery(value);return delivery?{pluginDelivery:delivery}:{};}catch{return {};}};
 const localOf=value=>{const observed=boundedLocalExecution(value);return observed?{localExecution:observed}:{};};
 const leaseUnconfirmed=()=>Object.assign(Error('Execution lease renewal was not confirmed before the lease ended. The run was stopped and its output was not uploaded.'),{code:'DESKTOP_LEASE_UNCONFIRMED'});
+const runnerUnavailable=()=>Object.assign(Error('This desktop has no runner for the claimed provider.'),{code:'RUNNER_UNAVAILABLE'});
+const runnerNotReady=()=>Object.assign(Error('이 PC에서 이 실행기를 지금 쓸 수 없습니다. 연결 앱의 AI 실행기에서 상태를 확인하세요.'),{status:409});
 const resultNotSaved=(cause,delivered)=>Object.assign(Error(delivered?'The result reached the cloud but could not be saved locally. New executions are stopped; check disk space and permissions, then restart the desktop bridge.':'The result could not be saved locally or sent to the cloud. New executions are stopped; check disk space, permissions and the desktop run folder, then restart the desktop bridge.'),{status:409,code:'OUTBOX_WRITE_FAILED',delivered,cause});
-export function createDesktopBridge({request,runner,outbox,journal,heartbeatMs=15000,leaseMs=DESKTOP_EXECUTION_LEASE_MS,beforeClaim=async()=>{},readDeliveryBinding,onError=()=>{},onDiscarded=()=>{},deliveryReceiptVersion=0}){
+// CR-006 S2a: `runners` holds one runner per desktop provider (each names its `provider`); a
+// claim runs only on the runner of its own provider. A single `runner` runs every claim, as before.
+export function createDesktopBridge({request,runner,runners,outbox,journal,heartbeatMs=15000,leaseMs=DESKTOP_EXECUTION_LEASE_MS,beforeClaim=async()=>{},readDeliveryBinding,onError=()=>{},onDiscarded=()=>{},deliveryReceiptVersion=0}){
  let busy=false,stopped=false,deliveryUnsafe=false,recoveryPaused=false,outboxFailure=null,controller,background=Promise.resolve(),recoveryBackground=Promise.resolve();
+ const byProvider=Array.isArray(runners)?new Map(runners.map(item=>[item.provider,item])):null;
+ const primary=byProvider?runners[0]:runner;
+ const runnerFor=claim=>byProvider?byProvider.get(claim?.task?.checkpoint?.provider):runner;
+ // What a poll says about the runners: the ready ones, and why the others are not.
+ const providerReport=readiness=>byProvider?{providers:Array.isArray(readiness?.ready)?readiness.ready:[...byProvider.keys()],...(readiness?.notReady?.length?{notReadyProviders:readiness.notReady}:{})}:{};
  const bindingEnabled=typeof readDeliveryBinding==='function';
  const versioned=deliveryReceiptVersion===1;
  const journaled=versioned&&!!journal;
@@ -32,8 +41,13 @@ export function createDesktopBridge({request,runner,outbox,journal,heartbeatMs=1
  }
  // A connector that is up but cannot take work says why instead of looking offline. The
  // report owns nothing; an older Worker without the route (or any failure) is ignored.
- async function reportNotReady(reason){
-  try{await request('/api/desktop/presence',{state:'not_ready',reason});}catch{}
+ async function reportNotReady(reason,notReady){
+  const detailed=byProvider&&Array.isArray(notReady);
+  try{await request('/api/desktop/presence',{state:'not_ready',reason,...(detailed?{notReadyProviders:notReady}:{})});}
+  catch(error){
+   // A Worker that predates per-provider reports refuses the extra field: send the plain report.
+   if(detailed&&error?.status===400){try{await request('/api/desktop/presence',{state:'not_ready',reason});}catch{}}
+  }
  }
  const readOutbox=()=>{
   try{return outbox.read();}catch(error){if(versioned)deliveryUnsafe=true;throw error;}
@@ -157,7 +171,8 @@ export function createDesktopBridge({request,runner,outbox,journal,heartbeatMs=1
   try{await send(record);delivered=true;}catch{}
   return outboxFailure=resultNotSaved(cause,delivered);
  }
- async function modelSnapshot(){return typeof runner.models==='function'?await runner.models():undefined;}
+ const catalogRunner=byProvider?runners.find(item=>typeof item.models==='function'):runner;
+ async function modelSnapshot(){return typeof catalogRunner?.models==='function'?await catalogRunner.models():undefined;}
  async function execute(claim,materials=[],models,binding,claimSentAt=performance.now()){
   const {task,executionId,generation}=claim,owner={executionId,generation};controller=new AbortController();
   let monitorError,renewal=null,confirmedAt=claimSentAt;
@@ -171,7 +186,8 @@ export function createDesktopBridge({request,runner,outbox,journal,heartbeatMs=1
    renewal=request(`/api/desktop/${encodeURIComponent(task.id)}/renew`,owner,options(binding)).then(()=>{confirmedAt=Math.max(confirmedAt,sentAt);},e=>{if(!retryableStatus(e?.status)){monitorError??=e;controller.abort();}}).finally(()=>{renewal=null;});
   },heartbeatMs);
   let result,runError;
-  try{result=await runner.run({task,...owner,materials,reviewInputs:claim.reviewInputs,...(claim.project?{project:claim.project}:{}),...(claim.plugins?{plugins:claim.plugins,pluginsSkipped:claim.pluginsSkipped??[]}:{}),...(claim.pluginCatalog?{pluginCatalog:claim.pluginCatalog}:{}),sourceDelegationVersion:runner.sourceDelegationVersion===1&&claim.sourceDelegationVersion===1?1:0,signal:controller.signal});}catch(e){runError=e;}
+  const selected=runnerFor(claim);
+  try{if(!selected)throw runnerUnavailable();result=await selected.run({task,...owner,materials,reviewInputs:claim.reviewInputs,...(claim.project?{project:claim.project}:{}),...(claim.plugins?{plugins:claim.plugins,pluginsSkipped:claim.pluginsSkipped??[]}:{}),...(claim.pluginCatalog?{pluginCatalog:claim.pluginCatalog}:{}),sourceDelegationVersion:selected.sourceDelegationVersion===1&&claim.sourceDelegationVersion===1?1:0,signal:controller.signal});}catch(e){runError=e;}
   finally{clearInterval(timer);if(renewal)await renewal;}
   if(!versioned&&monitorError)throw monitorError;
   if(!versioned&&controller.signal.aborted)throw Error('Desktop execution stopped');
@@ -221,11 +237,11 @@ export function createDesktopBridge({request,runner,outbox,journal,heartbeatMs=1
    },true);
   },
   settled:()=>Promise.all([background,recoveryBackground]).then(()=>undefined),
-  runtimeStatus:()=>({busy,stopped,...(versioned?{deliveryUnsafe,recoveryPaused}:{}),sourceDelegationVersion:runner.sourceDelegationVersion===1?1:0}),
+  runtimeStatus:()=>({busy,stopped,...(versioned?{deliveryUnsafe,recoveryPaused}:{}),sourceDelegationVersion:primary?.sourceDelegationVersion===1?1:0}),
   status(){
    let pending,recoveryRequired=false;
    try{pending=!!readOutbox();}catch{pending=true;recoveryRequired=true;}
-   return {busy,stopped,...(versioned?{deliveryUnsafe,recoveryPaused}:{}),pending,...(recoveryRequired?{recoveryRequired:true}:{}),sourceDelegationVersion:runner.sourceDelegationVersion===1?1:0};
+   return {busy,stopped,...(versioned?{deliveryUnsafe,recoveryPaused}:{}),pending,...(recoveryRequired?{recoveryRequired:true}:{}),sourceDelegationVersion:primary?.sourceDelegationVersion===1?1:0};
   },
   async recoveryInspect(work){return recover(work,false);},
   async recoveryMaintenance(work){return recover(work,true);},
@@ -239,11 +255,14 @@ export function createDesktopBridge({request,runner,outbox,journal,heartbeatMs=1
    if(busy||stopped||deliveryUnsafe||readOutbox()||journaled&&readJournal())throw Object.assign(Error('Desktop is busy or has a pending result. Wait before starting another task.'),{status:409});
    const materials=sanitizeMaterials(input.materials,{images:true});busy=true;
    try{
-    await beforeClaim();if(stopped||recoveryPaused||deliveryUnsafe)throw Object.assign(Error('Desktop is stopping'),{status:409});
+    const readiness=await beforeClaim();if(stopped||recoveryPaused||deliveryUnsafe)throw Object.assign(Error('Desktop is stopping'),{status:409});
+    // CR-006 S2a: the chosen provider must have a runner here that can take work now.
+    const provider=byProvider?input.provider??primary?.provider:undefined,chosen=byProvider?byProvider.get(provider):runner;
+    if(byProvider&&(!chosen||(Array.isArray(readiness?.ready)&&!readiness.ready.includes(provider))))throw runnerNotReady();
     const models=await modelSnapshot();if(stopped||recoveryPaused||deliveryUnsafe)throw Object.assign(Error('Desktop is stopping'),{status:409});
     const binding=await readBinding();if(stopped||recoveryPaused||deliveryUnsafe)throw Object.assign(Error('Desktop is stopping'),{status:409});
     const nonce=intendClaim(binding,taskId),claimSentAt=performance.now();
-    const response=await claimRequest(`/api/desktop/${encodeURIComponent(taskId)}/start`,{expectedVersion:input.expectedVersion,sourceDelegationVersion:runner.sourceDelegationVersion===1?1:0,sourceNames:materials.map(m=>m.name),...(models!==undefined?{models}:{}),...(nonce?{claimNonce:nonce}:{})},versioned?protocolOptions(binding):options(binding));
+    const response=await claimRequest(`/api/desktop/${encodeURIComponent(taskId)}/start`,{expectedVersion:input.expectedVersion,...(byProvider?{provider}:{}),sourceDelegationVersion:chosen?.sourceDelegationVersion===1?1:0,sourceNames:materials.map(m=>m.name),...(models!==undefined?{models}:{}),...(nonce?{claimNonce:nonce}:{})},versioned?protocolOptions(binding):options(binding));
     if(stopped||recoveryPaused||deliveryUnsafe)throw Object.assign(Error('Desktop is stopping'),{status:409});
     const claim=versioned?verifyClaim(response,binding,taskId):response.claim,workspaceId=response.workspaceId;
     recordClaim(response,nonce,binding,claim);
@@ -265,12 +284,13 @@ export function createDesktopBridge({request,runner,outbox,journal,heartbeatMs=1
     }
     if(journaled&&await reconcileJournal())return true;
     if(deliveryUnsafe)throw protocolError();
-    try{await beforeClaim();}catch(error){if(error?.code==='DESKTOP_NOT_READY'&&!stopped)await reportNotReady(error.reason);throw error;}
+    let readiness;
+    try{readiness=await beforeClaim();}catch(error){if(error?.code==='DESKTOP_NOT_READY'&&!stopped)await reportNotReady(error.reason,error.notReady);throw error;}
     if(stopped||recoveryPaused||deliveryUnsafe)return false;
     const models=await modelSnapshot();if(stopped||recoveryPaused||deliveryUnsafe)return false;
     const binding=await readBinding();if(stopped||recoveryPaused||deliveryUnsafe)return false;
     const nonce=intendClaim(binding),claimSentAt=performance.now();
-    const response=await claimRequest('/api/desktop/poll',{...(models===undefined?{}:{models}),...(nonce?{claimNonce:nonce}:{})},versioned?protocolOptions(binding):options(binding));if(stopped||recoveryPaused||deliveryUnsafe)return false;
+    const response=await claimRequest('/api/desktop/poll',{...providerReport(readiness),...(models===undefined?{}:{models}),...(nonce?{claimNonce:nonce}:{})},versioned?protocolOptions(binding):options(binding));if(stopped||recoveryPaused||deliveryUnsafe)return false;
     const claim=versioned?verifyClaim(response,binding):response.claim,workspaceId=response.workspaceId;
     recordClaim(response,nonce,binding,claim);
     if(bindingEnabled&&workspaceId!==binding.workspaceId)throw deliveryBindingConflict();

@@ -13,6 +13,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {withoutApiEnvironment,createCodexRunner,sweepImageFolders} from '../server/runners.mjs';
 import {createDesktopBridge} from '../server/desktop-bridge.mjs';
+import {claudeCodePilotEnabled,createClaudeCodeRunner} from '../server/claude-code-runner.mjs';
 import {runDesktopService} from '../server/desktop-service.mjs';
 import {createOutboxRecovery} from '../server/outbox-recovery.mjs';
 
@@ -42,7 +43,10 @@ await sweepImageFolders({olderThan:Date.now()});
 const readDeliveryBinding=async()=>({origin:endpoint,workspaceId:(await request('/api/desktop/identity')).workspaceId});
 // The claim journal is used only with delivery receipts (version 1).
 const journal=deliveryReceiptVersion===1?createFileJournal(path.join(privateDir,'desktop-claim.json')):undefined;
-const bridge=createDesktopBridge({deliveryReceiptVersion,request,runner,outbox,journal,readDeliveryBinding,beforeClaim:createDesktopReadiness({runner,runRoot:path.join(privateDir,'desktop-runs')}),onError:error=>console.error(deliveryStopMessage(error,stopMessageOptions)),onDiscarded:()=>console.log('INNO: 중지된 실행의 결과는 적용하지 않고 정리했습니다.')});
+// CR-006 S2: one runner per desktop provider; each claim runs on its own provider's runner.
+// The Claude Code pilot runs only with INNO_CLAUDE_CODE=1 until it is promoted.
+const runners=[runner,...(claudeCodePilotEnabled(process.env)?[createClaudeCodeRunner({processTree:createProcessTree(),cwd:path.join(privateDir,'desktop-runs')})]:[])];
+const bridge=createDesktopBridge({deliveryReceiptVersion,request,runners,outbox,journal,readDeliveryBinding,beforeClaim:createDesktopReadiness({runners,runRoot:path.join(privateDir,'desktop-runs')}),onError:error=>console.error(deliveryStopMessage(error,stopMessageOptions)),onDiscarded:()=>console.log('INNO: 중지된 실행의 결과는 적용하지 않고 정리했습니다.')});
 const outboxRecovery=createOutboxRecovery(pendingPath,{withExclusive:work=>bridge.recoveryMaintenance(work)});
 const localTokenPath=path.join(privateDir,'desktop-access-token.txt');
 if(!existsSync(localTokenPath))writeFileSync(localTokenPath,randomBytes(32).toString('base64url'),{mode:0o600});

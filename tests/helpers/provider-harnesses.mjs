@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 import {createWorker} from '../../worker/index.mjs';
 import {D1TaskStore} from '../../worker/store.mjs';
 import {createCodexRunner} from '../../server/runners.mjs';
+import {createClaudeCodeRunner} from '../../server/claude-code-runner.mjs';
 import {createDesktopBridge} from '../../server/desktop-bridge.mjs';
 import {createCloudRequest} from '../../server/delivery-binding.mjs';
 import {createFileOutbox} from '../../server/file-outbox.mjs';
@@ -93,10 +94,37 @@ function workerHarness(t, {fetchFn = noNetwork, env = {}, deliveryReceiptVersion
 // mode -> fake CLI process that answers when released. Version 0 is the
 // production gate today; version 1 loses each first result response so the
 // resend goes through a connector restart, receipt replay and acknowledgment.
-export async function createCodexHarness(t, {receipts = 0} = {}) {
-  const API_KEY = 'sk-conformance-openai-secret-0123456789abcdef';
+// The desktop providers differ only in their runner and the CLI's output, so one harness
+// drives both through the same connector, outbox and Worker.
+const DESKTOP_PROVIDERS = {
+  codex: {
+    apiKey: ['OPENAI_API_KEY', 'sk-conformance-openai-secret-0123456789abcdef'],
+    runner: ({spawnProcess, dir, processEnv}) => createCodexRunner({spawnProcess, cwd: dir, managedDelivery: true, processEnv, modelCatalog: async () => []}),
+    fail: child => child.stderr.write('Error: Not logged in. Run codex login.\n'),
+    answer(child, {content, usage}) {
+      if (usage) child.stdout.write(JSON.stringify({type: 'turn.completed', usage: {input_tokens: usage.inputTokens, output_tokens: usage.outputTokens}}) + '\n');
+      child.stdout.write(JSON.stringify({type: 'item.completed', item: {type: 'agent_message', text: JSON.stringify({summary: content})}}) + '\n');
+    },
+  },
+  // Claude Code: stream-json with the start settings first and the final result last.
+  'claude-code': {
+    apiKey: ['ANTHROPIC_API_KEY', 'sk-ant-conformance-secret-0123456789abcdef'],
+    runner: ({spawnProcess, dir, processEnv}) => createClaudeCodeRunner({spawnProcess, cwd: dir, processEnv, locate: async () => 'C:\\conformance\\claude.exe'}),
+    fail: child => child.stderr.write('Not logged in · Please run /login\n'),
+    answer(child, {content, usage}) {
+      child.stdout.write(JSON.stringify({type: 'system', subtype: 'init', apiKeySource: 'none', permissionMode: 'dontAsk', tools: ['Read', 'Write', 'Edit', 'Glob', 'Grep'], mcp_servers: []}) + '\n');
+      child.stdout.write(JSON.stringify({type: 'result', subtype: 'success', is_error: false, result: JSON.stringify({summary: content}), ...(usage ? {usage: {input_tokens: usage.inputTokens, output_tokens: usage.outputTokens}} : {})}) + '\n');
+    },
+  },
+};
+
+export const createCodexHarness = (t, options) => createDesktopHarness(t, {...options, provider: 'codex'});
+export const createClaudeCodeHarness = (t, options) => createDesktopHarness(t, {...options, provider: 'claude-code'});
+
+async function createDesktopHarness(t, {receipts = 0, provider} = {}) {
+  const adapter = DESKTOP_PROVIDERS[provider], [API_KEY_NAME, API_KEY] = adapter.apiKey;
   await mkdir(tempRoot, {recursive: true});
-  const dir = await mkdtemp(path.join(tempRoot, 'conformance-codex-'));
+  const dir = await mkdtemp(path.join(tempRoot, `conformance-${provider}-`));
   const base = workerHarness(t, {deliveryReceiptVersion: receipts});
   const outbound = [], children = [], completions = new Map(), lostOnce = new Set();
   let forging = false;
@@ -122,16 +150,15 @@ export async function createCodexHarness(t, {receipts = 0} = {}) {
     child.stdin.on('finish', () => { child.prompt = input; outbound.push(input); });
     child.release = ({content, usage, fail}) => {
       if (child.closed) return;
-      if (fail) { child.stderr.write('Error: Not logged in. Run codex login.\n'); return close(1, null); }
-      if (usage) child.stdout.write(JSON.stringify({type: 'turn.completed', usage: {input_tokens: usage.inputTokens, output_tokens: usage.outputTokens}}) + '\n');
-      child.stdout.write(JSON.stringify({type: 'item.completed', item: {type: 'agent_message', text: JSON.stringify({summary: content})}}) + '\n');
+      if (fail) { adapter.fail(child); return close(1, null); }
+      adapter.answer(child, {content, usage});
       close(0, null);
     };
     return child;
   };
-  const runner = createCodexRunner({spawnProcess, cwd: dir, managedDelivery: true, processEnv: {PATH: process.env.PATH ?? '', OPENAI_API_KEY: API_KEY}, modelCatalog: async () => []});
+  const runner = adapter.runner({spawnProcess, dir, processEnv: {PATH: process.env.PATH ?? '', [API_KEY_NAME]: API_KEY}});
   const errors = [];
-  const connector = () => createDesktopBridge({deliveryReceiptVersion: receipts, request, outbox: createFileOutbox(path.join(dir, 'pending.json')), readDeliveryBinding, runner, heartbeatMs: 5, onError: error => errors.push(error)});
+  const connector = () => createDesktopBridge({deliveryReceiptVersion: receipts, request, outbox: createFileOutbox(path.join(dir, 'pending.json')), readDeliveryBinding, runners: [runner], heartbeatMs: 5, onError: error => errors.push(error)});
   let bridge = connector();
   const settle = () => within(bridge.settled(), 'the desktop connector to settle');
   base.onClose(async () => {
@@ -150,8 +177,8 @@ export async function createCodexHarness(t, {receipts = 0} = {}) {
   async function start(task, {materials = [], content, usage} = {}) {
     await recoverPending();
     const before = children.length;
-    await bridge.startTask(task.id, {expectedVersion: task.version, materials});
-    await until(() => children.length > before && children.at(-1).prompt !== null, 'the Codex process to receive its prompt');
+    await bridge.startTask(task.id, {expectedVersion: task.version, materials, provider});
+    await until(() => children.length > before && children.at(-1).prompt !== null, `the ${provider} process to receive its prompt`);
     const child = children.at(-1), running = await base.read(task.id);
     return {taskId: task.id, executionId: running.checkpoint.executionId, generation: running.checkpoint.generation, prompt: child.prompt, child, content, usage};
   }
@@ -166,7 +193,7 @@ export async function createCodexHarness(t, {receipts = 0} = {}) {
     finally { forging = false; }
   }
   return {
-    ...base, provider: 'codex', secrets: [ACCESS_TOKEN, API_KEY], outbound: () => outbound,
+    ...base, provider, secrets: [ACCESS_TOKEN, API_KEY], outbound: () => outbound,
     launch: start,
     async deliver(owner, overrides = {}) {
       if (Object.keys(overrides).length || owner.child.closed && !owner.delivered) return post(owner, overrides);
@@ -201,7 +228,7 @@ export async function createCodexHarness(t, {receipts = 0} = {}) {
       return owner;
     },
     async terminated(owner) {
-      try { await until(() => owner.child.killed === true && owner.child.closed, 'the stopped Codex process to terminate'); } catch { return false; }
+      try { await until(() => owner.child.killed === true && owner.child.closed, `the stopped ${provider} process to terminate`); } catch { return false; }
       await settle();
       return true;
     },
@@ -245,4 +272,4 @@ export async function createClaudeHarness(t) {
   };
 }
 
-export const PROVIDER_HARNESSES = Object.freeze({codex: createCodexHarness, claude: createClaudeHarness});
+export const PROVIDER_HARNESSES = Object.freeze({codex: createCodexHarness, claude: createClaudeHarness, 'claude-code': createClaudeCodeHarness});

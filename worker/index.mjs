@@ -158,8 +158,11 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
         }
 
         if (request.method === 'GET' && pathname === '/api/state') {
-          const providerSettings=await store.providerSettings();
-          return responseJson({...await store.getState({...capabilities,disabledProviders:providerSettings.disabled,providerSettingsVersion:providerSettings.version},parseRevision(url.searchParams.get('since')),{delta:url.searchParams.get('delta')==='1'}), desktop: await bridge.presence()}, 200, headers);
+          const providerSettings=await store.providerSettings(),desktop=await bridge.presence();
+          // CR-006 S2: a desktop provider without a fixed flag is available once its runner was reported.
+          const reported=desktop.providers?[...desktop.providers.ready,...Object.keys(desktop.providers.notReady)]:[];
+          const desktopFlags=Object.fromEntries(reported.flatMap(id=>providerManifest(id).ui.availability.filter(flag=>capabilities[flag]===undefined).map(flag=>[flag,true])));
+          return responseJson({...await store.getState({...capabilities,...desktopFlags,disabledProviders:providerSettings.disabled,providerSettingsVersion:providerSettings.version},parseRevision(url.searchParams.get('since')),{delta:url.searchParams.get('delta')==='1'}), desktop}, 200, headers);
         }
         if (request.method === 'GET' && pathname === '/api/model-discovery') {
           // The common /api/* gate above already authenticates; keep this check explicit.
@@ -223,9 +226,9 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
           return responseJson(await claimStatus(store.db,{nonce:input?.nonce,workspaceId:desktopWorkspaceId,now:store.now()}),200,headers);
         }
         if (request.method === 'POST' && pathname === '/api/desktop/poll') {
-          const input=await body(request);try{await bridge.markReady();}catch{}if(input.models!==undefined)await catalog.report(input.models);
+          const input=await body(request);await bridge.reportProviders(input);if(input.models!==undefined)await catalog.report(input.models);
           const options=withClaimNonce(claimOptions,input);if(options?.claimNonce)await sweepClaimMarkers(store.db,store.now());
-          return responseJson({claim: await hydrate(await bridge.claim(options)),workspaceId:desktopWorkspaceId,...claimConfirmation,...(options?.claimNonce?{claimNonce:options.claimNonce}:{})}, 200, headers);
+          return responseJson({claim: await hydrate(await bridge.claim(options,input)),workspaceId:desktopWorkspaceId,...claimConfirmation,...(options?.claimNonce?{claimNonce:options.claimNonce}:{})}, 200, headers);
         }
         // CR-008: projects.
         if(request.method==='POST'&&pathname==='/api/projects')return responseJson({project:await store.createProject(await body(request))},200,headers);

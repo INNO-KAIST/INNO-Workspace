@@ -4,6 +4,7 @@ import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {ValidationError} from '../public/core/tasks.mjs';
+import {ASSIGNABLE_PROVIDER_IDS, PROVIDER_IDS} from '../public/core/providers.mjs';
 import {sanitizeUsageHistory, usageHistory, usageSummary} from '../public/core/execution-usage.mjs';
 import {boundedContextDelivery} from '../public/core/context-delivery.mjs';
 import {createSelectionState} from '../public/core/model-selection.mjs';
@@ -43,7 +44,7 @@ test('stored provider values round-trip through the cloud task store unchanged',
   await store.recordUsage('claude', {usedPercent: 34});
   const state = await store.getState();
   assert.deepEqual(state.usage.map(row => [row.provider, row.usedPercent]), [['claude', 34], ['codex', 12]]);
-  await assert.rejects(() => store.claimExecution(created.id, {provider: 'gemini', expectedVersion: read.version}), error => error instanceof ValidationError && error.message === 'provider must be codex or claude');
+  await assert.rejects(() => store.claimExecution(created.id, {provider: 'gemini', expectedVersion: read.version}), error => error instanceof ValidationError && error.message === 'provider must be codex or claude or claude-code');
 });
 
 test('stored provider values round-trip through the local task store unchanged', async t => {
@@ -57,7 +58,7 @@ test('stored provider values round-trip through the local task store unchanged',
   assert.deepEqual(read.checkpoint, checkpoint);
   store.recordUsage('claude', {usedPercent: 5});
   assert.deepEqual(store.getState().usage.map(row => row.provider), ['claude']);
-  assert.throws(() => store.claimExecution(created.id, {provider: 'gemini', expectedVersion: read.version}), error => error instanceof ValidationError && error.message === 'provider must be codex or claude');
+  assert.throws(() => store.claimExecution(created.id, {provider: 'gemini', expectedVersion: read.version}), error => error instanceof ValidationError && error.message === 'provider must be codex or claude or claude-code');
 });
 
 test('usage records keep registered providers and drop unknown ones as before', () => {
@@ -66,7 +67,7 @@ test('usage records keep registered providers and drop unknown ones as before', 
   const unchanged = usageHistory({provider: 'gemini', executionId: 'x', generation: 1, usageHistory: [usage('codex', 'a')]}, {inputTokens: 1}, at);
   assert.deepEqual(unchanged.map(row => row.executionId), ['a']);
   const summary = usageSummary([]);
-  assert.deepEqual(Object.keys(summary), ['codex', 'claude']);
+  assert.deepEqual(Object.keys(summary), ['codex', 'claude', 'claude-code']);
 });
 
 test('records naming an unknown provider are rejected at every validation boundary', () => {
@@ -88,14 +89,16 @@ test('records naming an unknown provider are rejected at every validation bounda
 test('advertised MCP provider enums list exactly the registered providers', async () => {
   const response = await handleMcp({}, {jsonrpc: '2.0', id: 1, method: 'tools/list'}, {handoff: () => null, delegate: () => null});
   const enums = [];
-  const walk = value => {
+  const walk = (value, tool) => {
     if (!value || typeof value !== 'object') return;
-    if (value.provider?.enum) enums.push(value.provider.enum);
-    for (const item of Object.values(value)) walk(item);
+    if (value.provider?.enum) enums.push([tool, value.provider.enum]);
+    for (const item of Object.values(value)) walk(item, tool);
   };
-  walk(response.result.tools);
+  for (const tool of response.result.tools) walk(tool, tool.name);
   assert.equal(enums.length, 3);
-  for (const values of enums) assert.deepEqual(values, ['codex', 'claude']);
+  // Claiming names any registered provider; handing off and delegating only assignable ones.
+  for (const [tool, values] of enums) assert.deepEqual(values, tool === 'claim_execution' ? [...PROVIDER_IDS] : [...ASSIGNABLE_PROVIDER_IDS], tool);
+  assert.deepEqual([...ASSIGNABLE_PROVIDER_IDS], ['codex', 'claude'], 'the Claude Code pilot is not assignable yet');
 });
 
 test('run requests naming an unknown provider fail with the existing message', async t => {
@@ -106,7 +109,7 @@ test('run requests naming an unknown provider fail with the existing message', a
   const worker = createWorker({fetchFn: async () => { throw new Error('no external call expected'); }});
   const cloud = await worker.fetch(new Request(`https://inno.test/api/tasks/${task.id}/run`, {method: 'POST', headers: {authorization: 'Bearer ' + env.ACCESS_TOKEN, 'content-type': 'application/json'}, body: JSON.stringify({provider: 'gemini', expectedVersion: task.version})}), env);
   assert.equal(cloud.status, 400);
-  assert.deepEqual(await cloud.json(), {error: 'provider must be codex or claude'});
+  assert.deepEqual(await cloud.json(), {error: 'provider must be codex or claude or claude-code'});
 
   const directory = await mkdtemp(path.join(tmpdir(), 'inno-provider-compat-'));
   const local = new SqliteTaskStore(path.join(directory, 'tasks.sqlite'));
@@ -116,5 +119,5 @@ test('run requests naming an unknown provider fail with the existing message', a
   const localTask = local.createTask({prompt: 'Run me locally'});
   const response = await fetch(`http://127.0.0.1:${instance.server.address().port}/api/tasks/${localTask.id}/run`, {method: 'POST', headers: {authorization: 'Bearer test-token-0123456789abcdef', 'content-type': 'application/json'}, body: JSON.stringify({provider: 'gemini', expectedVersion: localTask.version})});
   assert.equal(response.status, 400);
-  assert.deepEqual(await response.json(), {error: 'provider must be codex or claude'});
+  assert.deepEqual(await response.json(), {error: 'provider must be codex or claude or claude-code'});
 });

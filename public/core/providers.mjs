@@ -51,6 +51,17 @@ export const PROVIDER_MANIFESTS = deepFreeze([
     ui: {option: 'Claude · 클라우드 Routine', usageUrl: 'https://claude.ai/settings/usage', availability: ['claudeRoutine']},
     conformance: {suiteVersion: 1, status: 'passed'},
   },
+  // CR-006 S2 pilot: the Claude Code CLI on this PC with the Claude subscription login. Pending
+  // until the conformance suite and a real-subscription check pass, so it is never assigned.
+  {
+    manifestVersion: 1, id: 'claude-code', label: 'Claude Code', vendor: 'ANTHROPIC',
+    auth: {kind: 'subscription_cli', paidApi: false},
+    execution: {location: 'local', transport: 'desktop_bridge'},
+    capabilities: {fileArtifacts: true, resultCallback: 'desktop_bridge', cancellation: 'process_terminate', usageReport: 'runtime_reported', deliveryReceipts: 1, executionEvidence: null, evaluationBudget: false},
+    models: {catalog: 'built_in_roles', roles: ['haiku', 'sonnet', 'opus']},
+    ui: {option: 'Claude · 이 PC (Claude Code)', usageUrl: 'https://claude.ai/settings/usage', availability: ['localClaudeCode']},
+    conformance: {suiteVersion: 1, status: 'pending'},
+  },
 ]);
 
 function deepFreeze(value) {

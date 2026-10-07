@@ -14,8 +14,8 @@ const codex = () => clone(PROVIDER_MANIFESTS.find(m => m.id === 'codex'));
 const claude = () => clone(PROVIDER_MANIFESTS.find(m => m.id === 'claude'));
 const rejects = (manifest, field) => assert.throws(() => validateProviderManifest(manifest), error => error instanceof ValidationError && error.message === `provider manifest ${field} is invalid`);
 
-test('the registry declares Codex and Claude in their existing order', () => {
-  assert.deepEqual([...PROVIDER_IDS], ['codex', 'claude']);
+test('the registry declares Codex and Claude in their existing order, then the Claude Code pilot', () => {
+  assert.deepEqual([...PROVIDER_IDS], ['codex', 'claude', 'claude-code']);
   for (const manifest of PROVIDER_MANIFESTS) assert.doesNotThrow(() => validateProviderManifest(manifest));
 });
 
@@ -24,12 +24,14 @@ test('existing transport differences are declared as capabilities', () => {
   assert.equal(providerManifest('codex').execution.location, 'local');
   assert.equal(providerTransport('claude'), 'routine_fire');
   assert.equal(providerManifest('claude').execution.location, 'cloud');
-  assert.deepEqual([...providersByTransport('desktop_bridge')], ['codex']);
+  assert.deepEqual([...providersByTransport('desktop_bridge')], ['codex', 'claude-code']);
   assert.deepEqual([...providersByTransport('routine_fire')], ['claude']);
   assert.deepEqual([...providersByTransport('unknown')], []);
   const expected = {
     codex: {fileArtifacts: true, resultCallback: 'desktop_bridge', cancellation: 'process_terminate', usageReport: 'runtime_reported', deliveryReceipts: 1, executionEvidence: 'cli_arguments', evaluationBudget: true},
     claude: {fileArtifacts: true, resultCallback: 'mcp_checkpoint', cancellation: 'confirmation_required', usageReport: 'self_reported_optional', deliveryReceipts: 0, executionEvidence: null, evaluationBudget: false},
+    // CR-006 S2 pilot: no CLI route evidence and no evaluation budget runs.
+    'claude-code': {fileArtifacts: true, resultCallback: 'desktop_bridge', cancellation: 'process_terminate', usageReport: 'runtime_reported', deliveryReceipts: 1, executionEvidence: null, evaluationBudget: false},
   };
   for (const [id, capabilities] of Object.entries(expected))
     for (const [name, value] of Object.entries(capabilities)) assert.equal(providerCapability(id, name), value, `${id}.${name}`);
@@ -43,7 +45,7 @@ test('unknown providers are rejected with the existing message', () => {
     assert.equal(isProviderId(value), false, String(value));
   assert.equal(assertProviderId('claude'), 'claude');
   for (const call of [() => assertProviderId('gemini'), () => providerManifest('gemini'), () => providerTransport('toString')])
-    assert.throws(call, error => error instanceof ValidationError && error.message === 'provider must be codex or claude');
+    assert.throws(call, error => error instanceof ValidationError && error.message === 'provider must be codex or claude or claude-code');
   assert.equal(providerLabel('codex'), 'Codex');
   assert.equal(providerLabel('claude'), 'Claude');
   assert.equal(providerLabel('gemini'), null);
@@ -120,13 +122,13 @@ test('registered manifests are immutable', () => {
 test('a separate registry can add a provider without touching the defaults', () => {
   const fixture = {...codex(), id: 'fixture-cli', label: 'Fixture CLI', models: {catalog: 'built_in_roles', roles: ['fixture']}};
   const registry = createProviderRegistry([...PROVIDER_MANIFESTS, fixture]);
-  assert.deepEqual([...registry.ids], ['codex', 'claude', 'fixture-cli']);
-  assert.deepEqual([...registry.byTransport('desktop_bridge')], ['codex', 'fixture-cli']);
+  assert.deepEqual([...registry.ids], ['codex', 'claude', 'claude-code', 'fixture-cli']);
+  assert.deepEqual([...registry.byTransport('desktop_bridge')], ['codex', 'claude-code', 'fixture-cli']);
   assert.equal(registry.label('fixture-cli'), 'Fixture CLI');
-  assert.throws(() => registry.assert('gemini'), error => error instanceof ValidationError && error.message === 'provider must be codex or claude or fixture-cli');
+  assert.throws(() => registry.assert('gemini'), error => error instanceof ValidationError && error.message === 'provider must be codex or claude or claude-code or fixture-cli');
   assert.ok(Object.isFrozen(registry.manifest('fixture-cli').capabilities));
   assert.equal(Object.isFrozen(fixture.capabilities), false);
-  assert.deepEqual([...PROVIDER_IDS], ['codex', 'claude']);
+  assert.deepEqual([...PROVIDER_IDS], ['codex', 'claude', 'claude-code']);
   assert.throws(() => createProviderRegistry([codex(), codex()]), error => error instanceof ValidationError && /duplicate/.test(error.message));
   assert.throws(() => createProviderRegistry([]), ValidationError);
   // The account catalog is one desktop-reported list today; a second provider would be checked against it.

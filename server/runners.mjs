@@ -45,7 +45,9 @@ export function withoutApiEnvironment(processEnv = process.env) {
   return Object.fromEntries(Object.entries(processEnv).filter(([key]) => !API_ENVIRONMENT_KEYS.has(key.toUpperCase())&&!key.toUpperCase().startsWith('INNO_CONTEXT_')));
 }
 
-function collectProcess(child, {input, signal, timeoutMs, onTimeout, onClose, onTerminate, stdoutCollector=createTailCollector(1024*1024)} = {}) {
+// Shared with the Claude Code runner (server/claude-code-runner.mjs): process collection,
+// the task prompt, the structured result and run-directory artifacts.
+export function collectProcess(child, {input, signal, timeoutMs, onTimeout, onClose, onTerminate, stdoutCollector=createTailCollector(1024*1024)} = {}) {
   return new Promise((resolve, reject) => {
     const stderrCollector=createTailCollector();
     let outputError;
@@ -127,16 +129,16 @@ async function taskPrompt(task, materials = [], ownership = {}) {
   return (await taskPromptWithContext(task, materials, ownership)).text;
 }
 
-async function taskPromptWithContext(task, materials = [], ownership = {}) {
+export async function taskPromptWithContext(task, materials = [], ownership = {}) {
   const readerAvailable=ownership.contextReaderAvailable===true;
   const context=await buildTaskContext(task,{mode:ownership.mode??executionMode(task),selection:readerAvailable?'resume':'full',readerAvailable});
   const selected=readerAvailable&&context.readiness==='selected_ready'&&context.manifest?.selection?.applied==='resume'
     &&context.manifest.budget.blocked===false&&context.manifest.budget.requiredBytes<=context.manifest.budget.hardMaxBytes;
-  if(!context.complete&&!selected)throw Object.assign(new ContextRetrievalRequiredError(),{contextDelivery:contextDelivery(context,{provider:ownership.claude?'claude':'codex',reader:readerAvailable,materialBytes:materialBytes(materials)})});
+  if(!context.complete&&!selected)throw Object.assign(new ContextRetrievalRequiredError(),{contextDelivery:contextDelivery(context,{provider:ownership.provider??(ownership.claude?'claude':'codex'),reader:readerAvailable,materialBytes:materialBytes(materials)})});
   return {text:promptText(task,materials,ownership,context,selected),context};
 }
 
-const materialBytes=materials=>materials.reduce((total,material)=>total+Buffer.byteLength(String(material?.text??'')),0);
+export const materialBytes=materials=>materials.reduce((total,material)=>total+Buffer.byteLength(String(material?.text??'')),0);
 
 function promptText(task, materials, ownership, context, selected) {
   const plan = Array.isArray(task.plan)
@@ -198,7 +200,7 @@ function promptText(task, materials, ownership, context, selected) {
     sources,
     '',
     ownership.managedDelivery ? 'The desktop bridge manages cloud checkpoints and delivery. Do not call remote INNO tools. Return the final answer and generated artifacts to the bridge.' : '',
-    ownership.modelPolicy && !ownership.claude ? 'Return one JSON object with summary, checkpoint, artifacts (at most 9), and routing as specified above. Shape before adding routing:' : 'Return either a plain final answer or one JSON object with this shape:',
+    ownership.modelPolicy && !ownership.claude && !ownership.plainResult ? 'Return one JSON object with summary, checkpoint, artifacts (at most 9), and routing as specified above. Shape before adding routing:' : 'Return either a plain final answer or one JSON object with this shape:',
     '{"summary":"user-facing answer","checkpoint":"verified progress","artifacts":[{"name":"file.ext","mime":"type/subtype","path":"relative/output/path"}]}',
     ...(ownership.allowDelegation&&ownership.pluginCatalog?.length?[pluginCatalogContext(ownership.pluginCatalog)]:[]),
     ownership.allowDelegation ? 'When managed parallel allocation is useful, add delegation:{"independent":true,"children":[{"role":"...","provider":"codex|claude","requestedModel":"...","effort":"...","sufficientReason":"...","acceptanceCriteria":["..."],"instructions":"..."}, {"...":"..."}]} with 2 to 4 children in any provider mix and distinct roles.' : '',
@@ -208,7 +210,7 @@ function promptText(task, materials, ownership, context, selected) {
   ].join('\n');
 }
 
-function structuredResult(content) {
+export function structuredResult(content) {
   const candidate = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   let parsed;
   try {
@@ -277,7 +279,7 @@ function validateBinarySignature(name, mime, bytes) {
   if (mime === 'image/png' && bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') throw new Error(`artifact ${name} is not a PNG`);
 }
 
-async function materializeArtifacts(artifacts, executionDirectory) {
+export async function materializeArtifacts(artifacts, executionDirectory) {
   const root = await realpath(executionDirectory);
   let total = artifacts.reduce((sum, item) => sum + (item.content?.length ?? 0), 0);
   const output = [];
@@ -362,7 +364,7 @@ async function defaultCodexAvailability(spawnProcess, env) {
   }
 }
 
-function executionMode(task){
+export function executionMode(task){
   if(task?.delegation?.state==='reviewing')return 'review';
   if(task?.parentTaskId||task?.assignment)return 'child';
   return 'root';
@@ -458,6 +460,8 @@ export function createCodexRunner({
   };
   const loadModels=async()=>{const catalog=await readCatalog();return modelCatalogRows(Array.isArray(catalog)?catalog:catalog?.models);};
   return {
+    // CR-006 S2a: the connector keys its runner table by provider and reports why it is not ready.
+    provider: 'codex', notReadyReason: 'codex_login',
     available: () => availability ? availability() : defaultCodexAvailability(spawnProcess, env),
     models: async()=>{const catalog=await readCatalog();const models=modelCatalogRows(Array.isArray(catalog)?catalog:catalog?.models);return Array.isArray(catalog)?models:{models,observedAt:catalog?.observedAt??null,status:catalog?.status==='fresh'?'fresh':'unavailable'};},
     sourceDelegationVersion:sourceDelegationVersion===1?1:0,

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {PROVIDER_MANIFESTS, PROVIDER_CONFORMANCE_SUITE_VERSION, isAssignableProvider, providerManifest} from '../public/core/providers.mjs';
 import {CONFORMANCE_CHECKS, SOURCE_SENTINEL, runProviderConformance} from './helpers/provider-conformance.mjs';
-import {PROVIDER_HARNESSES, createCodexHarness} from './helpers/provider-harnesses.mjs';
+import {PROVIDER_HARNESSES, createClaudeCodeHarness, createCodexHarness} from './helpers/provider-harnesses.mjs';
 
 // CR-006 PRV-04: every registered provider runs the common suite through its
 // real adapter. A manifest cannot be registered here without a harness.
@@ -22,6 +22,11 @@ for (const manifest of PROVIDER_MANIFESTS) runProviderConformance(test, {manifes
 runProviderConformance(test, {
   manifest: providerManifest('codex'), label: 'codex receipts v1',
   createHarness: t => createCodexHarness(t, {receipts: 1}),
+});
+// CR-006 S2: the Claude Code pilot declares delivery receipts, which production uses.
+runProviderConformance(test, {
+  manifest: providerManifest('claude-code'), label: 'claude-code receipts v1',
+  createHarness: t => createClaudeCodeHarness(t, {receipts: 1}),
 });
 
 // The suite must fail adapters with known defects, or a passing run proves nothing.

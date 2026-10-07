@@ -1,9 +1,10 @@
-import {PROVIDER_IDS,isProviderId} from './providers.mjs';
+import {ASSIGNABLE_PROVIDER_IDS,isProviderId} from './providers.mjs';
 import {ConflictError,ValidationError} from './tasks.mjs';
 
 // PRV-06: a person can turn a registered provider off. Off blocks only new executions on it
 // (a direct run is refused; queued, delegated or handed-off work waits); running work finishes
-// and turning it back on resumes the waiting work. At least one provider stays on. The stored
+// and turning it back on resumes the waiting work. At least one assignable provider (one that
+// passed the conformance suite) stays on; a provider in its trial does not count. The stored
 // form is {version, disabled}; a change applies only to the version it was made from.
 export function normalizeProviderSettings(value){
  if(value==null)return {version:0,disabled:[]};
@@ -19,7 +20,7 @@ export function nextProviderSettings(current,input){
  if(!Array.isArray(disabled)||disabled.some(id=>typeof id!=='string'))throw new ValidationError('disabled must be a list of provider ids');
  if(disabled.some(id=>!isProviderId(id)))throw new ValidationError('Unknown provider in disabled list');
  const next=[...new Set(disabled)].sort();
- if(next.length>=PROVIDER_IDS.length)throw new ValidationError('At least one provider must stay on');
+ if(ASSIGNABLE_PROVIDER_IDS.every(id=>next.includes(id)))throw new ValidationError('At least one provider must stay on');
  return {version:current.version+1,disabled:next};
 }
 

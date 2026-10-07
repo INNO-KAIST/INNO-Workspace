@@ -21,8 +21,8 @@ export function runnerError(error, {status,retryAfter,now=Date.now()}={}) {
  let kind=codes[error?.code];
  if(!kind){
   if(['ENOENT','EACCES'].includes(error?.code)&&/^spawn\b/.test(String(error?.syscall??'')))kind='unavailable';
-  else if(status===401||status===403||/unauthorized|authentication (?:failed|required)|not logged in|token (?:expired|invalid)/i.test(message))kind='authentication';
-  else if(status===429||/usage limit|quota exceeded|rate limit|usage_limit_reached/i.test(message))kind='quota';
+  else if(status===401||status===403||/unauthorized|authentication (?:failed|required)|not logged in|token (?:expired|invalid)|token has expired|authentication_error|login expired|please run \/login/i.test(message))kind='authentication';
+  else if(status===429||/usage limit|quota exceeded|rate limit|usage_limit_reached|hit your (?:usage )?limit|(?:5-hour|weekly|daily) limit reached/i.test(message))kind='quota';
   else if(status>=500||['ECONNRESET','ETIMEDOUT','ENOTFOUND','ECONNREFUSED'].includes(error?.code)||/fetch failed|network error|connection (?:reset|closed)|timed out/i.test(message))kind='connection';
   else kind='unknown';
  }

@@ -1,4 +1,4 @@
-import {PROVIDER_IDS,isProviderId,providerHas,providerLabel,providerManifest,usesTransport} from './core/providers.mjs';
+import {PROVIDER_IDS,isAssignableProvider,isProviderId,providerHas,providerLabel,providerManifest,usesTransport} from './core/providers.mjs';
 
 // Provider copy for the screen, derived from the registry (CR-006 S1). The
 // wording depends on the transport: a desktop provider needs the PC, a cloud
@@ -13,7 +13,11 @@ export const SOURCE_TASK_NEEDS_DESKTOP_PAGE='원본 파일이 연결된 작업�
 
 // PRV-06: a provider the person turned off stays listed but cannot be chosen.
 const turnedOff=(provider,capabilities)=>(capabilities?.disabledProviders??[]).includes(lower(provider));
-export function providerOptions(capabilities){return PROVIDER_IDS.map(id=>({value:id,label:providerManifest(id).ui.option+(turnedOff(id,capabilities)?' (사용 중지)':''),...(turnedOff(id,capabilities)?{disabled:true}:{})}));}
+// CR-006 S2: a provider still in its conformance trial is listed but cannot be chosen.
+export function providerOptions(capabilities){return PROVIDER_IDS.map(id=>{
+ const trial=!isAssignableProvider(id),off=turnedOff(id,capabilities);
+ return {value:id,label:providerManifest(id).ui.option+(trial?' (준비 중)':off?' (사용 중지)':''),...(trial||off?{disabled:true}:{})};
+});}
 
 // Availability is any of the server state flags the manifest declares.
 export function providerAvailable(provider,capabilities){
@@ -21,17 +25,21 @@ export function providerAvailable(provider,capabilities){
  const c=capabilities||{};return providerManifest(provider).ui.availability.some(flag=>!!c[flag]);
 }
 
-// desktopNotReady: why a running desktop connector is not taking work (H9-1).
+// desktopNotReady: why a running desktop connector is not taking work (H9-1); desktopProviders:
+// each runner's own state when the connector reports it (CR-006 S2), which then decides.
 const NOT_READY_TEXT={
  codex_login:label=>`데스크톱 연결됨 · 이 PC의 ${label} 로그인이 확인되지 않아 실행을 시작하지 않습니다. 로그인하면 대기 중인 실행이 자동으로 이어지고, 로그인한 뒤에도 계속되면 데스크톱 연결기를 다시 시작하세요.`,
+ claude_login:()=>'데스크톱 연결됨 · 이 PC의 Claude Code 로그인이 확인되지 않아 실행을 시작하지 않습니다. PC의 명령 창에서 claude auth login으로 Claude 구독에 로그인하세요.',
+ claude_cli:()=>'데스크톱 연결됨 · 이 PC에서 Claude Code CLI를 찾지 못했습니다. Claude 데스크톱 앱을 설치하거나 INNO_CLAUDE_CLI에 claude.exe 경로를 지정하세요.',
  run_storage:()=>'데스크톱 연결됨 · 이 PC의 실행 저장 공간 점검에 실패해 실행을 시작하지 않습니다. 데스크톱 작업 화면에서 실행 저장 공간을 정리하세요.',
 };
-export function executorStatusText(provider,capabilities,{desktopOnline=false,desktopNotReady}={}){
+export function executorStatusText(provider,capabilities,{desktopOnline=false,desktopNotReady,desktopProviders}={}){
  const c=capabilities||{},id=lower(provider),label=providerName(provider);
  if(usesTransport(id,'desktop_bridge')){
   if(!providerAvailable(id,c))return `이 서버에 ${label} 실행기가 연결되지 않았습니다.`;
   if(turnedOff(id,c))return `${label} 실행기는 사용 중지 상태입니다. 연결 앱의 AI 실행기에서 다시 켤 수 있습니다.`;
-  if(desktopOnline&&Object.hasOwn(NOT_READY_TEXT,desktopNotReady??''))return NOT_READY_TEXT[desktopNotReady](label);
+  const reason=desktopProviders&&desktopNotReady!=='run_storage'?desktopProviders.notReady?.[id]:desktopNotReady;
+  if(desktopOnline&&Object.hasOwn(NOT_READY_TEXT,reason??''))return NOT_READY_TEXT[reason](label);
   if(c.desktopSources)return `같은 클라우드 작업 · 선택한 원본은 이 PC에서만 ${label}에 전달합니다.`;
   if(c.cloudCodex)return desktopOnline?'데스크톱 연결됨 · 같은 클라우드 작업에 결과를 저장합니다.':'데스크톱 오프라인 · 실행 요청을 대기열에 보관합니다.';
   return `이 서버의 ${label} 구독으로 실행합니다.`;
@@ -53,8 +61,10 @@ export function recoveryConfirmText(provider){
  return providerHas(id,'cancellation','confirmation_required')?`이전 ${providerName(id)} 실행이 종료되었음을 확인했습니다.`:'이전 실행이 종료되었음을 확인했습니다.';
 }
 
+// A provider in its conformance trial gets a card only once it has recorded usage.
 export function usageCardModels(records){
- return PROVIDER_IDS.map(provider=>{
+ const recorded=provider=>(records||[]).some(row=>lower(row?.provider)===provider);
+ return PROVIDER_IDS.filter(provider=>isAssignableProvider(provider)||recorded(provider)).map(provider=>{
   const manifest=providerManifest(provider);
   return {provider,vendor:manifest.vendor,label:manifest.label,usageUrl:manifest.ui.usageUrl,record:(records||[]).find(row=>lower(row?.provider)===provider)||{}};
  });

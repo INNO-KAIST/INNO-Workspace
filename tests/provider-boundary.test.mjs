@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync, readdirSync} from 'node:fs';
+import {PROVIDER_IDS} from '../public/core/providers.mjs';
 
 // CR-006 S1: generic code reaches providers only through public/core/providers.mjs.
 // Every browser, server and Worker source file is scanned, so a new generic file
@@ -8,16 +9,18 @@ import {readFileSync, readdirSync} from 'node:fs';
 // below; their literal count is pinned so a new literal there is a reviewed change.
 const ROOTS = ['public', 'server', 'worker'];
 const SOURCE = /\.(mjs|js|html)$/;
-const LITERAL = /(['"`])(codex|claude)\1/g;
+// Every registered provider id (CR-006 S2 added 'claude-code'), longer ids first.
+const LITERAL = new RegExp(`(['"\`])(${[...PROVIDER_IDS].sort((a, b) => b.length - a.length).join('|')})\\1`, 'g');
 const ADAPTER_LITERALS = {
-  'public/core/providers.mjs': 2, // the manifests themselves
+  'public/core/providers.mjs': 3, // the manifests themselves
   'public/core/claude-routing.mjs': 3, // Claude adapter: routing self-report prompt and its role models
-  'server/runners.mjs': 9, // Codex CLI runner, its handoff prompt and the local Claude Routine runner
+  'server/runners.mjs': 10, // Codex CLI runner (and its provider id for the connector runner table), its handoff prompt and the local Claude Routine runner
   'server/model-routing.mjs': 1, // spawns the Codex CLI app-server for the account catalog
   'server/codex-command.mjs': 1, // resolves the Codex CLI executable bundled with the desktop app
   'worker/claude-routine.mjs': 3, // Claude cloud Routine adapter
   'worker/model-discovery.mjs': 1, // vendor documentation source key, not an execution provider
   'public/core/routine-model.mjs': 1, // Claude Routine model recommendation (PRV-05): its vendor key
+  'server/claude-code-runner.mjs': 3, // Claude Code CLI runner (CR-006 S2): its provider id, the CLI executable name and the desktop app's bundled CLI folder
 };
 
 function sources() {
