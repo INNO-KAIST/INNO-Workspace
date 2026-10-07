@@ -1,4 +1,5 @@
 import {sanitizeResumeState} from '../public/core/context-resume.mjs';
+import {recordMatchesRequest} from '../public/core/routine-model.mjs';
 import {creationId,creationPayload,digestText} from '../public/core/create-requests.mjs';
 import {validateOfficeArtifact} from '../public/core/office-container.mjs';
 import {sanitizeArtifactChecks} from '../public/core/artifact-checks.mjs';
@@ -84,6 +85,10 @@ class D1NotFoundError extends Error {
 
 // Actions that only change state or filing stay allowed for a task above the growth limit.
 const growthOf=input=>['pause','resume','cancel','rename','move'].includes(input?.action)?undefined:'grow';
+
+// PRV-05: the id of the pending Routine model request, NULL when there is none or the stored
+// value is not valid JSON (so a corrupt row never blocks a new request).
+const PENDING_ID="CASE WHEN json_valid(value) THEN CASE WHEN json_extract(value,'$.status')='pending' THEN json_extract(value,'$.id') END END";
 
 export class D1TaskStore {
   constructor(database, options = {}) {
@@ -499,6 +504,47 @@ export class D1TaskStore {
     return {settings,raw:row?row.value:null};
   }
   async providerSettings(){return (await this.providerSettingsRow()).settings;}
+
+  // PRV-05: the Claude Routine model as last recorded by a Claude Code session, and a person's
+  // pending request to change it. Plain metadata rows; INNO never changes the Routine itself.
+  async metadataJson(key){
+    const row=await this.db.prepare('SELECT value FROM metadata WHERE key=?1').bind(key).first();
+    try{const value=row?JSON.parse(row.value):null;return value&&typeof value==='object'?value:null;}catch{return null;}
+  }
+  async putMetadataJson(key,value){
+    await this.db.prepare('INSERT INTO metadata (key,value) VALUES (?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value').bind(key,JSON.stringify(value)).run();
+  }
+  async routineModelState(){
+    return {record:await this.metadataJson('routine_model'),request:await this.metadataJson('routine_model_request')};
+  }
+  // Applying a request writes the record and marks the request applied in one transaction, and
+  // only while that request is still pending and the model is the one it asked for.
+  async recordRoutineModel(record,appliedRequestId){
+    if(!appliedRequestId){await this.putMetadataJson('routine_model',record);return {record,request:await this.metadataJson('routine_model_request')};}
+    const request=await this.metadataJson('routine_model_request');
+    if(request?.id!==appliedRequestId||request.status!=='pending')throw new ConflictError('That Routine model request is no longer pending');
+    if(!recordMatchesRequest(record,request))throw new ConflictError('The recorded model is not the requested one; record it without appliedRequestId or make a new request');
+    const applied={...request,status:'applied',appliedAt:record.recordedAt,appliedModel:record.model};
+    const [,update]=await this.db.batch([
+      this.db.prepare(`INSERT INTO metadata (key,value) SELECT 'routine_model',?1 WHERE EXISTS (SELECT 1 FROM metadata WHERE key='routine_model_request' AND ${PENDING_ID}=?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value`).bind(JSON.stringify(record),appliedRequestId),
+      this.db.prepare(`UPDATE metadata SET value=?1 WHERE key='routine_model_request' AND ${PENDING_ID}=?2`).bind(JSON.stringify(applied),appliedRequestId),
+    ]);
+    if(Number(update?.meta?.changes??0)!==1)throw new ConflictError('That Routine model request is no longer pending');
+    return {record,request:applied};
+  }
+  // One pending request at a time: a new one replaces only a request that is no longer pending.
+  async requestRoutineModel(request){
+    const result=await this.db.prepare(`INSERT INTO metadata (key,value) VALUES ('routine_model_request',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE ${PENDING_ID.replaceAll('value','metadata.value')} IS NULL`).bind(JSON.stringify(request)).run();
+    if(Number(result?.meta?.changes??0)!==1)throw new ConflictError('A Routine model request is already pending; withdraw it first');
+    return {request};
+  }
+  async withdrawRoutineModelRequest(now,id){
+    const request=await this.metadataJson('routine_model_request');
+    if(request?.status!=='pending'||(id&&request.id!==id))return {request};
+    const withdrawn={...request,status:'withdrawn',withdrawnAt:now};
+    const result=await this.db.prepare(`UPDATE metadata SET value=?1 WHERE key='routine_model_request' AND ${PENDING_ID}=?2`).bind(JSON.stringify(withdrawn),request.id).run();
+    return {request:Number(result?.meta?.changes??0)===1?withdrawn:await this.metadataJson('routine_model_request')};
+  }
   async updateProviderSettings(input){
     const {settings:current,raw}=await this.providerSettingsRow(),next=nextProviderSettings(current,input),text=JSON.stringify(next);
     const result=raw===null

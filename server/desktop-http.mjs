@@ -114,7 +114,8 @@ export function createDesktopServer({token,publicDir,request,bridge,localRecords
      const binding=await freshBinding(initial);
      return json(res,200,await request(p,input,{workspaceId:binding.workspaceId,deliveryReceiptVersion:1}));
     }
-    if(req.method==='GET'&&(p==='/api/model-discovery'||p==='/api/model-policy-retention'))return json(res,200,await request(p));
+    if(req.method==='GET'&&(p==='/api/model-discovery'||p==='/api/model-policy-retention'||p==='/api/routine-model'))return json(res,200,await request(p));
+    if(req.method==='POST'&&(p==='/api/routine-model/request'||p==='/api/routine-model/request/withdraw'))return json(res,200,await request(p,await body(req)));
     if(runStorage&&req.method==='GET'&&p==='/api/run-storage'){const view=await bridge.maintenance(async()=>{const state=await request('/api/state');return runStorage.list(state.tasks);});return json(res,200,{...view,desktop:bridge.status()});}
     if(runStorage&&req.method==='POST'&&p==='/api/run-storage/remove'){const input=await body(req);if(input.confirm!==true)return json(res,400,{error:'삭제 확인이 필요합니다.'});const result=await bridge.maintenance(async()=>{const state=await request('/api/state');return runStorage.remove(input.runs,state.tasks);});return json(res,200,result);}
     if(localRecords&&req.method==='GET'&&p==='/api/local-records')return json(res,200,await localRecords.list(url.searchParams.get('cursor')||''));

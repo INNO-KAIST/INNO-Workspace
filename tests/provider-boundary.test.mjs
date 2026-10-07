@@ -17,6 +17,7 @@ const ADAPTER_LITERALS = {
   'server/codex-command.mjs': 1, // resolves the Codex CLI executable bundled with the desktop app
   'worker/claude-routine.mjs': 3, // Claude cloud Routine adapter
   'worker/model-discovery.mjs': 1, // vendor documentation source key, not an execution provider
+  'public/core/routine-model.mjs': 1, // Claude Routine model recommendation (PRV-05): its vendor key
 };
 
 function sources() {

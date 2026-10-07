@@ -13,6 +13,7 @@ import {countContextRead,sweepContextReads,withContextReads} from './context-rea
 import {settleBoundedExecution,sweepBoundedSettlements} from './evaluation-settlement.mjs';
 import {ModelCatalog} from './model-catalog.mjs';
 import {OfficialModelDiscovery} from './model-discovery.mjs';
+import {ROUTINE_PROVIDER,isRoutineAlias,routineModelRecommendation,sanitizeRoutineModelRecord} from '../public/core/routine-model.mjs';
 import {Delegations} from './delegations.mjs';
 import {createOrchestration} from './orchestration.mjs';
 import {validateReviewReport} from '../public/core/delegation.mjs';
@@ -224,6 +225,27 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
         const projectMatch=pathname.match(/^\/api\/projects\/([^/]+)$/);
         if(request.method==='POST'&&projectMatch)return responseJson(await store.changeProject(decodeURIComponent(projectMatch[1]),await body(request)),200,headers);
         if(request.method==='POST'&&pathname==='/api/providers/settings')return responseJson({settings:await store.updateProviderSettings(await body(request))},200,headers);
+        // PRV-05: Routine model recommendation, change requests, and the recorded model.
+        if(pathname==='/api/routine-model'&&request.method==='GET'){
+          const state=await store.routineModelState(),now=Date.parse(store.now());
+          return responseJson({...state,recommendation:routineModelRecommendation({record:state.record,discovery:await discovery.read(),tasks:await store.listTasks(),now})},200,headers);
+        }
+        if(request.method==='POST'&&pathname==='/api/routine-model/record'){
+          const input=await body(request);let record;
+          try{record=sanitizeRoutineModelRecord(input,Date.parse(store.now()));}catch(error){throw new ValidationError(error.message);}
+          return responseJson(await store.recordRoutineModel(record,typeof input?.appliedRequestId==='string'?input.appliedRequestId:null),200,headers);
+        }
+        if(request.method==='POST'&&pathname==='/api/routine-model/request'){
+          const input=await body(request),alias=input?.alias,official=await discovery.read();
+          const candidate=isRoutineAlias(alias)?(official.candidates??[]).find(c=>c.provider===ROUTINE_PROVIDER&&c.id===alias):null;
+          if(!candidate)throw new ValidationError('Only a Claude alias from the official model documentation can be requested');
+          if((official.sources??[]).find(s=>s.provider===ROUTINE_PROVIDER)?.status!=='fresh')throw new ConflictError('The official model documentation is out of date; try again after it is checked');
+          return responseJson(await store.requestRoutineModel({id:crypto.randomUUID(),alias,target:candidate.documentedTarget??null,status:'pending',requestedAt:Date.parse(store.now())}),200,headers);
+        }
+        if(request.method==='POST'&&pathname==='/api/routine-model/request/withdraw'){
+          const input=await body(request);
+          return responseJson(await store.withdrawRoutineModelRequest(Date.parse(store.now()),typeof input?.id==='string'?input.id:null),200,headers);
+        }
         if(request.method==='POST'&&pathname==='/api/desktop/presence')return responseJson({desktop:await bridge.reportNotReady(await body(request))},200,headers);
         if(request.method==='POST'&&bridgeMatch){
           const id=decodeURIComponent(bridgeMatch[1]), input=await body(request);

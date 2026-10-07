@@ -1,7 +1,7 @@
 import {prepareTaskMaterials} from './core/source-materials.mjs';
 import {taskNearLimit} from './core/task-size.mjs';
 import {formatClock,formatShortDateTime} from './core/time-format.mjs';
-import {providerCards,renderProviderCards} from './provider-management-ui.mjs';
+import {providerCards,renderProviderCards,renderRoutineModel,routineModelView} from './provider-management-ui.mjs?v=routine-model-1';
 import {NO_PROJECT,normalizeProjectFilter,taskInProjectFilter,projectListModel,creationProject,renderProjectList} from './project-ui.mjs';
 import {projectForTask} from './core/projects.mjs';
 import {artifactCheckSummary,sanitizeArtifactChecks} from './core/artifact-checks.mjs';
@@ -194,6 +194,7 @@ function render(){renderList();renderMessages();renderAttachments();renderSource
 let providerArmed=null,providerRendered='',providerFocus=null;
 const armedProvider=()=>providerArmed&&Date.now()-providerArmed.at<20_000?providerArmed.id:null;
 function renderProviderManagement(){
+ renderRoutineModelPanel();
  const root=$('provider-grid');if(!root)return;
  const capabilities=state().capabilities||{},cards=providerCards({tasks:state().tasks,capabilities,desktop:state().desktop});
  const canToggle=!!client?.remote&&Number.isSafeInteger(capabilities.providerSettingsVersion);
@@ -209,6 +210,29 @@ function renderProviderManagement(){
   await client.request('/api/providers/settings',{disabled,expectedVersion:latest.providerSettingsVersion});
   await refresh();toast(card.enabled?`${card.label} 실행기를 사용 중지했습니다.`:`${card.label} 실행기를 다시 사용합니다.`);
  })});
+}
+// PRV-05: the Claude Routine model recommendation, read when the 연결 앱 page shows (again
+// after five minutes) and after a request; it changes rarely, so the 5-second refresh does not poll it.
+let routineModel=null,routineModelAt=0,routineModelLoading=false,routineModelRendered='';
+async function loadRoutineModel(){
+ if(routineModelLoading||!client?.remote)return;routineModelLoading=true;
+ let failed=false;
+ try{routineModel=await client.request('/api/routine-model');}catch{routineModel={error:true};failed=true;}
+ // A failed read is tried again after 30 seconds instead of five minutes.
+ finally{routineModelLoading=false;routineModelAt=failed?Date.now()-270_000:Date.now();routineModelRendered='';}
+ renderRoutineModelPanel();
+}
+function renderRoutineModelPanel(){
+ const root=$('routine-model');if(!root)return;
+ if(!client?.remote){root.replaceChildren();routineModelRendered='';return;}
+ if(view==='integrations'&&Date.now()-routineModelAt>300_000)void loadRoutineModel();
+ if(!routineModel)return;
+ const shown=routineModel.error?null:routineModelView(routineModel),key=JSON.stringify([shown,busy]);
+ if(key===routineModelRendered)return;routineModelRendered=key;
+ renderRoutineModel(root,shown,{busy,
+  onRequest:option=>guarded(async()=>{const {request}=await client.request('/api/routine-model/request',{alias:option.alias});routineModel={...routineModel,request};routineModelRendered='';renderRoutineModelPanel();toast('Routine 모델 교체를 요청했습니다. Claude Code 세션에서 확인한 뒤 반영합니다.');}),
+  onWithdraw:()=>guarded(async()=>{const {request}=await client.request('/api/routine-model/request/withdraw',{id:routineModel.request?.id});routineModel={...routineModel,request};routineModelRendered='';renderRoutineModelPanel();toast('Routine 모델 교체 요청을 취소했습니다.');}),
+ });
 }
 async function refresh(){if(refreshing||!client)return;refreshing=true;const viewKey=()=>JSON.stringify([state().revision,state().capabilities,state().desktop?.online,state().desktop?.notReady,state().localDesktop]);const before=viewKey();try{await client.refresh();syncStatus();if(before!==viewKey())render();else {renderControls();renderSourceExecution();}if(!busy)void tickSource();}catch(e){syncStatus(e);}finally{refreshing=false;}}
 async function act(action,extra={}){const t=current();if(!t)return;await client.action(t.id,{action,expectedVersion:t.version,...extra});syncStatus();render();}

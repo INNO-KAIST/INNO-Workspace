@@ -79,3 +79,45 @@ export function renderProviderCards(root,cards,{onToggle,busy=false,canToggle=tr
  const target=focusId??focused;
  if(target)[...root.querySelectorAll('button[data-provider]')].find(button=>button.dataset.provider===target&&!button.disabled)?.focus();
 }
+
+// PRV-05: the Claude Routine model panel. The recorded model, the recommendation and its
+// reasons, the listed options (only a newer model of the same family is marked 추천) and a
+// pending change request, which a Claude Code session confirms and applies to the Routine.
+const ROUTINE_STATUS={unknown:'판단 불가',keep:'유지 추천',candidate:'교체 후보 있음'};
+export function routineModelView({record,recommendation,request}={}){
+ const runs=recommendation?.runs;
+ return {
+  current:record?`현재 Routine 모델: ${record.label} (${record.model}) · ${formatShortDateTime(record.recordedAt)} 기록`:'현재 Routine 모델: 기록 없음',
+  status:ROUTINE_STATUS[recommendation?.status]??'판단 불가',
+  reasons:recommendation?.reasons??[],
+  runs:runs?`최근 30일 Claude 실행: 완료 ${runs.completed}건 · 끝나지 못함 ${runs.failed}건`:null,
+  options:(recommendation?.options??[]).map(option=>({alias:option.alias,recommended:option.recommended,note:option.note,label:`${option.target?`${option.target} (${option.alias})`:option.alias}${option.recommended?' · 추천':''}`})),
+  request:request?.status==='pending'?`교체 요청됨: ${request.target??request.alias} — Claude Code 세션이 확인한 뒤 Routine에 반영합니다.`:null,
+ };
+}
+
+export function renderRoutineModel(root,view,{onRequest,onWithdraw,busy=false}={}){
+ const heading=document.createElement('h2');heading.className='section-label';heading.textContent='Claude Routine 모델';
+ if(!view){const note=document.createElement('p');note.className='section-note';note.textContent='추천 정보를 불러오지 못했습니다. 연결을 확인한 뒤 다시 열어 주세요.';root.replaceChildren(heading,note);return;}
+ const current=document.createElement('p');current.className='routine-current';current.textContent=view.current;
+ const status=document.createElement('p');status.className='provider-status';status.textContent=view.status;
+ const reasons=document.createElement('ul');reasons.className='provider-capabilities';
+ for(const text of [...view.reasons,...(view.runs?[view.runs]:[])]){const item=document.createElement('li');item.textContent=text;reasons.append(item);}
+ const options=document.createElement('ul');options.className='routine-options';
+ for(const option of view.options){
+  const item=document.createElement('li');
+  const label=document.createElement('strong');label.textContent=option.label;
+  const note=document.createElement('span');note.className='provider-hint';note.textContent=option.note;
+  const button=document.createElement('button');button.type='button';button.className='secondary-button';button.textContent='교체 요청';
+  button.disabled=busy||Boolean(view.request);button.onclick=()=>onRequest?.(option);
+  item.append(label,note,button);options.append(item);
+ }
+ const parts=[heading,current,status,reasons,...(view.options.length?[options]:[])];
+ if(view.request){
+  const pending=document.createElement('p');pending.className='provider-confirm';pending.textContent=view.request;
+  const withdraw=document.createElement('button');withdraw.type='button';withdraw.className='text-button';withdraw.textContent='요청 취소';withdraw.disabled=busy;withdraw.onclick=()=>onWithdraw?.();
+  parts.push(pending,withdraw);
+ }
+ const note=document.createElement('p');note.className='section-note';note.textContent='INNO는 Routine 설정을 직접 바꾸지 않습니다. 근거를 보여 주고 요청을 기록하며, 실제 교체는 Claude Code 세션이 확인을 받은 뒤 반영합니다.';
+ root.replaceChildren(...parts,note);
+}

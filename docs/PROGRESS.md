@@ -1617,3 +1617,27 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 시험: legacy-office 7건, legacy-office-bounds 6건(빈 셀 표, 공유 문자열·시트 반복 3초 이내, 차트 낀 시트, 겹친 슬라이드, 빠른 저장·암호 PPT, SpreadsheetML·EUC-KR HTML·바이너리 거절). 시험용 CFB 작성기는 tests/helpers/cfb.mjs로 공용화.
 - 검증: 전체 1573건 중 1572 pass/0 fail/기존 1 skip, git diff --check.
 - 화면 판: app.mjs?v=legacy-20261007, extract.mjs?v=formats-2(모든 가져오기 같은 주소), source-views ?v 갱신, 서비스 워커 inno-shell-v7. 바뀐 것은 브라우저 코드뿐(연결기·Worker 변경 없음).
+- 운영 반영(사용자 승인): 1ce8922 push → Pages 게시(legacy-20261007, legacy-office.mjs 200) → 연결기 프로그램 파일 변경이 없음을 확인하고 연결기를 끄지 않은 채 메인 체크아웃 f78989b→1ce8922 fast-forward(사용자 승인: "종료 없이"), 127.0.0.1:4175가 새 판 제공. Worker 배포 없음. CR-009(1~4단계) 완료.
+
+### 2026-10-07 PRV-05 Claude Routine 모델 근거 기반 추천 (커밋 전, 운영 반영 전)
+- 요구: Routine 마스터 모델(현재 Opus 5.5)도 근거에 따라 최신화. INNO에는 Routine 설정 권한이 없으므로 근거와 함께 추천하고, 승인 시 Claude Code 세션(RemoteTrigger)이 갱신.
+- 근거와 판단(public/core/routine-model.mjs, CR-003 MOD-03·04를 따름):
+  - 근거는 세 가지다. Claude Code 세션이 기록한 현재 모델, 공식 모델 문서의 별칭·대상(후보 근거일 뿐, 이미 수집 중인 /api/model-discovery), 최근 30일 Claude 실행 결과.
+  - 기록이 없으면 판단 불가다. 같은 계열 별칭(opus)의 문서상 대상이 더 새 판이면 "교체 후보 있음"(추천), 같으면 "유지 추천"이다. 다른 계열(sonnet·fable·haiku)은 근거가 없어 목록에만 보이고 추천하지 않는다.
+  - 공식 문서 확인이 만료·실패하면 새 후보를 판단하지 않는다. 실패가 많아도 모델 교체 근거로 쓰지 않고 연결·한도 확인을 안내한다.
+- Worker: metadata routine_model·routine_model_request. GET /api/routine-model(기록·요청·추천), POST /api/routine-model/request(공식 Claude 별칭만), /request/withdraw, /record(Claude Code 세션이 바꾼 뒤 기록, appliedRequestId로 요청을 반영됨으로 표시).
+- 연결기 데스크톱 화면은 조회·요청·취소만 전달하고 기록(record)은 전달하지 않는다.
+- 화면: 연결 앱의 AI 실행기 아래 "Claude Routine 모델"에 현재 모델·판단·근거·최근 실행·후보(같은 계열 새 판만 "추천")·교체 요청/요청 취소·"INNO는 Routine을 직접 바꾸지 않음" 안내. 페이지를 열 때(5분 지나면 다시)와 요청 뒤에만 읽는다.
+- 운영 절차: docs/PROVIDERS.md 6절. 대기 요청 확인 → 채팅으로 재확인 → RemoteTrigger 변경 → /api/routine-model/record → 다음 Claude 실행 확인.
+- 확인:
+  - 운영 공식 후보(2026-10-06): opus→Opus 5.5(현재와 같음), sonnet→Sonnet 5.5, fable·haiku는 문서상 대상 미기재. 따라서 현재는 "유지 추천"이 맞다.
+  - 로컬 Worker(wrangler dev --local)에 가상의 Opus 5.6 후보를 넣어 화면에서 "교체 후보 있음"·교체 요청·요청 취소를 확인했다. 휴대폰 폭 375px에서 넘침이 없고 콘솔 오류도 없다.
+  - 시험용 토큰·시드·launch.json은 정리했다.
+- 제공자 경계 시험: Claude 전용 모듈로 등록(문자열 1개를 상수로 모음).
+- 독립 검토(inno-opus): P1 없음. P2 4건을 모두 반영했다.
+  - 기록이 요청한 모델과 맞을 때만 "반영됨"으로 표시하고, 다르면 409로 아무것도 쓰지 않는다.
+  - 요청·취소·기록은 조건부 한 문장(기록과 반영은 한 묶음)으로 처리해 서로 덮어쓰지 않는다. 대기 요청이 있으면 새 요청은 409다.
+  - 공식 문서가 더 오래된 판이거나 "Opus 5"처럼 판이 없으면 "같습니다"라고 말하지 않는다.
+  - 조회 실패는 30초 뒤 다시 시도한다.
+- P3도 반영했다. 해석할 수 없는 모델 ID는 거부하고, 계열은 레이블이 아니라 ID에서만 읽는다. 같은 계열 후보는 가장 새 판 하나만 추천한다. 공식 문서가 오래되면 요청을 받지 않는다. 날짜는 한국 시간으로 표시하고, 깨진 요청 행이 새 요청을 막지 않는다.
+- 시험: routine-model 9건. 전체 1582건 중 1581 pass/0 fail/기존 1 skip, git diff --check, Wrangler dry-run.

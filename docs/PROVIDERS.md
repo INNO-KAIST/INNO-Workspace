@@ -37,3 +37,18 @@ provider는 task JSON 본문과 `usage` 테이블 키의 일반 문자열이다.
 - 일부 오류 문구(예: 'Only remote Claude executions require fire confirmation')는 기존 문구 유지를 위해 제공자 이름을 담고 있다.
 - 적합성 스위트의 Codex 하네스는 실제 데스크톱 연결기(`server/desktop-bridge.mjs`, 파일 outbox, 작업공간 바인딩)를 거친다. 운영 기준인 receipt gate 0으로 전체를 검증하고, 아직 운영에서 켜지 않은 receipt v1로도 실행한다. v1에서 사용자가 실행 중인 데스크톱 작업을 멈추면 중단된 실행의 실패 기록이 거절된 채 outbox에 남아 명시적 로컬 폐기 전까지 데스크톱이 새 작업을 시작하지 못한다. 이 항목은 H4(receipt 운영 활성화)에서 해결하며 스위트에는 todo로 표시된다.
 - 로컬 서버 모드(`server/index.mjs`, 데스크톱 연결기 없이 이 PC 서버가 직접 실행)와 데스크톱의 원문 문맥 조회(`contextAccess`)는 스위트 범위 밖이며 기존 개별 시험이 검증한다.
+
+## 6. Claude Routine 모델 최신화 (PRV-05)
+
+INNO 서비스에는 클라우드 Routine 설정 권한이 없다. 그래서 서비스는 근거를 모아 추천하고 사람의 교체 요청을 기록할 뿐이며, Routine 변경은 Claude Code 세션이 한다.
+
+- 근거: Worker `GET /api/routine-model`이 세 가지를 함께 본다. Claude Code 세션이 기록한 현재 Routine 모델(`routine_model`), 공식 모델 문서의 별칭과 대상 모델(`/api/model-discovery`, 후보 근거일 뿐 계정 가용성 아님), 최근 30일 Claude 실행 결과.
+- 판단(public/core/routine-model.mjs): 기록이 없으면 `unknown`이다. 공식 문서의 같은 계열 별칭(예: opus)이 더 새 판을 가리키면 `candidate`(추천)이고, 같으면 `keep`이다. 다른 계열(sonnet·fable 등)은 목록에만 보이고 추천하지 않는다(품질·가용성 근거 없음, MOD-03·04). 공식 문서 확인이 만료·실패하면 새 후보를 판단하지 않는다. 실패가 많아도 모델 교체 근거로 쓰지 않고 연결·한도 확인을 안내한다.
+- 요청: 연결 앱 화면의 "Claude Routine 모델"에서 공식 별칭 하나를 골라 교체를 요청한다(`POST /api/routine-model/request`). 요청 취소는 `POST /api/routine-model/request/withdraw`.
+- 반영(Claude Code 세션):
+  1. `GET /api/routine-model`로 대기 중인 요청을 확인한다.
+  2. 사용자에게 채팅으로 다시 확인받는다. 화면 요청만으로는 바꾸지 않는다.
+  3. RemoteTrigger로 Routine(trig_01JqQA1ENd9B2yKpeZVLvx3J)의 모델을 바꾼다.
+  4. `POST /api/routine-model/record {model, label, appliedRequestId}`로 기록한다. 이 경로는 Worker에만 있고 데스크톱 화면 프록시에는 없다.
+  5. 다음 Claude 실행이 정상으로 끝나는지 확인한다.
+- 처음 기록: 2026-10-05 Routine 재생성 때 모델 claude-opus-5-5(Opus 5.5)였다(PROGRESS 기록).
