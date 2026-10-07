@@ -13,6 +13,8 @@ import {countContextRead,sweepContextReads,withContextReads} from './context-rea
 import {settleBoundedExecution,sweepBoundedSettlements} from './evaluation-settlement.mjs';
 import {ModelCatalog} from './model-catalog.mjs';
 import {OfficialModelDiscovery} from './model-discovery.mjs';
+import {PluginDiscovery} from './plugin-discovery.mjs';
+import {pluginEvidence} from '../public/core/plugin-evidence.mjs';
 import {ROUTINE_PROVIDER,isRoutineAlias,routineModelRecommendation,sanitizeRoutineModelRecord} from '../public/core/routine-model.mjs';
 import {Delegations} from './delegations.mjs';
 import {createOrchestration} from './orchestration.mjs';
@@ -69,7 +71,7 @@ async function body(request) {
 export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,deliveryReceiptVersion=0} = {}) {
   function runtime(env,context={}){
     const store=new D1TaskStore(env.DB),bridge=new CloudBridge(store,{sourceDelegationVersion});
-    const catalog=new ModelCatalog(store),discovery=new OfficialModelDiscovery(store,{fetchFn});
+    const catalog=new ModelCatalog(store),discovery=new OfficialModelDiscovery(store,{fetchFn}),pluginDiscovery=new PluginDiscovery(store,{fetchFn});
     const plugins=createPluginRegistry(store,{fetchFn}),adapterFor=createRemoteAdapters({fetchFn,env,sourceDelegationVersion,catalog,plugins,projects:{resolve:task=>store.projectForTask(task)}});
     // Desktop claims carry the verified text of the task's still-approved plugins.
     const hydrate=async claim=>{
@@ -96,13 +98,14 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
       if(context.waitUntil){context.waitUntil(recovery);context.waitUntil(observation);context.waitUntil(settlement);}else await Promise.all([recovery,observation,settlement]);
     };
     const delegate=async(taskId,input,options)=>orchestration.allocate(taskId,input,options);
-    return {store,bridge,orchestration,hydrate,adapterFor,remoteFlags,plugins,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement};
+    return {store,bridge,orchestration,hydrate,adapterFor,remoteFlags,plugins,handoff,afterComplete,catalog,discovery,pluginDiscovery,delegate,reviewObservations,policyRetention,policyManagement};
   }
   return {
     async scheduled(event,env,context={}) {
-      const {store,orchestration,discovery,reviewObservations,policyRetention}=runtime(env,context);
+      const {store,orchestration,discovery,pluginDiscovery,reviewObservations,policyRetention}=runtime(env,context);
       // CR-003 MOD-02: an official-only, bounded daily refresh runs independently of orchestration.
-      const refresh=discovery.refresh().catch(()=>null);
+      // CR-007 S4 (PLG-05): the allowed plugin catalogs are read on the same daily schedule.
+      const refresh=Promise.all([discovery.refresh().catch(()=>null),pluginDiscovery.refresh().catch(()=>null)]);
       const drain=orchestration.drain();
       const observations=reviewObservations.drain().catch(()=>null);
       const retention=policyRetention.cleanupBatch().catch(()=>null);
@@ -131,7 +134,7 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
         if (pathname.startsWith('/api/') || pathname === '/mcp') {
           if (!authorized(request, env)) return responseJson({error: 'unauthorized'}, 401, {...headers, 'www-authenticate': 'Bearer'});
         }
-        const {store,bridge,orchestration,hydrate,adapterFor,remoteFlags,plugins,handoff,afterComplete,catalog,discovery,delegate,reviewObservations,policyRetention,policyManagement}=runtime(env,context);
+        const {store,bridge,orchestration,hydrate,adapterFor,remoteFlags,plugins,handoff,afterComplete,catalog,discovery,pluginDiscovery,delegate,reviewObservations,policyRetention,policyManagement}=runtime(env,context);
         const capabilities = {desktopDeliveryRecovery:deliveryReceiptVersion===1,sourceDelegationVersion:sourceDelegationVersion===1?1:0,modelPolicyManagement:true,modelDiagnostics:true,reviewObservationRecovery:true,cloudCodex: true, localCodex: false, ...remoteFlags, cloud: true, connected: true, pluginRegistry: true, projects: true};
         const bridgeMatch=pathname.match(/^\/api\/desktop\/([^/]+)\/(start|renew|complete|fail|ack|reservations|discard|legacy-status)$/);
         const recoveryRoute=bridgeMatch&&['reservations','discard','legacy-status'].includes(bridgeMatch[2]);
@@ -186,6 +189,10 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
           return responseJson({task: await store.createTask(await body(request))}, 201, headers);
         }
         if (request.method === 'GET' && pathname === '/api/plugins') return responseJson({plugins: await plugins.list()}, 200, headers);
+        // CR-007 S4: per-plugin evidence from normal work (with removed plugins' kept evidence),
+        // and recommendation candidates from the allowed catalogs. Neither changes anything.
+        if (request.method === 'GET' && pathname === '/api/plugin-evidence') return responseJson({plugins: pluginEvidence({plugins: await plugins.list(), tasks: await store.listTasks(), now: Date.parse(store.now())}), archive: await plugins.archive()}, 200, headers);
+        if (request.method === 'GET' && pathname === '/api/plugin-recommendations') return responseJson(await pluginDiscovery.read(new Set((await plugins.list()).map(plugin => plugin.id))), 200, headers);
         const pluginMatch = pathname.match(/^\/api\/plugins\/(import|approve|disable|remove)$/);
         if (request.method === 'POST' && pluginMatch) return responseJson(await plugins[pluginMatch[1]](await body(request)), 200, headers);
         const pluginSelectionMatch = pathname.match(/^\/api\/tasks\/([^/]+)\/plugins$/);

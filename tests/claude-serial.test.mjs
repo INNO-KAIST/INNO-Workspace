@@ -12,7 +12,8 @@ const assign=(provider,role)=>({role,provider,requestedModel:provider==='codex'?
 const owner=c=>({executionId:c.executionId,generation:c.generation});
 async function fixture(t,respond=()=>Response.json({claude_code_session_id:'s',claude_code_session_url:'https://claude.ai/code/s'})){
  const db=new TestD1();t.after(()=>db.close());let fires=0;
- const worker=createWorker({fetchFn:async(url,init)=>{if(!String(url).includes('anthropic'))return new Response('unavailable',{status:503});fires++;return respond(fires);}});
+ // Only the Routine endpoint counts as a fire; catalog reads (api.github.com, raw.githubusercontent.com) do not.
+ const worker=createWorker({fetchFn:async(url,init)=>{if(new URL(String(url)).hostname!=='api.anthropic.com')return new Response('unavailable',{status:503});fires++;return respond(fires);}});
  const env={DB:db,ACCESS_TOKEN:'test-claude-serial-01234567890123456789',CLAUDE_ROUTINE_URL:'https://api.anthropic.com/v1/fire',CLAUDE_ROUTINE_TOKEN:'mock'};
  const post=async(p,input)=>{const r=await worker.fetch(new Request('https://inno.example'+p,{method:'POST',headers:{authorization:'Bearer '+env.ACCESS_TOKEN,'content-type':'application/json'},body:JSON.stringify(input)}),env);return {status:r.status,...await r.json()};};
  const mcp=async(name,args)=>post('/mcp',{jsonrpc:'2.0',id:1,method:'tools/call',executionCapability:await executionCapability(env.ACCESS_TOKEN,{task:{id:args.taskId},executionId:args.executionId,generation:args.generation}),params:{name,arguments:args}});

@@ -3,6 +3,14 @@ import {boundedContextDelivery} from './context-delivery.mjs';
 const count=v=>Number.isSafeInteger(v)&&v>=0?v:null;
 // The execution's own context delivery record, kept only when it validates.
 const delivered=value=>{try{return boundedContextDelivery(value)??undefined;}catch{return undefined;}};
+// CR-007 S4: the plugins this execution received (id and content hash), at most three.
+const PLUGIN_ENTRY=/^(anthropics|openai)\/[a-z0-9][a-z0-9-]{0,63}$/,PLUGIN_HASH=/^[a-f0-9]{64}$/;
+const pluginsOf=value=>Array.isArray(value)&&value.length&&value.length<=3&&value.every(p=>PLUGIN_ENTRY.test(p?.id)&&PLUGIN_HASH.test(p?.contentHash))?value.map(({id,contentHash})=>({id,contentHash})):undefined;
+// The failure category of a failed run and the task type when it ran, so evidence can leave out
+// runs that never started and is not moved by a later type change.
+const failureKindOf=value=>typeof value==='string'&&/^[a-z_]{1,32}$/.test(value)?value:undefined;
+export const usageTaskType=value=>(typeof value==='string'&&value?value:'general').slice(0,64);
+const taskTypeOf=value=>typeof value==='string'&&value?value.slice(0,64):undefined;
 export function usageCounts(value){
  const inputTokens=count(value?.inputTokens),outputTokens=count(value?.outputTokens),cached=count(value?.cachedInputTokens);
  const validCache=cached!==null&&(inputTokens===null||cached<=inputTokens);
@@ -25,13 +33,13 @@ function records(owner,{trustedMetadata=true}={}){
  return raw.filter(u=>u&&isProviderId(u.provider)&&typeof u.executionId==='string'&&u.executionId.length<=200&&Number.isSafeInteger(u.generation)&&u.generation>=1).slice(-100).map(u=>{
   const trusted=trustedMetadata&&u.phaseSource==='server_state';
   const contextDelivery=trusted?delivered(u.contextDelivery):undefined;
-  return {...usageCounts(u)||{inputTokens:null,outputTokens:null},provider:u.provider,executionId:u.executionId,generation:u.generation,completedAt:String(u.completedAt||'').slice(0,40),source:'executor_report',phase:trusted&&PHASES.has(u.phase)?u.phase:'unknown',transition:trusted&&TRANSITIONS.has(u.transition)?u.transition:'unknown',wallElapsedMs:trusted&&Number.isSafeInteger(u.wallElapsedMs)&&u.wallElapsedMs>=0?u.wallElapsedMs:null,requestedModel:trusted?model(u.requestedModel):null,...(trusted?{phaseSource:'server_state'}:{}),...(contextDelivery?{contextDelivery}:{})};
+  return {...usageCounts(u)||{inputTokens:null,outputTokens:null},provider:u.provider,executionId:u.executionId,generation:u.generation,completedAt:String(u.completedAt||'').slice(0,40),source:'executor_report',phase:trusted&&PHASES.has(u.phase)?u.phase:'unknown',transition:trusted&&TRANSITIONS.has(u.transition)?u.transition:'unknown',wallElapsedMs:trusted&&Number.isSafeInteger(u.wallElapsedMs)&&u.wallElapsedMs>=0?u.wallElapsedMs:null,requestedModel:trusted?model(u.requestedModel):null,...(trusted?{phaseSource:'server_state'}:{}),...(contextDelivery?{contextDelivery}:{}),...(trusted&&pluginsOf(u.plugins)?{plugins:pluginsOf(u.plugins)}:{}),...(trusted&&u.transition==='failure'&&failureKindOf(u.failureKind)?{failureKind:u.failureKind}:{}),...(trusted&&taskTypeOf(u.taskType)!==undefined?{taskType:taskTypeOf(u.taskType)}:{})};
  });
 }
-export function usageHistory(owner,value,completedAt,{task,transition,contextDelivery}={}){
+export function usageHistory(owner,value,completedAt,{task,transition,contextDelivery,pluginDelivery,failureKind}={}){
  const history=records(owner);
  const phase=task?.parentTaskId?'child':task?.delegation?.state==='reviewing'?'review':task?'master':'unknown';
- const record={...(usageCounts(value)||{inputTokens:null,outputTokens:null}),provider:owner.provider,executionId:owner.executionId,generation:owner.generation,completedAt,source:'executor_report',phase,transition:task&&TRANSITIONS.has(transition)?transition:'unknown',wallElapsedMs:task?elapsed(owner.claimedAt,completedAt):null,requestedModel:task?.parentTaskId&&task.assignment?.provider===owner.provider?model(task.assignment.requestedModel):null,...(task?{phaseSource:'server_state'}:{}),...(task&&delivered(contextDelivery)?{contextDelivery:delivered(contextDelivery)}:{})};
+ const record={...(usageCounts(value)||{inputTokens:null,outputTokens:null}),provider:owner.provider,executionId:owner.executionId,generation:owner.generation,completedAt,source:'executor_report',phase,transition:task&&TRANSITIONS.has(transition)?transition:'unknown',wallElapsedMs:task?elapsed(owner.claimedAt,completedAt):null,requestedModel:task?.parentTaskId&&task.assignment?.provider===owner.provider?model(task.assignment.requestedModel):null,...(task?{phaseSource:'server_state'}:{}),...(task&&delivered(contextDelivery)?{contextDelivery:delivered(contextDelivery)}:{}),...(task&&pluginsOf((pluginDelivery??owner?.pluginDelivery)?.applied)?{plugins:pluginsOf((pluginDelivery??owner?.pluginDelivery).applied)}:{}),...(task&&transition==='failure'&&failureKindOf(failureKind)?{failureKind}:{}),...(task?{taskType:usageTaskType(task.type)}:{})};
  if(!isProviderId(record.provider)||!record.executionId)return history;
  if(!history.some(u=>key(u)===key(record)))history.push(record);
  // Delivery records stay on the latest entries only, bounding the task body.

@@ -20,7 +20,7 @@ import {usesTransport} from './core/providers.mjs';
 import {contextDeliveryText,contextHistoryRows} from './core/context-delivery.mjs';
 import {createRecordImportUI} from './record-import.mjs';
 import {createModelPolicyUI} from './model-policy-ui.mjs';
-import {createPluginUI,pluginDeliveryText} from './plugin-ui.mjs';
+import {createPluginUI,pluginDeliveryText} from './plugin-ui.mjs?v=plugin-effects-1';
 import {createDeliveryRecoveryUI} from './delivery-recovery-ui.mjs';
 import {createModelDiagnosticsUI} from './model-diagnostics-ui.mjs';
 import {reviewObservationSection,createReviewObservationRecovery} from './review-observation-ui.mjs';

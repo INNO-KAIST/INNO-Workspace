@@ -383,7 +383,7 @@ export class SqliteTaskStore {
           ...(delivery?{contextDelivery:delivery}:{}),
           status,
           failure,
-          usageHistory:usageHistory(task.checkpoint,input.usage,now,{task,transition:'failure',contextDelivery:delivery??ownedContextDelivery(task,task.checkpoint?.contextDelivery)}),
+          usageHistory:usageHistory(task.checkpoint,input.usage,now,{task,transition:'failure',contextDelivery:delivery??ownedContextDelivery(task,task.checkpoint?.contextDelivery),failureKind:failure.kind}),
           updatedAt: now,
         },
       };

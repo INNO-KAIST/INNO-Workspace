@@ -1,4 +1,5 @@
 import {PLUGIN_SELECTION_MAX, PLUGIN_SOURCES, pluginSource} from './core/plugins.mjs';
+import {formatShortDateTime} from './core/time-format.mjs';
 
 // CR-007 S3 plugin screen. Skill text, descriptions and review excerpts come
 // from third-party files: they are only ever rendered with textContent.
@@ -63,18 +64,66 @@ const element = (tag, text, className) => { const node = document.createElement(
 const button = (text, className, name) => { const node = element('button', text, className); node.type = 'button'; if (name) node.setAttribute('aria-label', name); return node; };
 const sameSelection = (a, b) => JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
 
+// CR-007 S4 (PLG-04): one line of evidence for a plugin from normal work, with the median
+// time and tokens next to the counts (shown, not judged).
+const minutes = ms => Number.isFinite(ms) ? `${Math.round(ms / 6000) / 10}분` : '—';
+const count = n => Number.isFinite(n) ? Math.round(n).toLocaleString('ko-KR') : '—';
+export function pluginEvidenceText(evidence) {
+  if (!evidence) return '';
+  const base = evidence.baseline ?? {};
+  const medians = evidence.runs ? ` · 중앙값 시간 ${minutes(evidence.medianWallMs)}/${minutes(base.medianWallMs)} · 토큰 ${count(evidence.medianTokens)}/${count(base.medianTokens)}(적용/비교)` : '';
+  const excluded = evidence.excluded ? ` · 시작 전·연결 실패 제외 ${evidence.excluded}회` : '';
+  return `적용 ${evidence.runs}회(완료 ${evidence.completed} · 미완료 ${evidence.failed}) · 비교 ${base.runs ?? 0}회${medians}${excluded} — ${evidence.text}`;
+}
+
+// A removed plugin's kept evidence, with the removal time on the viewer's 24-hour clock.
+export function pluginArchiveText(entry, zone) {
+  return `${entry.id} · ${formatShortDateTime(entry.removedAt, zone) || '시각 미상'} 삭제 · ${pluginEvidenceText(entry.evidence)}`;
+}
+
+// CR-007 S4 (PLG-05): catalog candidates as rows. The basis says what was checked and what was
+// not (fit to the person's work is not judged); risks come from the static scan of SKILL.md
+// only. Importable ones carry the exact import input, pinned to the listed commit; a blocked
+// one cannot be imported.
+export function pluginRecommendationRows(data) {
+  return (data?.candidates ?? []).map(candidate => {
+    const read = candidate.described !== false && !candidate.readFailed;
+    const where = `공식 카탈로그 ${candidate.repository ?? candidate.catalog}의 기본 브랜치(커밋 ${String(candidate.source?.commit ?? '').slice(0, 7)})에 있습니다.`;
+    const basis = candidate.blocked ? `${where} SKILL.md가 차단 규칙에 해당합니다.`
+      : !read ? `${where} 파일 목록은 등록부 기준을 만족하지만 SKILL.md를 ${candidate.readFailed ? '읽지 못했습니다(다음 날 다시 시도)' : '아직 읽지 않았습니다(다음 확인 때 읽음)'}.`
+      : `${where} 등록부 기준으로 가져올 수 있습니다.`;
+    return {
+      id: candidate.id,
+      description: candidate.description ?? '',
+      described: candidate.described !== false,
+      importable: candidate.importable,
+      canImport: Boolean(candidate.importable) && !candidate.blocked,
+      reason: candidate.reason ?? null,
+      basis: `${basis} 작업과의 관련성은 판단하지 않았습니다.`,
+      blocked: Boolean(candidate.blocked),
+      risks: [
+        ...(candidate.blocked ? ['차단 규칙에 해당해 가져올 수 없습니다'] : []),
+        ...(candidate.warnings?.length ? [`정적 검사 경고: ${candidate.warnings.join(', ')}`] : []),
+        read ? 'SKILL.md만 미리 검사했습니다. 다른 파일은 가져올 때 검사합니다.' : '아직 미리 검사하지 않았습니다. 가져올 때 모든 파일을 검사합니다.',
+      ],
+      input: candidate.source,
+    };
+  });
+}
+
 // Dialog controller: registry list with review findings and actions, import form,
 // and the active task's selection. getContext() -> {client, task, afterChange}.
 export function createPluginUI({dialog, getContext}) {
   const list = dialog.querySelector('[data-plugin-list]'), error = dialog.querySelector('[data-plugin-error]'), notice = dialog.querySelector('[data-plugin-notice]');
   const selection = dialog.querySelector('[data-plugin-selection]');
-  let plugins = [], busy = false;
+  const recommendations = dialog.querySelector('[data-plugin-recommendations]'), archived = dialog.querySelector('[data-plugin-archive]');
+  let plugins = [], evidence = new Map(), suggestions = null, archive = [], busy = false;
   const report = (message, failed = false) => { error.textContent = failed ? message : ''; notice.textContent = failed ? '' : message; };
   // One request at a time; after it, focus moves to the message so keyboard users keep their place.
   async function act(work, done) {
     if (busy) return;
     busy = true;
-    for (const control of dialog.querySelectorAll('[data-plugin-list] button, [data-plugin-selection] button, [data-plugin-import] button')) control.disabled = true;
+    for (const control of dialog.querySelectorAll('[data-plugin-list] button, [data-plugin-selection] button, [data-plugin-import] button, [data-plugin-recommendations] button')) control.disabled = true;
     let failed = false;
     try { await work(); report(done); getContext().afterChange?.(); }
     catch (failure) { failed = true; report(failure?.message || '요청을 처리하지 못했습니다.', true); }
@@ -116,6 +165,7 @@ export function createPluginUI({dialog, getContext}) {
     for (const plugin of plugins) {
       const card = element('article', undefined, 'plugin-card'), source = pluginSourceLink(plugin);
       card.append(element('h3', plugin.id), element('p', `${pluginStatusText(plugin)} · 커밋 ${String(plugin.source?.commit ?? '').slice(0, 12)} · 해시 ${String(plugin.contentHash ?? '').slice(0, 12)}`, 'small-copy'), element('p', plugin.description));
+      if (evidence.has(plugin.id)) card.append(element('p', pluginEvidenceText(evidence.get(plugin.id)), 'small-copy plugin-evidence'));
       if (source) { const link = element('a', '고정된 원문 보기 ↗', 'text-button'); link.href = source; link.target = '_blank'; link.rel = 'noopener noreferrer'; card.append(link); }
       const findings = pluginFindingRows(plugin);
       if (findings.length) {
@@ -143,10 +193,55 @@ export function createPluginUI({dialog, getContext}) {
       list.append(card);
     }
   }
+  // Candidates from the allowed catalogs (read daily); importing one starts the usual review.
+  function renderRecommendations() {
+    if (!recommendations) return;
+    recommendations.replaceChildren(element('h3', '카탈로그 후보 (공식 카탈로그, 하루 1회 확인)'));
+    if (!suggestions) { recommendations.append(element('p', '추천 후보를 읽지 못했습니다.', 'small-copy')); return; }
+    const stale = (suggestions.sources ?? []).filter(source => source.status !== 'fresh');
+    if (stale.length) recommendations.append(element('p', `확인되지 않은 카탈로그: ${stale.map(source => source.repository).join(', ')} (마지막 목록을 보여 줍니다)`, 'small-copy'));
+    const rows = pluginRecommendationRows(suggestions), importable = rows.filter(row => row.importable), others = rows.filter(row => !row.importable);
+    if (!importable.length) recommendations.append(element('p', '지금 가져올 수 있는 새 후보가 없습니다.', 'small-copy'));
+    for (const row of importable) {
+      const item = element('article', undefined, 'plugin-card');
+      item.append(element('h3', row.id), element('p', row.description || (row.described ? '설명을 읽지 못했습니다.' : '설명은 다음 확인 때 읽습니다.')), element('p', row.basis, 'small-copy'));
+      for (const risk of row.risks) item.append(element('p', risk, 'small-copy plugin-risk'));
+      if (row.canImport) {
+        const take = button('가져오기 (검토 후 승인)', 'secondary-button', `${row.id} 가져오기`);
+        take.onclick = () => act(() => getContext().client.importPlugin(row.input), '가져왔습니다. 검토 결과를 확인한 뒤 승인하세요.');
+        item.append(take);
+      }
+      recommendations.append(item);
+    }
+    if (others.length) {
+      const details = element('details'), summary = element('summary', `가져올 수 없는 후보 ${others.length}개`), list = element('ul', undefined, 'plugin-findings');
+      for (const row of others) list.append(element('li', `${row.id} · ${row.reason}`));
+      details.append(summary, list);
+      recommendations.append(details);
+    }
+  }
+  function renderArchive() {
+    if (!archived) return;
+    archived.replaceChildren();
+    if (!archive.length) return;
+    const details = element('details'), list = element('ul', undefined, 'plugin-findings');
+    details.append(element('summary', `삭제한 플러그인의 근거 ${archive.length}개`));
+    for (const entry of archive) list.append(element('li', pluginArchiveText(entry)));
+    details.append(list);
+    archived.append(details);
+  }
   async function refresh() {
     const {client, task} = getContext();
-    plugins = (await client.listPlugins()).plugins ?? [];
-    renderList(); renderSelection(task);
+    const [listed, measured, suggested] = await Promise.all([
+      client.listPlugins(),
+      client.request('/api/plugin-evidence').catch(() => null),
+      client.request('/api/plugin-recommendations').catch(() => null),
+    ]);
+    plugins = listed.plugins ?? [];
+    evidence = new Map((measured?.plugins ?? []).map(item => [item.id, item]));
+    archive = measured?.archive ?? [];
+    suggestions = suggested;
+    renderList(); renderSelection(task); renderRecommendations(); renderArchive();
   }
   error.tabIndex = -1; notice.tabIndex = -1;
   const form = dialog.querySelector('[data-plugin-import]');

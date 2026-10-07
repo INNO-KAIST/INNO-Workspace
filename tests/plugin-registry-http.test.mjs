@@ -125,7 +125,9 @@ test('re-importing different content returns the skill to review; disable and co
   assert.equal((await first.call('/api/plugins/remove', {id: plugin.id})).status, 400, 'removal needs confirmation');
   assert.equal((await first.call('/api/plugins/remove', {id: plugin.id, confirm: true})).status, 200);
   assert.deepEqual((await first.call('/api/plugins')).body.plugins, []);
-  assert.equal(await first.DB.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key LIKE 'plugin%'").first().then(row => Number(row.n)), 0);
+  assert.equal(await first.DB.prepare("SELECT COUNT(*) AS n FROM metadata WHERE key GLOB 'plugin:*' OR key GLOB 'plugin_content:*'").first().then(row => Number(row.n)), 0);
+  // CR-007 S4: the removed plugin's evidence is kept.
+  assert.equal(JSON.parse((await first.DB.prepare("SELECT value FROM metadata WHERE key='plugin_archive'").first()).value)[0].id, plugin.id);
 });
 
 test('plugin routes require the workspace token', async t => {

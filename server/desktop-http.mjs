@@ -139,7 +139,7 @@ export function createDesktopServer({token,publicDir,request,bridge,localRecords
     }
     if(req.method==='POST'&&/^\/api\/tasks\/[^/]+\/(?:delegation\/(?:resume|recover)|execution\/recover)$/.test(p))return json(res,200,await request(p,await body(req)));
     if(/^\/api\/tasks\/[^/]+\/model-policy$/.test(p)&&['GET','POST'].includes(req.method))return json(res,200,await request(p,req.method==='POST'?await body(req):undefined));
-    if(req.method==='GET'&&p==='/api/plugins')return json(res,200,await request(p));
+    if(req.method==='GET'&&(p==='/api/plugins'||p==='/api/plugin-evidence'||p==='/api/plugin-recommendations'))return json(res,200,await request(p));
     if(req.method==='POST'&&(/^\/api\/plugins\/(?:import|approve|disable|remove)$/.test(p)||/^\/api\/tasks\/[^/]+\/plugins$/.test(p)))return json(res,200,await request(p,await body(req)));
     if(/^\/api\/tasks\/[^/]+\/review-observations$/.test(p)&&['GET','POST'].includes(req.method))return json(res,200,await request(p,req.method==='POST'?await body(req):undefined));
     if(req.method==='POST'&&(p==='/api/tasks'||/^\/api\/tasks\/[^/]+\/actions$/.test(p)))return json(res,p==='/api/tasks'?201:200,await request(p,await body(req)));

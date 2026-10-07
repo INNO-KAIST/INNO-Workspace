@@ -4,6 +4,12 @@ import {runnerError,failureInput,failureRecord,failureGuidance,retryHint} from '
 test('retry hints reject invalid past and extreme times without promising reset',()=>{const now=Date.parse('2026-09-14T00:00:00Z');for(const value of [null,'','garbage','-1','0','999999999999','2020-01-01'])assert.equal(retryHint(value,now),null);assert.equal(retryHint('60',now),'2026-09-14T00:01:00.000Z');assert.equal(retryHint('Mon, 14 Sep 2026 00:02:00 GMT',now),'2026-09-14T00:02:00.000Z');});
 test('unknown diagnostics remain private and no category automatically replays execution',()=>{for(const [error,kind] of [[Error('PRIVATE'),'unknown'],[Object.assign(Error('PRIVATE'),{code:'ECONNRESET'}),'connection'],[Error('not logged in PRIVATE'),'authentication']]){const input=failureInput(runnerError(error));const failure=failureRecord(input,new Date().toISOString());assert.equal(failure.kind,kind);assert.equal(failure.automaticRetry,false);assert.equal(JSON.stringify(failure).includes('PRIVATE'),false);const task={status:input.status,checkpoint:{failure}};assert.ok(failureGuidance(task));assert.equal(failureGuidance({...task,status:'running'}),null);}});
 
+test('a runner program that cannot be started is an unavailable runner, not an unknown stop',()=>{
+ const error=Object.assign(Error('spawn codex ENOENT'),{code:'ENOENT',syscall:'spawn codex'});
+ for(const candidate of [error,runnerError(error)])assert.equal(failureInput(candidate).failure.kind,'unavailable');
+ assert.equal(failureInput(Object.assign(Error('PRIVATE'),{code:'ENOENT'})).failure.kind,'unknown','a missing file elsewhere stays unknown');
+});
+
 test('native network error codes remain connection failures at delivery boundary',()=>{assert.equal(failureInput(Object.assign(Error('PRIVATE'),{code:'ECONNRESET'})).failure.kind,'connection');});
 
 test('output limit has actionable resource guidance without storing diagnostics',()=>{const input=failureInput(Object.assign(Error('PRIVATE'),{code:'OUTPUT_LIMIT'}));assert.equal(input.failure.kind,'resource');const failure=failureRecord(input,new Date().toISOString());const guide=failureGuidance({status:input.status,checkpoint:{failure}});assert.ok(guide.detail.includes('출력'));assert.equal(JSON.stringify(failure).includes('PRIVATE'),false);});

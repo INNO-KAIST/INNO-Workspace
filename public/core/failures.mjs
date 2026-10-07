@@ -10,7 +10,7 @@ const descriptions = Object.freeze({
  unknown: ['실행 중단', '기존 실행과 생성된 결과를 확인한 뒤 이어서 실행하세요.'],
  restarted: ['데스크톱 실행 중단(재시작 또는 배정 응답 유실)', '데스크톱 연결기가 실행 도중 다시 시작됐거나 실행 배정 응답을 받지 못해 이 실행의 결과가 남지 않았습니다. 이전 실행 프로세스가 끝났는지와 작업 상태를 확인한 뒤 이어서 실행하세요.'],
 });
-const codes = {CONTEXT_RETRIEVAL_REQUIRED:'context',OUTPUT_LIMIT:'resource',QUOTA_EXCEEDED:'quota',AUTH_REQUIRED:'authentication',CONNECTION_FAILED:'connection',DESKTOP_RESTARTED:'restarted'};
+const codes = {CONTEXT_RETRIEVAL_REQUIRED:'context',OUTPUT_LIMIT:'resource',QUOTA_EXCEEDED:'quota',AUTH_REQUIRED:'authentication',CONNECTION_FAILED:'connection',DESKTOP_RESTARTED:'restarted',RUNNER_UNAVAILABLE:'unavailable'};
 export function retryHint(value, now=Date.now()) {
  if(typeof value!=='string'||!value.trim())return null;
  const n=/^\d+(?:\.\d+)?$/.test(value.trim())?now+Number(value)*1000:Date.parse(value);
@@ -20,7 +20,8 @@ export function runnerError(error, {status,retryAfter,now=Date.now()}={}) {
  const message=typeof error?.message==='string'?error.message:'';
  let kind=codes[error?.code];
  if(!kind){
-  if(status===401||status===403||/unauthorized|authentication (?:failed|required)|not logged in|token (?:expired|invalid)/i.test(message))kind='authentication';
+  if(['ENOENT','EACCES'].includes(error?.code)&&/^spawn\b/.test(String(error?.syscall??'')))kind='unavailable';
+  else if(status===401||status===403||/unauthorized|authentication (?:failed|required)|not logged in|token (?:expired|invalid)/i.test(message))kind='authentication';
   else if(status===429||/usage limit|quota exceeded|rate limit|usage_limit_reached/i.test(message))kind='quota';
   else if(status>=500||['ECONNRESET','ETIMEDOUT','ENOTFOUND','ECONNREFUSED'].includes(error?.code)||/fetch failed|network error|connection (?:reset|closed)|timed out/i.test(message))kind='connection';
   else kind='unknown';

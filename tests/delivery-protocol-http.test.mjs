@@ -53,6 +53,13 @@ test('ACK rejects URL mismatch, forged digest/time, incomplete or extra receipt 
  }
  assert.equal((await f.post(f.task.id+'/ack',{receipt})).released,true);
 });
+test('a review claim whose inputs cannot be loaded is recorded as not started, not as an unknown stop',async t=>{
+ const f=await fixture(t),claim=await f.store.claimExecution(f.task.id,{provider:'codex',expectedVersion:f.task.version});
+ claim.task.delegation={state:'reviewing',review:{children:[]}};
+ await assert.rejects(()=>createOrchestration({store:f.store}).hydrateClaim(claim));
+ const task=await f.store.requireTask(f.task.id);
+ assert.equal(task.checkpoint.failure.kind,'unavailable');assert.equal(task.checkpoint.usageHistory.at(-1).failureKind,'unavailable');
+});
 test('opted hydration failure preserves original error and owner reservation; legacy still records failure',async t=>{
  for(const opted of [true,false]){
   const f=await fixture(t),claim=await f.store.claimExecution(f.task.id,{provider:'codex',expectedVersion:f.task.version},opted?{deliveryReceiptVersion:1,workspaceId:f.workspaceId}:{});

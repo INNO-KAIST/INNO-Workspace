@@ -1,4 +1,5 @@
 import {ConflictError, ValidationError} from '../public/core/tasks.mjs';
+import {pluginEvidence} from '../public/core/plugin-evidence.mjs';
 import {PLUGIN_CATALOG_MAX, PLUGIN_EXECUTION_BYTES, PLUGIN_LIMITS, approvePlugin, boundedPluginDelivery, buildPluginRecord, disablePlugin, pluginContentHash, pluginSource, validatePluginRecord, validatePluginSelection} from '../public/core/plugins.mjs';
 
 // Selections can change only while no execution owns the task.
@@ -19,7 +20,9 @@ async function gitBlobSha(bytes) {
   data.set(header); data.set(bytes, header.byteLength);
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-1', data)), byte => byte.toString(16).padStart(2, '0')).join('');
 }
-const ENTRY = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+// File names the registry accepts inside a skill folder (also used by catalog discovery).
+export const PLUGIN_FILE_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+const ENTRY = PLUGIN_FILE_NAME;
 
 export function createPluginRegistry(store, {fetchFn}) {
   const db = store.db;
@@ -192,12 +195,37 @@ export function createPluginRegistry(store, {fetchFn}) {
       }
       return delivery;
     },
+    // Removal keeps the plugin's evidence (PLG-04): the newest 50 removals stay in plugin_archive.
+    // The archive is written only over the value just read and only while the reviewed version
+    // is still registered; the record and its text go only when that write happened, so two
+    // removals at once both keep their evidence and a re-imported version is not removed.
     async remove(input) {
       const {id, confirm} = input ?? {};
       const record = await requireRecord(id);
       if (confirm !== true) throw new ValidationError('Confirm the plugin removal.');
-      await db.batch([db.prepare('DELETE FROM metadata WHERE key=?1').bind(recordKey(record.id)), db.prepare('DELETE FROM metadata WHERE key=?1').bind(contentKey(record.id))]);
-      return {removed: record.id};
+      const now = store.now();
+      const [evidence] = pluginEvidence({plugins: [record], tasks: await store.listTasks(), now: Date.parse(now)});
+      const entry = {id: record.id, name: record.name, contentHash: record.contentHash, source: record.source, status: record.status, removedAt: now, evidence};
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const before = (await db.prepare("SELECT value FROM metadata WHERE key='plugin_archive'").first())?.value ?? null;
+        let kept;
+        try { kept = JSON.parse(before ?? '[]'); } catch { kept = []; }
+        const next = JSON.stringify([entry, ...(Array.isArray(kept) ? kept : [])].slice(0, 50));
+        const [, removed] = await db.batch([
+          db.prepare("INSERT INTO metadata(key,value) SELECT 'plugin_archive',?1 WHERE EXISTS (SELECT 1 FROM metadata WHERE key=?2 AND CASE WHEN json_valid(value) THEN json_extract(value,'$.contentHash') END=?3) AND (SELECT value FROM metadata WHERE key='plugin_archive') IS ?4 ON CONFLICT(key) DO UPDATE SET value=excluded.value").bind(next, recordKey(record.id), record.contentHash, before),
+          db.prepare("DELETE FROM metadata WHERE key=?1 AND (SELECT value FROM metadata WHERE key='plugin_archive')=?2").bind(recordKey(record.id), next),
+          db.prepare('DELETE FROM metadata WHERE key=?1 AND NOT EXISTS (SELECT 1 FROM metadata WHERE key=?2)').bind(contentKey(record.id), recordKey(record.id)),
+        ]);
+        if (removed.meta.changes) return {removed: record.id};
+        const current = await read(recordKey(record.id)).catch(() => null);
+        if (!current) throw httpError('plugin not found', 404);
+        if (current.contentHash !== record.contentHash) throw new ConflictError('The plugin changed; review it again before removing it.');
+      }
+      throw new ConflictError('The plugin archive changed during removal; try again.');
+    },
+    async archive() {
+      const value = await read('plugin_archive').catch(() => null);
+      return Array.isArray(value) ? value.slice(0, 50) : [];
     },
   };
 }
