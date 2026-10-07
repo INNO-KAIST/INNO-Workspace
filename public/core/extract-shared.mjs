@@ -196,14 +196,15 @@ const BLOCK_MARKUP = new Set(['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'l
 // Markup (XHTML, HTML) to readable lines: scripts and styles dropped, blocks on new lines.
 export function markupText(markup) {
   const pieces = [];
-  let skipping = 0;
+  let skipping = 0, cells = 0;
   for (const token of markupTokens(markup)) {
     if (token.text !== undefined) { if (!skipping) pieces.push(token.text); continue; }
     const name = token.name.toLowerCase();
     if (SKIPPED_MARKUP.has(name)) { if (!token.empty) skipping = token.close ? Math.max(0, skipping - 1) : skipping + 1; continue; }
     if (skipping) continue;
+    if (name === 'tr') cells = 0;
     if (name === 'br' || BLOCK_MARKUP.has(name)) pieces.push('\n');
-    else if ((name === 'td' || name === 'th') && !token.close) pieces.push('\t');
+    else if ((name === 'td' || name === 'th') && !token.close) { if (cells) pieces.push('\t'); cells += 1; }
   }
   return pieces.join('').split('\n')
     .map((line) => line.trimEnd().replace(LEADING_SPACES, ''))

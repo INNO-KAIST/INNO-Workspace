@@ -1,4 +1,4 @@
-import { MAX_EXTRACTED_CHARS, MAX_PDF_PAGES, TEXT_BASED_FORMATS, connectedFormat, extractConnectedText } from './extract.mjs?v=formats-1';
+import { MAX_EXTRACTED_CHARS, MAX_PDF_PAGES, TEXT_BASED_FORMATS, connectedFormat, extractConnectedText } from './extract.mjs?v=formats-2';
 
 const HASH = /^[a-f0-9]{64}$/;
 

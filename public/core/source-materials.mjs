@@ -1,6 +1,6 @@
 import {sanitizeMaterials} from './tasks.mjs';
 import {verifyMaterialViews} from './source-coverage.mjs';
-import {TEXT_BASED_FORMATS,connectedFormat} from './extract.mjs?v=formats-1';
+import {TEXT_BASED_FORMATS,connectedFormat} from './extract.mjs?v=formats-2';
 import {IMAGE_LIMITS,encodeImageData,imageKind,isImageAttachment} from './image-materials.mjs';
 
 // Read only during this invocation. No archive, durable queue, or source cache.

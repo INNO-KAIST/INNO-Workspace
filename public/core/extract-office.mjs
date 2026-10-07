@@ -480,3 +480,55 @@ export function notebookSections(notebook, writer) {
   }
   return hasText;
 }
+
+// SpreadsheetML 2003 (Excel XML, often saved with an .xls name by exporting systems): each
+// Worksheet's rows of cells; a cell's ss:Index gives its 1-based column.
+export function spreadsheetMlSections(xml, writer) {
+  let sheet = null, row = null, cell = null, inData = 0, hasText = false;
+  const finishSheet = () => {
+    if (!sheet) return true;
+    const fits = writer.add(`Sheet: ${sheet.name}`, sheet.budget.text), full = sheet.budget.full;
+    sheet = null;
+    if (!fits || full) { writer.cut(); return false; }
+    return true;
+  };
+  for (const token of markupTokens(xml)) {
+    if (token.text !== undefined) { if (cell && inData) cell.parts.push(token.text); continue; }
+    const name = anyLocalName(token.name);
+    if (name === 'Worksheet') {
+      if (token.empty) continue;
+      if (!finishSheet()) return hasText;
+      if (!token.close) sheet = { name: attribute(token.raw, 'ss:Name') ?? 'Sheet', budget: textBudget(writer.remaining + 1), firstRow: true };
+      continue;
+    }
+    if (!sheet || sheet.budget.full) continue;
+    if (name === 'Row') {
+      if (token.close || token.empty) {
+        if (row?.line) { sheet.budget.push((sheet.firstRow ? '' : '\n') + row.line); sheet.firstRow = false; hasText = true; }
+        row = null;
+      } else row = { line: '', column: -1, next: 0 };
+      continue;
+    }
+    if (!row) continue;
+    if (name === 'Cell') {
+      if (token.close) {
+        const value = cell ? cellText(cell.parts.join('')) : '';
+        const room = writer.remaining + 1 - sheet.budget.length - row.line.length;
+        if (cell && value && room > 0 && cell.col < MAX_COLUMNS) {
+          row.line += '\t'.repeat(row.column < 0 ? cell.col : cell.col - row.column) + value.slice(0, room);
+          row.column = cell.col;
+        }
+        cell = null;
+      } else {
+        const index = Number(attribute(token.raw, 'ss:Index'));
+        const col = Number.isInteger(index) && index >= 1 ? Math.max(index - 1, row.next) : row.next;
+        row.next = col + 1;
+        cell = token.empty ? null : { col, parts: [] };
+      }
+      continue;
+    }
+    if (name === 'Data') inData = nest(inData, token);
+  }
+  finishSheet();
+  return hasText;
+}

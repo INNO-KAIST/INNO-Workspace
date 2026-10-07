@@ -1,5 +1,5 @@
-const CACHE='inno-shell-v6';
-const FILES=['./','./index.html','./styles.css','./app.mjs','./record-import.mjs','./core/imports.mjs','./icon.svg','./manifest.webmanifest','./core/client.mjs','./core/tasks.mjs','./core/attachments.mjs','./core/research.mjs','./core/extract.mjs?v=formats-1','./core/extract-shared.mjs','./core/extract-office.mjs','./core/hwp.mjs'];
+const CACHE='inno-shell-v7';
+const FILES=['./','./index.html','./styles.css','./app.mjs','./record-import.mjs','./core/imports.mjs','./icon.svg','./manifest.webmanifest','./core/client.mjs','./core/tasks.mjs','./core/attachments.mjs','./core/research.mjs','./core/extract.mjs?v=formats-2','./core/extract-shared.mjs','./core/extract-office.mjs','./core/cfb.mjs','./core/hwp.mjs','./core/legacy-office.mjs'];
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES))));
 self.addEventListener('activate',event=>event.waitUntil(caches.keys().then(keys=>Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)))).then(()=>self.clients.claim())));
 self.addEventListener('fetch',event=>{const url=new URL(event.request.url);if(event.request.method!=='GET'||url.origin!==self.location.origin||url.pathname.includes('/api/')||url.pathname.endsWith('/mcp')||event.request.headers.has('Authorization'))return;event.respondWith(fetch(event.request).then(response=>{if(response.ok){const copy=response.clone();caches.open(CACHE).then(c=>c.put(event.request,copy));}return response;}).catch(()=>caches.match(event.request)));});

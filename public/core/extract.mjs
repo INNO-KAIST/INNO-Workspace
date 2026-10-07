@@ -1,9 +1,11 @@
 import {
-  MAX_COMPRESSED_BYTES, MAX_EXTRACTED_CHARS, MAX_PDF_PAGES, boundedText, paragraphText,
+  MAX_COMPRESSED_BYTES, MAX_EXTRACTED_CHARS, MAX_PDF_PAGES, boundedText, markupText, paragraphText,
   readZipEntryText, relevantZipSize, sectionWriter, unavailable, zipReader,
 } from './extract-shared.mjs';
-import { epubSections, hwpxSections, notebookSections, odfSections, rtfText, xlsxSections } from './extract-office.mjs';
+import { epubSections, hwpxSections, notebookSections, odfSections, rtfText, spreadsheetMlSections, xlsxSections } from './extract-office.mjs';
 import { hwpSections } from './hwp.mjs';
+import { isCompoundFile } from './cfb.mjs';
+import { legacyOfficeSections } from './legacy-office.mjs';
 
 export { MAX_COMPRESSED_BYTES, MAX_EXTRACTED_CHARS, MAX_PDF_PAGES, readZipEntryText };
 
@@ -60,7 +62,7 @@ const EXTENSION_FORMATS = new Map(Object.entries({
   odt: 'odt', ott: 'odt', ods: 'ods', ots: 'ods', odp: 'odp', otp: 'odp',
   epub: 'epub', rtf: 'rtf', ipynb: 'ipynb',
   h5: 'hdf5', hdf5: 'hdf5', he5: 'hdf5',
-  doc: 'legacy-office', dot: 'legacy-office', xls: 'legacy-office', xlt: 'legacy-office', ppt: 'legacy-office', pps: 'legacy-office',
+  doc: 'legacy-office', dot: 'legacy-office', xls: 'legacy-office', xlt: 'legacy-office', ppt: 'legacy-office', pps: 'legacy-office', pot: 'legacy-office',
   png: 'image', jpg: 'image', jpeg: 'image', jfif: 'image', gif: 'image', webp: 'image', bmp: 'image', tif: 'image',
   tiff: 'image', heic: 'image', heif: 'image', avif: 'image', ico: 'image',
 }));
@@ -394,11 +396,16 @@ async function wholeFile(file, label) {
   return { bytes: new Uint8Array(await file.arrayBuffer()) };
 }
 
+const isRtf = (bytes) => String.fromCharCode(...bytes.subarray(0, 5)) === '{\\rtf';
+
 async function extractRtf(file, maxChars) {
   const loaded = await wholeFile(file, 'RTF');
   if (loaded.error) return loaded.error;
-  const { bytes } = loaded;
-  if (String.fromCharCode(...bytes.subarray(0, 5)) !== '{\\rtf') return extractPlainText(file, maxChars);
+  if (!isRtf(loaded.bytes)) return extractPlainText(file, maxChars);
+  return rtfResult(file, loaded.bytes, maxChars);
+}
+
+function rtfResult(file, bytes, maxChars) {
   try {
     const { text, truncated } = rtfText(bytes, maxChars);
     if (!text) return unavailable(file.size, 'The RTF document contains no extractable text.', bytes.byteLength);
@@ -449,6 +456,36 @@ async function extractHdf5(file, maxChars, injectedHdf5) {
   }
 }
 
+// Word, Excel and PowerPoint 97-2003. Many systems save HTML (often in EUC-KR), SpreadsheetML,
+// RTF or plain text under .doc and .xls names, so content that is not a compound file is read
+// as such; anything else that is not plainly text is refused.
+async function extractLegacyOffice(file, maxChars) {
+  const loaded = await wholeFile(file, 'Office 97-2003');
+  if (loaded.error) return loaded.error;
+  const { bytes } = loaded;
+  if (!isCompoundFile(bytes)) {
+    if (isRtf(bytes)) return rtfResult(file, bytes, maxChars);
+    const notOffice = () => unavailable(file.size, 'Office 97-2003 text is unavailable: not a Word, Excel or PowerPoint 97-2003 file.', bytes.byteLength);
+    const text = decodeTextBytes(bytes);
+    const head = text?.slice(0, 65536) ?? '';
+    if (head.includes('urn:schemas-microsoft-com:office:spreadsheet')) {
+      const writer = sectionWriter(maxChars);
+      if (!spreadsheetMlSections(text, writer)) return unavailable(file.size, 'The spreadsheet contains no extractable text.', bytes.byteLength);
+      return boundedText(writer.text, maxChars, file.size, bytes.byteLength, writer.truncated);
+    }
+    if (/<(html|body|table)\b/i.test(head)) return boundedText(markupText(text), maxChars, file.size, bytes.byteLength);
+    const plain = decodeTextBytes(bytes, { legacy: false });
+    return plain == null ? notOffice() : boundedText(plain, maxChars, file.size, bytes.byteLength);
+  }
+  const writer = sectionWriter(maxChars);
+  try {
+    if (!await legacyOfficeSections(bytes, writer)) return unavailable(file.size, 'The Office 97-2003 file contains no extractable text.', bytes.byteLength);
+  } catch (error) {
+    return unavailable(file.size, `Office 97-2003 text is unavailable: ${error.message}.`, bytes.byteLength);
+  }
+  return boundedText(writer.text, maxChars, file.size, bytes.byteLength, writer.truncated);
+}
+
 const MEDIA_MIME = /^(audio|video|font|model)\//;
 function unsupported(file, label, detail) {
   return unavailable(file.size, `Unsupported connected file type: ${label}${detail ? `; ${detail}` : ''}.`);
@@ -478,7 +515,7 @@ export async function extractConnectedText(file, {
   if (format === 'ipynb') return extractNotebook(file, limit);
   if (format === 'hdf5') return extractHdf5(file, limit, hdf5);
   if (format === 'hwp') return extractHwp(file, limit);
-  if (format === 'legacy-office') return unsupported(file, label, 'older binary Office files are not read yet; save it as .docx, .xlsx or .pptx');
+  if (format === 'legacy-office') return extractLegacyOffice(file, limit);
   if (format === 'image') return unsupported(file, label, 'images hold no text to read');
   if (MEDIA_MIME.test(type)) return unsupported(file, label);
   return extractPlainText(file, limit, { sniffed: true, label });

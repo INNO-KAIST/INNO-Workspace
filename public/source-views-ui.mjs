@@ -1,4 +1,4 @@
-import {TEXT_BASED_FORMATS,connectedFormat} from './core/extract.mjs?v=formats-1';
+import {TEXT_BASED_FORMATS,connectedFormat} from './core/extract.mjs?v=formats-2';
 const integer=(value,label)=>{const number=Number(value);if(!Number.isInteger(number))throw new Error(`${label}은 정수로 입력하세요.`);return number;};
 const hash=value=>typeof value==='string'&&/^[a-f0-9]{64}$/i.test(value)?value:null;
 

@@ -1602,3 +1602,18 @@ MODEL-REFRESH-PRD-PROPOSAL.md에 MOD-01~07 및 M0~M5 초안을 작성했다. 공
 - 시험: image-materials 14건(정리 규칙, 브라우저 준비, -i 배치·임시 폴더 위치·삭제(성공·실패), 경로 조건 불변, 결과물 걸러내기, Claude 거절, 연결기 HTTP 한도·전달 차단, 브리지 outbox 미기록, 준비 판정, 잔여 폴더 정리, MCP 미부착).
 - 검증: 전체 1561건 중 1560 pass/0 fail/기존 1 skip, git diff --check, Wrangler dry-run. 실제 Codex가 `-i` 이미지를 읽는지는 구독을 쓰므로 승인 후 1회 확인 예정.
 - 화면 판: app.mjs?v=images-20261007. 연결기 코드가 바뀌므로 반영 시 연결기 재시작 필요. Worker는 이미 이미지(텍스트 없는 자료)를 거절하므로 배포 필수는 아님.
+- 운영 반영(사용자 승인): f78989b push → Pages 게시(images-20261007) → 사용자가 연결기 종료, 메인 체크아웃 c9c4874→f78989b fast-forward, 사용자가 재실행(PID 확인, 시작 시 정리 후 임시 이미지 폴더 0개, 127.0.0.1:4175 새 판 제공). Worker 배포 없음.
+- 실구독 확인 1회(사용자 승인): 글자 "CR009-IMG-5381"이 적힌 합성 PNG 1장을 붙인 작업을 연결기 로컬 API로 만들어 Codex로 실행 → 19초 만에 완료, 답 "CR009-IMG-5381"(이미지를 실제로 읽음). 실행 중 %TEMP%\inno-images-* 폴더가 생겼다가 끝난 뒤 0개, 결과물은 final.md·라우팅 기록뿐(이미지 없음), Worker 작업 기록(3.8 KB)에 이미지 base64 없음·첨부는 이름·크기·형식만.
+
+### 2026-10-07 CR-009 4단계 예전 Office(DOC·XLS·PPT) 읽기 (커밋 전, 운영 반영 전)
+- 범위: Word·Excel·PowerPoint 97-2003(.doc/.dot, .xls/.xlt, .ppt/.pps/.pot). 새 라이브러리 없이 HWP와 같은 복합 파일(CFB) 판독기를 공용 모듈로 분리해(public/core/cfb.mjs) 재사용.
+- public/core/legacy-office.mjs:
+  - Word: FIB에서 조각 표(CLX) 위치와 본문 길이(ccpText)를 읽고 8비트(cp1252)·UTF-16 조각을 이어 본문만 읽음(각주 등 제외). 필드 코드는 버리고 결과만 남김. 표는 단락 속성(PAPX의 sprmPFTtp)으로 행 끝을 찾아 빈 셀이 있어도 행이 맞음(속성이 없으면 연속 셀 표시를 행 끝으로 보는 근사). 암호(fEncrypted)·Word 95 이전은 이유와 함께 거절.
+  - Excel(BIFF8): 시트 목록, 공유 문자열(CONTINUE에 걸친 문자열·서식 문자열 포함), LABELSST·LABEL·NUMBER·RK·MULRK·논리값·오류·수식 결과(숫자·문자열). 차트가 끼어 있어도 시트 끝(EOF)을 짝 맞춰 찾음. 암호(FILEPASS)·Excel 95 이전 거절.
+  - PowerPoint: Current User→UserEditAtom 사슬로 가장 최근 저장판의 문서와 슬라이드를 찾고(빠른 저장 파일 대응), 슬라이드 목록 순서대로 제목·본문과 각 슬라이드 그림의 글상자 텍스트를 읽음. 노트·마스터 제외. 암호(헤더 토큰·암호 세션) 거절. Current User가 없으면 파일 순서로 근사.
+  - 웹 시스템이 .xls·.doc 이름으로 내보내는 HTML(EUC-KR 포함)·SpreadsheetML(XML)·RTF·텍스트도 내용대로 읽고, 그 밖의 바이너리는 거절.
+- 실물 확인: Office 설치본의 한국어 PROTTPLN/PROTTPLV .DOC·.PPT·.XLS 6개, Excel이 만든 .xls(한국어 시트·수식 결과 596.3이 .xlsx와 동일), PowerPoint가 만든 .ppt(슬라이드 순서·글상자 포함, 발표자 노트 제외), 영문 매뉴얼 .doc(4.8만 자, 필드 코드·제어 문자 누출 없음) 모두 정상. CFB 분리 후 HWP·HWT 실물 결과 동일.
+- 독립 검토(inno-opus): P1 Excel 공유 문자열 셀별 복사(메모리 폭증)·같은 시트 반복 재탐색·PowerPoint 겹친 슬라이드 컨테이너 재탐색, P2 빠른 저장 PPT의 예전 문서판·Word 빈 셀 지적 → 전부 반영(값은 참조로 보관하고 쓸 때만 정리, 시트 중복 위치 건너뛰기·전체 레코드 예산, 겹친 컨테이너 1회만·읽은 바이트 예산·슬라이드마다 바로 쓰기, 저장 사슬, PAPX 행 판정, Excel·PPT 8비트 문자는 Latin-1).
+- 시험: legacy-office 7건, legacy-office-bounds 6건(빈 셀 표, 공유 문자열·시트 반복 3초 이내, 차트 낀 시트, 겹친 슬라이드, 빠른 저장·암호 PPT, SpreadsheetML·EUC-KR HTML·바이너리 거절). 시험용 CFB 작성기는 tests/helpers/cfb.mjs로 공용화.
+- 검증: 전체 1573건 중 1572 pass/0 fail/기존 1 skip, git diff --check.
+- 화면 판: app.mjs?v=legacy-20261007, extract.mjs?v=formats-2(모든 가져오기 같은 주소), source-views ?v 갱신, 서비스 워커 inno-shell-v7. 바뀐 것은 브라우저 코드뿐(연결기·Worker 변경 없음).
