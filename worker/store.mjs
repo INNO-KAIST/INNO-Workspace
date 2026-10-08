@@ -9,6 +9,7 @@ import {executionUsage,usageHistory} from '../public/core/execution-usage.mjs';
 import {validateOwnedExecutionEvidence,wallElapsedMs} from '../public/core/execution-evidence.mjs';
 import {ownedContextDelivery,suppliedContextDelivery,withRetrieval} from '../public/core/context-delivery.mjs';
 import {boundedLocalExecution} from '../public/core/local-execution.mjs';
+import {boundedSourceEvidence} from '../public/core/source-evidence.mjs';
 import {serializeTaskBody,taskBodyBytes,TASK_GROWTH_MAX_BYTES} from '../public/core/task-size.mjs';
 import {normalizeProviderSettings,nextProviderSettings,providerDisabledError,providerEnabled} from '../public/core/provider-settings.mjs';
 import {createProject,updateProject,storedProject,PROJECT_LIMITS} from '../public/core/projects.mjs';
@@ -492,7 +493,7 @@ export class D1TaskStore {
         ...current, status: 'running', version: current.version + 1, updatedAt: now,
         ...(current.delegation?.state==='queued_for_review'?{delegation:{...current.delegation,state:'reviewing'}}:{}),
         checkpoint: {
-          ...previous, ...(previous.handoff?{handoff:{...previous.handoff,dispatched:true}}:{}), failure: undefined, executionEvidence: undefined, contextDelivery: undefined, pluginDelivery: undefined, localExecution: undefined, wallElapsedMs: undefined, completedAt: undefined, ...claim, provider, sourceBound, status: 'running', claimedAt: now, deliveryReceiptVersion:deliveryReceiptVersion===1?1:undefined,
+          ...previous, ...(previous.handoff?{handoff:{...previous.handoff,dispatched:true}}:{}), failure: undefined, executionEvidence: undefined, contextDelivery: undefined, pluginDelivery: undefined, localExecution: undefined, sourceEvidence: undefined, wallElapsedMs: undefined, completedAt: undefined, ...claim, provider, sourceBound, status: 'running', claimedAt: now, deliveryReceiptVersion:deliveryReceiptVersion===1?1:undefined,
           ...(reserved?{evaluationBudget:reserved.checkpoint}:{}),
           ...(Object.hasOwn(input,AUTO_ROUTING)?{routing:input[AUTO_ROUTING]??undefined}:previous.routing?{routing:startedRouting(previous.routing)}:{}),
           expiresAt: new Date(nowMs + leaseMs).toISOString(), updatedAt: now,
@@ -612,6 +613,12 @@ export class D1TaskStore {
       if (!sameInterruptedOwner) this.assertExecution(current, input);
       const reviewReport=current.delegation&&current.delegation.state!=='superseded'?validateReviewReport(sameInterruptedOwner?{...current,status:'running'}:current,input):undefined;
       const checkpoint={...current.checkpoint};
+      // Differentiation ②: the source record describes the latest result only (a new run's claim
+      // also clears it). A desktop run may report one naming this task's originals; an invalid
+      // one is dropped, never the result.
+      delete checkpoint.sourceEvidence;
+      const evidence=allowDesktopEvidence&&input.sourceEvidence!==undefined?boundedSourceEvidence(input.sourceEvidence,current):null;
+      if(evidence)checkpoint.sourceEvidence={...evidence,executionId:input.executionId};
       if(input.resumeState===null)delete checkpoint.resumeState;
       else if(input.resumeState!==undefined){
         const resumeState=sanitizeResumeState(input.resumeState);

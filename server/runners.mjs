@@ -26,6 +26,7 @@ import { mkdtemp, readFile, readdir, realpath, rm, stat, rmdir, writeFile } from
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { imageExtension } from '../public/core/image-materials.mjs';
+import { SOURCE_EVIDENCE_LIMITS, traceClaims } from '../public/core/source-evidence.mjs';
 
 // Codex adapter prompt: when a sequential handoff to the cloud provider is allowed.
 const CODEX_HANDOFF_POLICY='On the managed cloud bridge only, a useful sequential handoff to Claude is supported for tasks with NO source attachments. Do not hand off trivial work or evade quota/authentication limits. At most two provider transitions per task. First understand the request, choose why the other provider is needed and its acceptance checks. To hand off, return final JSON with summary (verified generated progress, max 12000 chars), artifacts, routing, and handoff:{provider:"claude",instructions:"bounded next stage, max 12000 chars",reason:"why",acceptance:"checks"}. Stop after returning it; this is progress, not task completion. Do not archive originals in this handoff. If already two transitions, finish directly. The receiving master chooses its own supported subagent models.';
@@ -202,12 +203,24 @@ function promptText(task, materials, ownership, context, selected) {
     ownership.managedDelivery ? 'The desktop bridge manages cloud checkpoints and delivery. Do not call remote INNO tools. Return the final answer and generated artifacts to the bridge.' : '',
     ownership.modelPolicy && !ownership.claude && !ownership.plainResult ? 'Return one JSON object with summary, checkpoint, artifacts (at most 9), and routing as specified above. Shape before adding routing:' : 'Return either a plain final answer or one JSON object with this shape:',
     '{"summary":"user-facing answer","checkpoint":"verified progress","artifacts":[{"name":"file.ext","mime":"type/subtype","path":"relative/output/path"}]}',
+    ...sourceClaimsPolicy(materials, ownership),
     ...(ownership.allowDelegation&&ownership.pluginCatalog?.length?[pluginCatalogContext(ownership.pluginCatalog)]:[]),
     ownership.allowDelegation ? 'When managed parallel allocation is useful, add delegation:{"independent":true,"children":[{"role":"...","provider":"codex|claude","requestedModel":"...","effort":"...","sufficientReason":"...","acceptanceCriteria":["..."],"instructions":"..."}, {"...":"..."}]} with 2 to 4 children in any provider mix and distinct roles.' : '',
     ownership.mode === 'review' ? 'For review completion, add reviewReport:[{"childTaskId":"...","criteria":[{"criterion":"exact assigned string","status":"pass|fail|unverifiable","evidence":"concrete evidence"}]}]. Include every child and every assigned criterion exactly once.' : '',
     'For generated files, return a relative path inside this isolated run directory. Small text may instead use content plus encoding utf-8.',
     'Never label text as DOCX, PPTX, PDF, or an image. If the required generator or renderer is unavailable, report that limitation and return text only.',
   ].join('\n');
+}
+
+// Differentiation ②: a desktop run that received text originals names, per key claim, the source,
+// a place in it and a short exact quote, which this PC then checks against the original text.
+// Only top-level runs are asked: cloud Routine completions do not carry the record, child and
+// review prompts are fixed by the route-conditions contract, and evaluation-budget runs keep their
+// fixed prompt. Returns the prompt lines to add: none without text originals, so every other
+// prompt stays unchanged.
+function sourceClaimsPolicy(materials, ownership) {
+  if (ownership.claude || ownership.mode !== 'root' || ownership.evaluationBound || !materials.some(material => !material?.image && typeof material?.text === 'string')) return [];
+  return [`Because source excerpts are attached, add to that JSON object claims:[{"text":"a key claim made in summary","sources":[{"source":<source index>,"locator":"page, section or line as the source shows it","quote":"exact words copied from that source, at most ${SOURCE_EVIDENCE_LIMITS.quote} characters"}]}] for at most ${SOURCE_EVIDENCE_LIMITS.claims} key claims. Never invent a locator or a quote; give "sources":[] for a claim the excerpts do not support.`];
 }
 
 export function structuredResult(content) {
@@ -262,6 +275,7 @@ export function structuredResult(content) {
     handoff: parsed.handoff,
     delegation: parsed.delegation,
     reviewReport: parsed.reviewReport,
+    claims: parsed.claims,
     ...(hasResumeState ? {resumeState} : {}),
   };
 }
@@ -635,6 +649,7 @@ export function createCodexRunner({
       const report=routingReport(structured?.routing,models);
       if(managedDelivery&&mode==='root'&&structured?.handoff)handoffTask({...task,status:'running',checkpoint:{...task.checkpoint,provider:'codex',executionId,generation}},{executionId,generation,content:structured.content,handoff:structured.handoff,artifacts:structured.artifacts});
       const artifacts=withRoutingArtifact(structured?.artifacts??[],structured?.content??parsed.content,report,managedDelivery);
+      const sourceEvidence=mode==='root'&&!deadline?traceClaims(structured?.claims,materials):null;
       return {
         content: structured?.content ?? parsed.content,
         checkpoint: structured?.checkpoint ?? (parsed.threadId ? `Codex thread ${parsed.threadId} completed.` : 'Codex execution completed.'),
@@ -647,6 +662,7 @@ export function createCodexRunner({
         ...(managedDelivery && mode==='root' && structured?.handoff ? {handoff:structured.handoff} : {}),
         ...(delegation ? {delegation} : {}),
         ...(reviewReport ? {reviewReport} : {}),
+        ...(sourceEvidence ? {sourceEvidence} : {}),
         ...(hasResumeState ? {resumeState: structured.resumeState} : {}),
       };
       } catch(error) {if(observedUsage)error.usage=observedUsage;throw error;} finally {

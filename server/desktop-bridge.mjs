@@ -8,11 +8,17 @@ import {retryableStatus} from './bridge-runtime.mjs';
 import {boundedContextDelivery} from '../public/core/context-delivery.mjs';
 import {boundedPluginDelivery} from '../public/core/plugins.mjs';
 import {boundedLocalExecution} from '../public/core/local-execution.mjs';
+import {boundedSourceEvidence} from '../public/core/source-evidence.mjs';
 import {randomBytes} from 'node:crypto';
 // Delivery evidence is optional: invalid evidence is dropped, never the result.
 const deliveryOf=value=>{try{const delivery=boundedContextDelivery(value);return delivery?{contextDelivery:delivery}:{};}catch{return {};}};
 const pluginsOf=value=>{try{const delivery=boundedPluginDelivery(value);return delivery?{pluginDelivery:delivery}:{};}catch{return {};}};
 const localOf=value=>{const observed=boundedLocalExecution(value);return observed?{localExecution:observed}:{};};
+// A source record naming only this task's originals; anything else is dropped, never the result.
+// A result that would pass the cloud transfer limit with the record is sent without it.
+const EVIDENCE_TRANSFER_BYTES=690_000;
+const evidenceOf=(value,task)=>{try{const evidence=value?boundedSourceEvidence(value,task):null;return evidence?{sourceEvidence:evidence}:{};}catch{return {};}};
+const withinTransfer=input=>{if(input?.sourceEvidence&&Buffer.byteLength(JSON.stringify(input))>EVIDENCE_TRANSFER_BYTES){const {sourceEvidence,...rest}=input;return rest;}return input;};
 const leaseUnconfirmed=()=>Object.assign(Error('Execution lease renewal was not confirmed before the lease ended. The run was stopped and its output was not uploaded.'),{code:'DESKTOP_LEASE_UNCONFIRMED'});
 const runnerUnavailable=()=>Object.assign(Error('This desktop has no runner for the claimed provider.'),{code:'RUNNER_UNAVAILABLE'});
 const runnerNotReady=()=>Object.assign(Error('이 PC에서 이 실행기를 지금 쓸 수 없습니다. 연결 앱의 AI 실행기에서 상태를 확인하세요.'),{status:409});
@@ -193,7 +199,7 @@ export function createDesktopBridge({request,runner,runners,outbox,journal,heart
   if(!versioned&&controller.signal.aborted)throw Error('Desktop execution stopped');
   let record,built=false;
   try{
-   record={taskId:task.id,action:runError?'fail':'complete',...(binding?{binding}:{}),input:runError?{...owner,usage:usageCounts(runError.usage),...failureInput(runError.code?runError:runnerError(runError)),...deliveryOf(runError.contextDelivery),...pluginsOf(runError.pluginDelivery),...localOf(runError.localExecution)}:{...owner,content:result.content,checkpoint:result.checkpoint,artifacts:result.artifacts,usage:usageCounts(result.usage),...deliveryOf(result.contextDelivery),...pluginsOf(result.pluginDelivery),...localOf(result.localExecution),...(result.executionEvidence?{executionEvidence:boundedExecutionEvidence(result.executionEvidence)}:{}),...(result.handoff?{handoff:result.handoff}:{}),...(result.delegation?{delegation:result.delegation,...(models!==undefined?{models}:{})}:{}),...(result.reviewReport?{reviewReport:result.reviewReport}:{}),...(Object.hasOwn(result,'resumeState')?{resumeState:result.resumeState}:{})}};
+   record={taskId:task.id,action:runError?'fail':'complete',...(binding?{binding}:{}),input:runError?{...owner,usage:usageCounts(runError.usage),...failureInput(runError.code?runError:runnerError(runError)),...deliveryOf(runError.contextDelivery),...pluginsOf(runError.pluginDelivery),...localOf(runError.localExecution)}:withinTransfer({...owner,content:result.content,checkpoint:result.checkpoint,artifacts:result.artifacts,usage:usageCounts(result.usage),...deliveryOf(result.contextDelivery),...pluginsOf(result.pluginDelivery),...localOf(result.localExecution),...evidenceOf(result.sourceEvidence,task),...(result.executionEvidence?{executionEvidence:boundedExecutionEvidence(result.executionEvidence)}:{}),...(result.handoff?{handoff:result.handoff}:{}),...(result.delegation?{delegation:result.delegation,...(models!==undefined?{models}:{})}:{}),...(result.reviewReport?{reviewReport:result.reviewReport}:{}),...(Object.hasOwn(result,'resumeState')?{resumeState:result.resumeState}:{})})};
    if(versioned){record=JSON.parse(JSON.stringify({...record,version:1,phase:'pending'}));await checkedRecord(record);}
    built=true;await outbox.write(record);
    // The saved result now owns recovery; the claim journal is no longer needed.

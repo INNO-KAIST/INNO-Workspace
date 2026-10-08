@@ -10,6 +10,7 @@ import {formatUsagePhase,formatUsageTransition,formatWallElapsed,formatRequested
 import {experimentPacket} from './core/experiment-links.mjs?v=direct-1';
 import {createExperimentLinks} from './experiment-links.mjs?v=direct-1';
 import {buildLiteratureReview} from './core/literature-review.mjs';
+import {sourceEvidenceView} from './core/source-evidence.mjs';
 import {auditLiterature,repairLiteraturePrompt} from './core/literature-quality.mjs';
 const literatureAudits=new WeakMap();
 import {buildLiteratureWorkflow} from './core/literature-workflow.mjs';
@@ -68,6 +69,20 @@ function openDialog(id){$(id).showModal();}
 function closeSidebar(){$('sidebar').classList.remove('open');$('sidebar-scrim').classList.remove('open');}
 function setView(next){view=next;for(const key of Object.keys(names))$(`${key}-view`).classList.toggle('hidden',key!==next);$('view-title').textContent=names[next];document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===next));closeSidebar();if(next==='research')renderResearch();if(next==='usage')renderUsage();}
 function selectTask(id){modelPolicyUI.close();deliveryRecoveryUI.close();selectionEpoch++;activeId=id;lastRendered='';localStorage.setItem('inno-active-task',id||'');setView('workspace');render();$('conversation-scroll').scrollTop=$('conversation-scroll').scrollHeight;}
+// Differentiation ②: per key claim of the latest result, its sources and whether each quote was
+// found in the original on this PC. Built from text nodes only (the record holds model output).
+function renderSourceEvidence(t){
+ const view=sourceEvidenceView(t?.checkpoint?.sourceEvidence),section=$('source-evidence-section');
+ section.classList.toggle('hidden',!view);if(!view){$('source-evidence-claims').replaceChildren();return;}
+ $('source-evidence-summary').textContent=view.summary;
+ $('source-evidence-claims').replaceChildren(...view.claims.map(claim=>{
+  const item=document.createElement('li');item.className='source-evidence-claim status-'+claim.status;
+  const head=document.createElement('p'),badge=document.createElement('span'),text=document.createElement('span');
+  badge.className='source-evidence-badge';badge.textContent=claim.label;text.textContent=claim.text;head.append(badge,' ',text);item.append(head);
+  if(claim.sources.length){const list=document.createElement('ul');list.append(...claim.sources.map(line=>{const row=document.createElement('li');row.textContent=line;return row;}));item.append(list);}
+  return item;
+ }));
+}
 // Differentiation ①: the cross-check button and the links between a result and its verifications.
 function renderCrossChecks(t){
  const cross=crossCheckButton(t,state().capabilities),button=$('cross-check-button');
@@ -150,6 +165,7 @@ function renderPlan(){
  const recovery=failureGuidance(t);if(recovery){$('checkpoint-card').lastElementChild.insertAdjacentHTML('beforeend',`<div role="status"><strong>${esc(recovery.title)}</strong><p>${esc(recovery.detail)}${recovery.retryNotBefore?' 서버 재시도 안내: '+esc(date(recovery.retryNotBefore))+' (구독 한도 초기화 시각은 아닙니다).':''} 자동 재실행은 하지 않습니다. 원본이 필요하면 다시 연결하세요.</p></div>`);}
  const quality=t?(literatureAudits.has(t)?literatureAudits.get(t):auditLiterature(t)):null;if(t)literatureAudits.set(t,quality);let qualityPanel=$('literature-quality');if(!qualityPanel){qualityPanel=document.createElement('div');qualityPanel.id='literature-quality';$('artifacts').before(qualityPanel);}qualityPanel.replaceChildren();if(quality){const heading=document.createElement('strong');heading.textContent=quality.status==='passed'?'문헌 결과 형식 점검 통과':'문헌 결과 확인 필요';qualityPanel.append(heading);const detail=document.createElement('p');detail.className='small-copy';detail.textContent='실행 완료와 별도인 형식 점검입니다. 주장·수치의 정확성과 독립 검토 여부는 검증하지 않습니다.';qualityPanel.append(detail);const reviewButton=document.createElement('button');reviewButton.className='text-button';reviewButton.textContent='별도 검토 작업 준비';reviewButton.onclick=()=>guarded(prepareSeparateReview);qualityPanel.append(reviewButton);for(const issue of quality.issues){const item=document.createElement('p');item.className='small-copy';item.textContent=issue;qualityPanel.append(item);}if(quality.issues.length){const button=document.createElement('button');button.className='text-button';button.textContent='수정 요청 준비';button.onclick=()=>{if($('prompt').value.trim()){toast('작성 중인 요청을 먼저 기록하거나 비워 주세요.');return;}$('prompt').value=repairLiteraturePrompt(quality);$('prompt').focus();toast('수정 요청을 준비했습니다. 자료 연결을 확인하고 작업 기록 후 실행하세요.');};qualityPanel.append(button);}}
  const artifacts=t?.artifacts||[];$('artifact-count').textContent=artifacts.length;
+ renderSourceEvidence(t);
  $('artifacts').innerHTML=artifacts.length?artifacts.map(a=>`<div class="artifact-row" role="button" tabindex="0" data-artifact="${esc(a.id)}"><span>▤</span><div><strong>${esc(a.name)}</strong><small>${esc(a.mime||'text/plain')}</small><small>${esc(artifactCheckSummary(a))}</small></div><span>↓</span></div>${artifactCheckDetails(a)}`).join(''):'<p class="small-copy">생성된 결과물이 여기에 모입니다.</p>';
  renderDelegation();
 }

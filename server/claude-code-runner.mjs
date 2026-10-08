@@ -8,6 +8,7 @@ import {usageCounts} from '../public/core/execution-usage.mjs';
 import {runnerError} from '../public/core/failures.mjs';
 import {verifyMaterialViews} from '../public/core/source-coverage.mjs';
 import {boundedOfferedPlugins, boundedPluginDelivery, pluginDeliveryRecord} from '../public/core/plugins.mjs';
+import {traceClaims} from '../public/core/source-evidence.mjs';
 import {collectProcess, executionMode, materialBytes, materializeArtifacts, structuredResult, taskPromptWithContext, withoutApiEnvironment} from './runners.mjs';
 
 // CR-006 S2b: the Claude Code CLI on this PC as a desktop runner (pilot). It runs a top-level
@@ -215,6 +216,7 @@ export function createClaudeCodeRunner({
         if (structured?.delegation || structured?.handoff) throw new Error('Claude Code on this PC cannot delegate or hand off in this pilot.');
         if (structured && Object.hasOwn(structured, 'resumeState') && structured.resumeState !== null && structured.resumeState.taskId !== task.id) throw new Error('Invalid resume state task binding');
         const artifacts = structured ? await materializeArtifacts(structured.artifacts, executionDirectory) : [];
+        const sourceEvidence = traceClaims(structured?.claims, materials);
         delivered = true;
         return {
           content: structured?.content ?? content,
@@ -223,6 +225,7 @@ export function createClaudeCodeRunner({
           ...(observedUsage ? {usage: observedUsage} : {}),
           contextDelivery: delivery,
           ...(pluginDelivery ? {pluginDelivery} : {}),
+          ...(sourceEvidence ? {sourceEvidence} : {}),
           ...(structured && Object.hasOwn(structured, 'resumeState') ? {resumeState: structured.resumeState} : {}),
         };
       } catch (error) {

@@ -120,6 +120,14 @@ test('a run uses the isolation options, the subscription environment and stdin, 
   assert.equal(done.executionEvidence, undefined, 'no CLI route evidence is claimed for this provider');
 });
 
+test('a run with originals asks for claims and returns each quote checked against the original', async t => {
+  const claims = [{text: 'The notes list alpha.', sources: [{source: 1, locator: 'line 1', quote: 'alpha beta gamma'}]}];
+  const fake = fakeClaude({run: answer(JSON.stringify({summary: 'Alpha.', claims}))}), {runner} = await runnerFor(t, fake);
+  const done = await runner.run({task: task(), executionId: 'e1', generation: 1, materials: [{name: 'notes.txt', text: 'alpha beta gamma'}]});
+  assert.ok(fake.runs()[0].prompt.includes('claims:[{"text"'));
+  assert.deepEqual(done.sourceEvidence, {version: 1, claims: [{text: 'The notes list alpha.', sources: [{name: 'notes.txt', locator: 'line 1', quote: 'alpha beta gamma', found: true}]}]});
+});
+
 test('a run that is not on the subscription login, or has more tools than allowed, is stopped at its first event', async t => {
   const {apiKeySource, ...noSource} = init(), {permissionMode, ...noMode} = init();
   const firstEvents = [init({apiKeySource: 'ANTHROPIC_API_KEY'}), init({tools: ['Read', 'Bash']}), init({mcp_servers: [{name: 'x', status: 'connected'}]}),
