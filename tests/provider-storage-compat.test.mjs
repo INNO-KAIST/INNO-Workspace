@@ -4,7 +4,7 @@ import {mkdtemp, rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {ValidationError} from '../public/core/tasks.mjs';
-import {ASSIGNABLE_PROVIDER_IDS, PROVIDER_IDS} from '../public/core/providers.mjs';
+import {ASSIGNABLE_PROVIDER_IDS, DELEGABLE_PROVIDER_IDS, PROVIDER_IDS} from '../public/core/providers.mjs';
 import {sanitizeUsageHistory, usageHistory, usageSummary} from '../public/core/execution-usage.mjs';
 import {boundedContextDelivery} from '../public/core/context-delivery.mjs';
 import {createSelectionState} from '../public/core/model-selection.mjs';
@@ -96,9 +96,11 @@ test('advertised MCP provider enums list exactly the registered providers', asyn
   };
   for (const tool of response.result.tools) walk(tool, tool.name);
   assert.equal(enums.length, 3);
-  // Claiming names any registered provider; handing off and delegating only assignable ones.
-  for (const [tool, values] of enums) assert.deepEqual(values, tool === 'claim_execution' ? [...PROVIDER_IDS] : [...ASSIGNABLE_PROVIDER_IDS], tool);
-  assert.deepEqual([...ASSIGNABLE_PROVIDER_IDS], ['codex', 'claude'], 'the Claude Code pilot is not assignable yet');
+  // Claiming names any registered provider; handing off and delegating only providers that take
+  // any work (Claude Code on this PC takes top-level tasks only).
+  for (const [tool, values] of enums) assert.deepEqual(values, tool === 'claim_execution' ? [...PROVIDER_IDS] : [...DELEGABLE_PROVIDER_IDS], tool);
+  assert.ok(!DELEGABLE_PROVIDER_IDS.includes('claude-code'));
+  assert.deepEqual([...ASSIGNABLE_PROVIDER_IDS], ['codex', 'claude', 'claude-code'], 'Claude Code passed (2026-10-08) and can be chosen for a task');
 });
 
 test('run requests naming an unknown provider fail with the existing message', async t => {

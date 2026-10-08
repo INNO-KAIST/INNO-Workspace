@@ -1,7 +1,7 @@
 import {sanitizeResumeState} from '../public/core/context-resume.mjs';
 import {failureRecord} from '../public/core/failures.mjs';
 import {ConflictError,ValidationError,DESKTOP_EXECUTION_LEASE_MS} from '../public/core/tasks.mjs';
-import {providerHas,providersByTransport} from '../public/core/providers.mjs';
+import {assertProviderTakes,providerHas,providersByTransport} from '../public/core/providers.mjs';
 import {AUTO_ROUTING} from './store.mjs';
 
 const DESKTOP_PROVIDERS=providersByTransport('desktop_bridge'),DESKTOP_PROVIDER_LIST=JSON.stringify(DESKTOP_PROVIDERS);
@@ -56,6 +56,7 @@ export class CloudBridge {
     if(t.attachments.some(a=>a.source==='url'))throw new ValidationError('URL references are not source content. Connect the required document before direct execution.');
     const names=t.attachments.filter(a=>a.source!=='url').map(a=>a.path||a.name).sort();
     if(!Array.isArray(input.sourceNames)||input.sourceNames.length>20||input.sourceNames.some(n=>typeof n!=='string')||JSON.stringify([...input.sourceNames].sort())!==JSON.stringify(names))throw new ValidationError('Reconnect every required source on this desktop.');
+    assertProviderTakes(desktopProvider(input.provider),t);
     // A direct start is a person's explicit choice: any earlier auto-routing record is cleared (CR-010).
     const claim=await this.store.claimExecution(id,{provider:desktopProvider(input.provider),expectedVersion:input.expectedVersion,leaseMs:DESKTOP_EXECUTION_LEASE_MS,sourceBound:input.sourceNames.length>0,[AUTO_ROUTING]:null},claimOptions);
     await this.seen();return {...claim,sourceDelegationVersion:sourceVersion};

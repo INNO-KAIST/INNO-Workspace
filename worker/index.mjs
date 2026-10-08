@@ -1,6 +1,6 @@
 import {assertRunAdmission} from '../public/core/task-size.mjs';
 import {providerDisabledError,providerEnabled} from '../public/core/provider-settings.mjs';
-import {assertProviderId,providerManifest,providerTransport,providersByTransport} from '../public/core/providers.mjs';
+import {assertProviderId,assertProviderTakes,providerManifest,providerTransport,providersByTransport} from '../public/core/providers.mjs';
 import {sourceDelegationVersionFromEnvironment} from '../public/core/source-delegation-gate.mjs';
 import {deliveryReceiptVersionFromEnvironment} from '../public/core/delivery-receipt-gate.mjs';
 import {verifyMaterialViews} from '../public/core/source-coverage.mjs';
@@ -148,7 +148,9 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
           const materials = sanitizeMaterials(input.materials);
           const transport=providerTransport(input.provider);
           // H9-2: a run starts only while its result is sure to fit in the task.
-          assertRunAdmission(await store.requireTask(taskId));
+          const requested=await store.requireTask(taskId);
+          assertRunAdmission(requested);
+          assertProviderTakes(input.provider,requested);
           if(!providerEnabled(await store.providerSettings(),input.provider))throw providerDisabledError(input.expectedVersion);
           if(transport==='routine_fire'){
             const task=await store.requireTask(taskId);
@@ -394,7 +396,10 @@ export function createWorker({fetchFn = fetch,sourceDelegationVersion=0,delivery
           const original=await store.requireTask(taskId);
           if(original.version!==input.expectedVersion)throw new ConflictError('The result changed; reload before cross-checking.',original.version);
           const settings=await store.providerSettings();
-          const choice=crossCheckVerifier(original,{available:id=>providerTransport(id)==='desktop_bridge'||Boolean(adapterFor(id)?.configured),disabled:settings.disabled});
+          // The first desktop runner may wait in the queue for the PC; another one counts only once
+          // this PC reports it ready, so a verification never waits for a runner that is not there.
+          const desktop=await bridge.presence(),firstDesktop=providersByTransport('desktop_bridge')[0];
+          const choice=crossCheckVerifier(original,{available:id=>providerTransport(id)==='desktop_bridge'?id===firstDesktop||Boolean(desktop.providers?.ready.includes(id)):Boolean(adapterFor(id)?.configured),disabled:settings.disabled});
           if(choice.blocked)throw new ValidationError(choice.blocked);
           const hex=await digestText(`cross-check:${original.id}:${original.version}`);
           const requestId=`${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20,32)}`;

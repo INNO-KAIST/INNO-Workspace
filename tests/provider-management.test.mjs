@@ -28,7 +28,7 @@ test('provider settings keep at least one provider on and change only from the v
  const off=nextProviderSettings(empty,{disabled:[CLAUDE,CLAUDE],expectedVersion:0});
  assert.deepEqual(off,{version:1,disabled:[CLAUDE]});
  assert.equal(providerEnabled(off,CLAUDE),false);assert.equal(providerEnabled(off,CODEX),true);
- assert.throws(()=>nextProviderSettings(off,{disabled:[CODEX,CLAUDE],expectedVersion:1}),/At least one/);
+ assert.throws(()=>nextProviderSettings(off,{disabled:[CODEX,CLAUDE],expectedVersion:1}),/At least one/,'a top-level-only runner cannot be the only one left on');
  assert.throws(()=>nextProviderSettings(off,{disabled:['other'],expectedVersion:1}),/Unknown provider/);
  assert.throws(()=>nextProviderSettings(off,{disabled:[],expectedVersion:0}),error=>error instanceof ConflictError);
  assert.deepEqual(normalizeProviderSettings({version:3,disabled:['other',CLAUDE]}),{version:3,disabled:[CLAUDE]});
@@ -84,8 +84,8 @@ test('the screen shows each provider and marks a turned-off one everywhere it ca
  const capabilities={cloudCodex:true,claudeRoutine:true,disabledProviders:[CLAUDE]};
  const cards=providerCards({tasks:[],capabilities,desktop:{online:false,lastSeen:null}});
  assert.deepEqual(cards.map(card=>card.id),[CODEX,CLAUDE,'claude-code']);
- // The Claude Code pilot is shown as in its conformance trial and is not assigned work.
- assert.match(cards[2].conformance,/미통과/);assert.equal(providerOptions(capabilities).find(option=>option.value==='claude-code').disabled,true);
+ // Claude Code passed its conformance suite (2026-10-08) and can be chosen.
+ assert.match(cards[2].conformance,/통과/);assert.doesNotMatch(cards[2].conformance,/미통과/);assert.equal(providerOptions(capabilities).find(option=>option.value==='claude-code').disabled,undefined);
  const codex=cards[0],claude=cards[1];
  assert.equal(codex.location,'이 PC');assert.equal(claude.location,'클라우드');
  assert.match(codex.status,/오프라인/);assert.equal(claude.enabled,false);assert.match(claude.status,/사용 중지/);

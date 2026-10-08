@@ -19,8 +19,7 @@ test('provider names and run options come from the registry', () => {
     {value: 'auto', label: '자동 · PC 우선, 꺼져 있으면 클라우드 Claude', disabled: true},
     {value: 'codex', label: 'Codex · 현재 구독'},
     {value: 'claude', label: 'Claude · 클라우드 Routine'},
-    // A provider still in its conformance trial is listed but cannot be chosen.
-    {value: 'claude-code', label: 'Claude · 이 PC (Claude Code) (준비 중)', disabled: true},
+    {value: 'claude-code', label: 'Claude · 이 PC (Claude Code)'},
   ]);
 });
 
@@ -70,10 +69,11 @@ test('usage cards list every provider with its vendor, label, official link and 
   assert.deepEqual(usageCardModels([claudeRecord, codexRecord]), [
     {provider: 'codex', vendor: 'OPENAI', label: 'Codex', usageUrl: 'https://chatgpt.com/codex/settings/usage', record: codexRecord},
     {provider: 'claude', vendor: 'ANTHROPIC', label: 'Claude', usageUrl: 'https://claude.ai/settings/usage', record: claudeRecord},
+    {provider: 'claude-code', vendor: 'ANTHROPIC', label: 'Claude Code', usageUrl: 'https://claude.ai/settings/usage', record: {}},
   ]);
-  assert.deepEqual(usageCardModels([]).map(card => card.record), [{}, {}], 'a provider in its trial has no usage card until it records usage');
+  assert.deepEqual(usageCardModels([]).map(card => card.record), [{}, {}, {}]);
   assert.deepEqual(usageCardModels([{provider: 'claude-code', usedPercent: 1}]).map(card => card.provider), ['codex', 'claude', 'claude-code']);
-  assert.deepEqual(usageCardModels([null, codexRecord]).map(card => card.record), [codexRecord, {}]);
+  assert.deepEqual(usageCardModels([null, codexRecord]).map(card => card.record), [codexRecord, {}, {}]);
 });
 
 // 2026-10-06 user report: on a desktop web browser the refusal said "휴대폰에서…". The guidance

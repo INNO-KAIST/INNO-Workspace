@@ -14,7 +14,7 @@
 |---|---|---|---|---|---|---|
 | codex | 구독 CLI | desktop_bridge (local) | 데스크톱 complete, receipt v1 | 프로세스 종료 | 실행기 보고 | 데스크톱 계정 카탈로그 |
 | claude | 구독 클라우드 Routine | routine_fire (cloud) | MCP checkpoint_task | 확인 필요 | 선택적 자기보고 | 내장 역할 별칭(haiku/sonnet/opus) |
-| claude-code (S2 시범, 적합성 pending) | 구독 CLI | desktop_bridge (local) | 데스크톱 complete, receipt v1 | 프로세스 종료 | 실행기 보고 | 내장 역할 별칭(haiku/sonnet/opus) |
+| claude-code (S2, 적합성 passed, 최상위 작업 전용) | 구독 CLI | desktop_bridge (local) | 데스크톱 complete, receipt v1 | 프로세스 종료 | 실행기 보고 | 내장 역할 별칭(haiku/sonnet/opus) |
 
 ## 3. 새 제공자 추가 절차
 1. **사전 확인**: 사용자가 구독 중인 서비스의 공식 CLI/에이전트가 구독 로그인으로 프로그램 실행을 지원하고, 이용약관이 자동 실행을 허용하는지 확인한다. API 키·유료 과금 경로는 등록할 수 없다(검증기가 `auth.kind`와 `paidApi`로 거부).
@@ -72,4 +72,7 @@ INNO 서비스에는 클라우드 Routine 설정 권한이 없다. 그래서 서
 - **결과:** 마지막 result 이벤트의 글을 답으로 쓰고(JSON 형식이면 summary·artifacts), 결과 파일은 실행 폴더 안의 것만 받는다(Codex와 같은 10MB 상한). 토큰은 입력(캐시 쓰기·읽기 포함)·캐시 읽기·출력으로 기록한다. 로그인 필요·만료·OAuth 인증 오류는 인증 대기, 사용량 한도는 한도 대기로 분류한다. 분류에는 오류 결과의 글과 stderr만 쓰고, 정상 답의 내용은 읽지 않는다. 결과를 전달한 실행 폴더는 통째로 지운다(그 안에 쓴 파일이 저장소에 남지 않게). 실패한 실행은 Codex처럼 빈 폴더만 지운다.
 - **시범 범위:** 최상위 작업만. 하위·검토·평가 예산·이미지 실행, 위임·인계, 원문 문맥 도우미(셸 필요)는 하지 않는다. 문맥은 전문 전달이고 상한을 넘으면 실행 전에 멈춘다.
 - **알려진 한계:** 관리자(managed) 설정은 `--restricted`에서도 적용된다. 개인 PC에서 관리자 권한으로 API 주소·제공자·hook을 바꿔 두었다면 막지 못한다. 격리 옵션의 실제 동작(Glob·Grep 범위 포함)과 init 이벤트 필드는 도움말과 문서 기준이며 실구독 시험에서 확인한다.
-- **켜기:** 시범 동안 연결기는 `INNO_CLAUDE_CODE=1`일 때만 이 실행기를 넣는다. 적합성 스위트(10항목, receipt v0·v1)는 통과했지만 manifest는 `pending`이다. 사용자가 CLI에 로그인(`claude auth login`)하고 실구독 최소 시험을 확인한 뒤 `passed`로 올리고 기본으로 켠다.
+- **켜기(2026-10-08 승격):** 적합성 스위트(10항목, receipt v0·v1)와 실구독 시험 2회(요약 1회, 폴더 밖 Read·Grep·Write 실제 시도가 모두 거절되는 도구 차단 1회)를 통과해 manifest를 `passed`로 올렸다. 연결기는 기본으로 이 실행기를 넣고, `INNO_CLAUDE_CODE`가 0·false·off·no면 넣지 않는다.
+- **배정 범위:** manifest capability `assignment: 'top_level'`. 사람이 실행하는 최상위 작업과 그 교차 검증에만 배정되고, 위임 하위 작업·인계 대상·MCP 도구의 위임·인계 제공자 목록(`DELEGABLE_PROVIDER_IDS`)에는 들어가지 않는다. Codex·Claude Routine은 `assignment: 'any'`. 실행 요청(실행 경로·이 PC의 직접 시작)도 하위·위임 중·평가 예산 작업을 이 실행기로 보내면 거절한다(`assertProviderTakes`). 사용 설정은 Codex·Claude 중 하나는 켜 두어야 한다(최상위 전용 실행기만 남으면 자동 선택·위임이 쓸 실행기가 없음). 교차 검증은 이 PC가 Claude Code를 준비됨으로 보고했을 때만 그것을 검증자로 고른다.
+- **CLI 위치:** 데스크톱 앱이 Microsoft Store(MSIX)로 설치되면 내장 CLI는 `%LOCALAPPDATA%PackagesClaude_<id>LocalCacheRoamingClaudeclaude-code`에 있고, 앱 밖(연결기·일반 터미널)에서는 `%APPDATA%Claude` 경로로 보이지 않는다. 두 곳을 모두 찾아 최신 판을 쓴다. 사용자가 직접 로그인할 때도 이 패키지 경로의 `claude.exe auth login`을 쓴다.
+- **환경:** 연결기를 Claude Code 터미널에서 띄워도 그 세션의 설정이 넘어가지 않게 `CLAUDE*`·`MCP_*` 변수를 모두 지운다(로그인이 든 설정 폴더 지정 `CLAUDE_CONFIG_DIR`과 Windows에서 필요할 수 있는 `CLAUDE_CODE_GIT_BASH_PATH`만 유지).

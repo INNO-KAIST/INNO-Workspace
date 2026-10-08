@@ -95,6 +95,19 @@ test('a readiness check that hangs is cut off, and checks running at the same ti
   assert.equal(hung.calls[0].child.killed, true, 'the hung probe is stopped');
 });
 
+test('a desktop app installed from the Microsoft Store keeps its CLI in its package folder, which the connector also searches', async () => {
+  // Inside the app, %APPDATA%\Claude is redirected to the package's LocalCache; a connector started
+  // from an ordinary terminal sees only the package path.
+  const store = 'C:\\Local\\Packages\\Claude_pzs8sxrjxfjjc\\LocalCache\\Roaming\\Claude\\claude-code';
+  const files = new Set([`${store}\\2.1.293\\83\\claude.exe`, `${store}\\2.1.289\\e1\\claude.exe`, 'C:\\AppData\\Claude\\claude-code\\2.1.290\\aa\\claude.exe']);
+  const dirs = {'C:\\Local\\Packages': ['Claude_pzs8sxrjxfjjc', 'Other_123', 'Claude_x\\..'], [store]: ['2.1.289', '2.1.293'], [`${store}\\2.1.293`]: ['83'], [`${store}\\2.1.289`]: ['e1'],
+    'C:\\AppData\\Claude\\claude-code': ['2.1.290'], 'C:\\AppData\\Claude\\claude-code\\2.1.290': ['aa']};
+  const fs = {exists: async file => files.has(file), list: async dir => dirs[dir] ?? []};
+  assert.equal(await findClaudeCli({env: {APPDATA: 'C:\\Missing', LOCALAPPDATA: 'C:\\Local', PATH: ''}, ...fs, platform: 'win32'}), `${store}\\2.1.293\\83\\claude.exe`);
+  assert.equal(await findClaudeCli({env: {APPDATA: 'C:\\AppData', LOCALAPPDATA: 'C:\\Local', PATH: ''}, ...fs, platform: 'win32'}), `${store}\\2.1.293\\83\\claude.exe`, 'the newest version wins across both places');
+  assert.equal(await findClaudeCli({env: {APPDATA: 'C:\\AppData', PATH: ''}, ...fs, platform: 'win32'}), 'C:\\AppData\\Claude\\claude-code\\2.1.290\\aa\\claude.exe');
+});
+
 test('a run uses the isolation options, the subscription environment and stdin, and reports the answer and tokens', async t => {
   const fake = fakeClaude({run: answer('Three bullets.')}), {cwd, runner} = await runnerFor(t, fake);
   const done = await runner.run({task: task(), executionId: 'e1', generation: 1, materials: [{name: 'notes.txt', text: 'alpha beta gamma'}]});
@@ -205,10 +218,15 @@ test('child, review, evaluation and image runs are refused before the CLI starts
 test('the run environment drops every API and alternative-provider variable', () => {
   const env = claudeCodeEnvironment({ANTHROPIC_API_KEY: 'a', anthropic_auth_token: 'b', ANTHROPIC_MODEL: 'c', CLAUDE_CODE_USE_VERTEX: '1', CLAUDE_CODE_USE_FOUNDRY: '1', CLAUDE_CODE_OAUTH_TOKEN: 'd', OPENAI_API_KEY: 'e', INNO_CONTEXT_TOKEN: 'f', PATH: 'p', APPDATA: 'q'});
   assert.deepEqual(env, {PATH: 'p', APPDATA: 'q'});
+  // A connector started from a Claude Code terminal must not pass that session on to the run
+  // (its session, messaging token, effort or entry point); only a custom config folder is kept.
+  const nested = claudeCodeEnvironment({CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 's', CLAUDE_CODE_MESSAGING_TOKEN: 't', CLAUDE_CODE_ENTRYPOINT: 'e', CLAUDE_EFFORT: 'high', CLAUDE_PID: '9', claude_code_simple: '1', CLAUDE_CONFIG_DIR: 'D:\\claude', MCP_CONNECTION_NONBLOCKING: '1', USERPROFILE: 'u'});
+  assert.deepEqual(nested, {CLAUDE_CONFIG_DIR: 'D:\\claude', USERPROFILE: 'u'});
 });
 
-test('during the pilot the connector adds the Claude Code runner only when INNO_CLAUDE_CODE is 1', async () => {
-  const {claudeCodePilotEnabled} = await import('../server/claude-code-runner.mjs');
-  assert.equal(claudeCodePilotEnabled({INNO_CLAUDE_CODE: '1'}), true);
-  for (const value of [undefined, '', '0', 'true', 'yes']) assert.equal(claudeCodePilotEnabled({INNO_CLAUDE_CODE: value}), false, String(value));
+test('the connector adds the Claude Code runner unless INNO_CLAUDE_CODE turns it off', async () => {
+  const {claudeCodeEnabled} = await import('../server/claude-code-runner.mjs');
+  for (const value of [undefined, '', '1', 'true', 'yes', 'on']) assert.equal(claudeCodeEnabled({INNO_CLAUDE_CODE: value}), true, String(value));
+  for (const value of ['0', 'false', 'FALSE', ' off ', 'no']) assert.equal(claudeCodeEnabled({INNO_CLAUDE_CODE: value}), false, String(value));
+  assert.equal(claudeCodeEnabled(undefined), true);
 });

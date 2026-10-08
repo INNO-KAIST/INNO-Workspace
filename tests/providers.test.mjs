@@ -170,14 +170,15 @@ test('declared model catalogs are readable for stored owners', () => {
 
 test('only providers that passed the current conformance suite are assignable', () => {
   assert.equal(PROVIDER_CONFORMANCE_SUITE_VERSION, 1);
-  assert.deepEqual([...ASSIGNABLE_PROVIDER_IDS], ['codex', 'claude']);
+  assert.deepEqual([...ASSIGNABLE_PROVIDER_IDS], ['codex', 'claude', 'claude-code']);
   assert.equal(isAssignableProvider('codex'), true);
   for (const owner of [undefined, 'gemini', 'toString']) assert.equal(isAssignableProvider(owner), false);
   const pending = {...codex(), id: 'pending-cli', models: {catalog: 'built_in_roles', roles: ['p']}, conformance: {suiteVersion: 1, status: 'pending'}};
   const future = {...pending, id: 'future-cli', conformance: {suiteVersion: 2, status: 'passed'}};
   const registry = createProviderRegistry([...PROVIDER_MANIFESTS, pending, future]);
   assert.deepEqual([registry.assignable('pending-cli'), registry.assignable('future-cli'), registry.assignable('claude')], [false, false, true]);
-  assert.deepEqual([...registry.assignableIds], ['codex', 'claude']);
+  assert.deepEqual([...registry.assignableIds], ['codex', 'claude', 'claude-code']);
+  assert.deepEqual([...registry.delegableIds], ['codex', 'claude'], 'a top-level-only provider takes no children or handoffs');
   for (const conformance of [{suiteVersion: 1, status: 'ok'}, {suiteVersion: 0, status: 'passed'}, {status: 'passed'}, {suiteVersion: 1, status: 'passed', evidence: 'x'}]) {
     const manifest = codex(); manifest.conformance = conformance; rejects(manifest, 'conformance');
   }

@@ -111,7 +111,7 @@ test('a script-free skill becomes a pinned record awaiting review', async () => 
   assert.deepEqual(record.files, [{path: 'SKILL.md', bytes: Buffer.byteLength(text), sha256: sha(text)}, {path: 'colors.md', bytes: Buffer.byteLength(reference), sha256: sha(reference)}]);
   assert.match(record.contentHash, /^[0-9a-f]{64}$/);
   assert.deepEqual(record.permissions, {scripts: false, network: false, files: 'none'});
-  assert.deepEqual(record.compatibility, {delivery: 'prompt_inline', providers: ['codex', 'claude']});
+  assert.deepEqual(record.compatibility, {delivery: 'prompt_inline', providers: ['codex', 'claude', 'claude-code']});
   assert.deepEqual(record.review, {scannedAt: now, rulesVersion: 1, findings: [], omittedFindings: 0, blocked: false});
   assert.equal(validatePluginRecord(record), record);
   const reordered = await build([{path: 'colors.md', text: reference}, {path: 'SKILL.md', text}]);

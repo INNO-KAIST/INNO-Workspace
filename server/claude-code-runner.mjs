@@ -31,19 +31,24 @@ export const CLAUDE_CODE_REQUIRED_FLAGS = Object.freeze(CLAUDE_CODE_ARGS.filter(
 const flagListed = (text, flag) => new RegExp(`(?:^|[\\s,])${flag}(?=[\\s,<]|$)`, 'm').test(text);
 // A ready CLI is re-checked every 5 minutes, a missing CLI or login every minute.
 const READY_CACHE_MS = 300_000, NOT_READY_CACHE_MS = 60_000, PROBE_TIMEOUT_MS = 15_000;
-// During the pilot the connector adds this runner only when INNO_CLAUDE_CODE is 1.
-export const claudeCodePilotEnabled = env => env?.INNO_CLAUDE_CODE === '1';
+// The connector adds this runner unless INNO_CLAUDE_CODE turns it off (0, false, off or no).
+export const claudeCodeEnabled = env => !['0', 'false', 'off', 'no'].includes(String(env?.INNO_CLAUDE_CODE ?? '').trim().toLowerCase());
 const CLAUDE_CODE_POLICY = [
   'CLAUDE CODE ON THIS PC:',
   'Work directly in this process. You can read, create and edit files only inside the current run directory; shell commands, web access and MCP tools are not available, so do not plan to run code.',
   'Do not split, delegate, or hand off the task. Return the final answer, and any generated files as relative paths inside the run directory.',
 ].join('\n');
 
-// API keys, tokens and alternative-provider switches would bypass the subscription login.
+// API keys, tokens and alternative-provider switches would bypass the subscription login. A
+// connector started from a Claude Code terminal would also pass on that session's own settings
+// (session, messaging token, effort, entry point, MCP), so every Claude and MCP variable is
+// dropped except a custom config folder, which holds the stored login, and the Git Bash location
+// the CLI may need on Windows.
 export function claudeCodeEnvironment(processEnv = process.env) {
   return Object.fromEntries(Object.entries(withoutApiEnvironment(processEnv)).filter(([key]) => {
     const name = key.toUpperCase();
-    return !name.startsWith('ANTHROPIC_') && !name.startsWith('CLAUDE_CODE_USE_') && name !== 'CLAUDE_CODE_OAUTH_TOKEN';
+    if (name === 'CLAUDE_CONFIG_DIR' || name === 'CLAUDE_CODE_GIT_BASH_PATH') return true;
+    return !name.startsWith('ANTHROPIC_') && !name.startsWith('CLAUDE') && !name.startsWith('MCP_');
   }));
 }
 
@@ -54,7 +59,9 @@ const newerFirst = (a, b) => { const x = versionParts(a), y = versionParts(b); f
 
 // The CLI: the explicit INNO_CLAUDE_CLI setting (an absolute path; when set, nothing else is
 // tried), then PATH, then the newest copy bundled with the Claude desktop app. Only an
-// executable is used, never a shell script shim.
+// executable is used, never a shell script shim. A desktop app installed from the Microsoft Store
+// keeps that copy in its package folder (%LOCALAPPDATA%\Packages\Claude_<id>\LocalCache\Roaming);
+// only the app itself sees it under %APPDATA%, so both places are searched.
 export async function findClaudeCli({env = process.env, exists = defaultExists, list = defaultList, platform = process.platform} = {}) {
   const paths = platform === 'win32' ? path.win32 : path.posix, executable = platform === 'win32' ? 'claude.exe' : 'claude';
   if (env.INNO_CLAUDE_CLI !== undefined) {
@@ -68,9 +75,16 @@ export async function findClaudeCli({env = process.env, exists = defaultExists, 
     const candidate = paths.join(dir, executable);
     if (await exists(candidate)) return candidate;
   }
-  if (platform !== 'win32' || !env.APPDATA) return null;
-  const root = paths.join(env.APPDATA, 'Claude', 'claude-code');
-  for (const version of (await list(root)).filter(name => /^\d+\.\d+\.\d+$/.test(name)).sort(newerFirst)) {
+  if (platform !== 'win32') return null;
+  const bundle = ['Claude', 'claude-code'];
+  const roots = env.APPDATA ? [paths.join(env.APPDATA, ...bundle)] : [];
+  if (env.LOCALAPPDATA) {
+    const packages = paths.join(env.LOCALAPPDATA, 'Packages');
+    for (const name of (await list(packages)).filter(name => /^Claude_[A-Za-z0-9]+$/.test(name)).sort()) roots.push(paths.join(packages, name, 'LocalCache', 'Roaming', ...bundle));
+  }
+  const versions = [];
+  for (const root of roots) for (const version of (await list(root)).filter(name => /^\d+\.\d+\.\d+$/.test(name))) versions.push({root, version});
+  for (const {root, version} of versions.sort((a, b) => newerFirst(a.version, b.version))) {
     for (const build of (await list(paths.join(root, version))).sort()) {
       const candidate = paths.join(root, version, build, executable);
       if (await exists(candidate)) return candidate;

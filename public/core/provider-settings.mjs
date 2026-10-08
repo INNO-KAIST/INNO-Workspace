@@ -1,4 +1,4 @@
-import {ASSIGNABLE_PROVIDER_IDS,isProviderId} from './providers.mjs';
+import {DELEGABLE_PROVIDER_IDS,isProviderId} from './providers.mjs';
 import {ConflictError,ValidationError} from './tasks.mjs';
 
 // PRV-06: a person can turn a registered provider off. Off blocks only new executions on it
@@ -20,7 +20,8 @@ export function nextProviderSettings(current,input){
  if(!Array.isArray(disabled)||disabled.some(id=>typeof id!=='string'))throw new ValidationError('disabled must be a list of provider ids');
  if(disabled.some(id=>!isProviderId(id)))throw new ValidationError('Unknown provider in disabled list');
  const next=[...new Set(disabled)].sort();
- if(ASSIGNABLE_PROVIDER_IDS.every(id=>next.includes(id)))throw new ValidationError('At least one provider must stay on');
+ // A provider that takes any work (not a top-level-only one) stays on, so auto routing and delegation always have one.
+ if(DELEGABLE_PROVIDER_IDS.every(id=>next.includes(id)))throw new ValidationError('At least one provider must stay on');
  return {version:current.version+1,disabled:next};
 }
 

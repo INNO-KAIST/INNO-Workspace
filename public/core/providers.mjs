@@ -29,6 +29,9 @@ const CAPABILITY_VALUES = Object.freeze({
   deliveryReceipts: [0, 1],
   executionEvidence: [null, 'cli_arguments'],
   evaluationBudget: [true, false],
+  // Which work may be assigned: any (top-level tasks, delegation children, handoff targets) or
+  // top_level (a task the person runs, and its cross-check; never a child or a handoff).
+  assignment: ['any', 'top_level'],
 });
 const KEYS = ['manifestVersion', 'id', 'label', 'vendor', 'auth', 'execution', 'capabilities', 'models', 'ui', 'conformance'];
 
@@ -37,7 +40,7 @@ export const PROVIDER_MANIFESTS = deepFreeze([
     manifestVersion: 1, id: 'codex', label: 'Codex', vendor: 'OPENAI',
     auth: {kind: 'subscription_cli', paidApi: false},
     execution: {location: 'local', transport: 'desktop_bridge'},
-    capabilities: {fileArtifacts: true, resultCallback: 'desktop_bridge', cancellation: 'process_terminate', usageReport: 'runtime_reported', deliveryReceipts: 1, executionEvidence: 'cli_arguments', evaluationBudget: true},
+    capabilities: {fileArtifacts: true, resultCallback: 'desktop_bridge', cancellation: 'process_terminate', usageReport: 'runtime_reported', deliveryReceipts: 1, executionEvidence: 'cli_arguments', evaluationBudget: true, assignment: 'any'},
     models: {catalog: 'account_catalog'},
     ui: {option: 'Codex · 현재 구독', usageUrl: 'https://chatgpt.com/codex/settings/usage', availability: ['localCodex', 'cloudCodex']},
     conformance: {suiteVersion: 1, status: 'passed'},
@@ -46,21 +49,22 @@ export const PROVIDER_MANIFESTS = deepFreeze([
     manifestVersion: 1, id: 'claude', label: 'Claude', vendor: 'ANTHROPIC',
     auth: {kind: 'subscription_cloud_routine', paidApi: false},
     execution: {location: 'cloud', transport: 'routine_fire'},
-    capabilities: {fileArtifacts: true, resultCallback: 'mcp_checkpoint', cancellation: 'confirmation_required', usageReport: 'self_reported_optional', deliveryReceipts: 0, executionEvidence: null, evaluationBudget: false},
+    capabilities: {fileArtifacts: true, resultCallback: 'mcp_checkpoint', cancellation: 'confirmation_required', usageReport: 'self_reported_optional', deliveryReceipts: 0, executionEvidence: null, evaluationBudget: false, assignment: 'any'},
     models: {catalog: 'built_in_roles', roles: ['haiku', 'sonnet', 'opus']},
     ui: {option: 'Claude · 클라우드 Routine', usageUrl: 'https://claude.ai/settings/usage', availability: ['claudeRoutine']},
     conformance: {suiteVersion: 1, status: 'passed'},
   },
-  // CR-006 S2 pilot: the Claude Code CLI on this PC with the Claude subscription login. Pending
-  // until the conformance suite and a real-subscription check pass, so it is never assigned.
+  // CR-006 S2: the Claude Code CLI on this PC with the Claude subscription login. Passed the
+  // conformance suite and two real-subscription checks (2026-10-08); its runner takes top-level
+  // tasks only, so it is never a delegation child or a handoff target.
   {
     manifestVersion: 1, id: 'claude-code', label: 'Claude Code', vendor: 'ANTHROPIC',
     auth: {kind: 'subscription_cli', paidApi: false},
     execution: {location: 'local', transport: 'desktop_bridge'},
-    capabilities: {fileArtifacts: true, resultCallback: 'desktop_bridge', cancellation: 'process_terminate', usageReport: 'runtime_reported', deliveryReceipts: 1, executionEvidence: null, evaluationBudget: false},
+    capabilities: {fileArtifacts: true, resultCallback: 'desktop_bridge', cancellation: 'process_terminate', usageReport: 'runtime_reported', deliveryReceipts: 1, executionEvidence: null, evaluationBudget: false, assignment: 'top_level'},
     models: {catalog: 'built_in_roles', roles: ['haiku', 'sonnet', 'opus']},
     ui: {option: 'Claude · 이 PC (Claude Code)', usageUrl: 'https://claude.ai/settings/usage', availability: ['localClaudeCode']},
-    conformance: {suiteVersion: 1, status: 'pending'},
+    conformance: {suiteVersion: 1, status: 'passed'},
   },
 ]);
 
@@ -129,6 +133,8 @@ export function createProviderRegistry(manifests) {
   const capabilityName = name => { if (typeof name !== 'string' || !Object.hasOwn(CAPABILITY_VALUES, name)) throw new ValidationError(`provider capability is unknown: ${String(name)}`); return name; };
   return Object.freeze({
     ids, has, manifest, assignable, assignableIds: Object.freeze(ids.filter(assignable)),
+    // Delegation children and handoff targets: assignable providers that take any work.
+    delegableIds: Object.freeze(ids.filter(id => assignable(id) && byId.get(id).capabilities.assignment === 'any')),
     assert: id => manifest(id).id,
     label: id => has(id) ? byId.get(id).label : null,
     transport: id => manifest(id).execution.transport,
@@ -146,6 +152,14 @@ export const PROVIDER_IDS = PROVIDERS.ids;
 export const isProviderId = PROVIDERS.has;
 export const isAssignableProvider = PROVIDERS.assignable;
 export const ASSIGNABLE_PROVIDER_IDS = PROVIDERS.assignableIds;
+export const DELEGABLE_PROVIDER_IDS = PROVIDERS.delegableIds;
+// A top-level-only provider runs a task the person runs, never a delegation child, a reviewing
+// or delegating parent, or an evaluation-budget task (its runner refuses them).
+export function assertProviderTakes(provider, task) {
+  if (PROVIDERS.providerHas(provider, 'assignment', 'top_level') && (task?.parentTaskId || task?.assignment || task?.evaluationBudget
+    || (task?.delegation && !['superseded', 'cancelled'].includes(task.delegation.state))))
+    throw new ValidationError(`${PROVIDERS.label(provider)}는 사람이 실행하는 최상위 작업만 맡습니다. 하위·위임·평가 예산 작업은 다른 실행기를 고르세요.`);
+}
 export const assertProviderId = PROVIDERS.assert;
 export const providerManifest = PROVIDERS.manifest;
 export const providerLabel = PROVIDERS.label;

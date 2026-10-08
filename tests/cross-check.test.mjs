@@ -28,8 +28,10 @@ test('the verifier is a runner from another company that is on and available; th
   assert.deepEqual(crossCheckVerifier(completed('codex'), {available: always}), {provider: 'claude'});
   assert.deepEqual(crossCheckVerifier(completed('claude'), {available: always}), {provider: 'codex'});
   assert.deepEqual(crossCheckVerifier(completed('claude-code'), {available: always}), {provider: 'codex'}, 'Claude Code is the same company as Claude');
-  assert.match(crossCheckVerifier(completed('codex'), {available: id => id !== 'claude'}).blocked, /다른 회사/);
-  assert.match(crossCheckVerifier(completed('codex'), {available: always, disabled: ['claude']}).blocked, /다른 회사/);
+  // Without the cloud Routine, Claude Code on this PC (another company than Codex) can verify.
+  assert.deepEqual(crossCheckVerifier(completed('codex'), {available: id => id !== 'claude'}), {provider: 'claude-code'});
+  assert.match(crossCheckVerifier(completed('codex'), {available: id => !['claude', 'claude-code'].includes(id)}).blocked, /다른 회사/);
+  assert.match(crossCheckVerifier(completed('codex'), {available: always, disabled: ['claude', 'claude-code']}).blocked, /다른 회사/);
   for (const [extra, reason] of [[{status: 'running'}, /완료된/], [{attachments: [{id: 's'}]}, /원본/], [{parentTaskId: 'p'}, /하위/], [{crossCheckOf: {taskId: 'x'}}, /검증 작업/], [{delegation: {state: 'waiting_children'}}, /하위|병렬/],
     // A run that read originals, and a delegated result whose children may have, are not sent to another company.
     [{checkpoint: {provider: 'codex', status: 'completed', executionId: 'e9', sourceBound: true}}, /원본/], [{delegation: {state: 'completed'}}, /병렬/]])

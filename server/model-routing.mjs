@@ -1,6 +1,6 @@
 import {validateDelegationSourceIds,SOURCE_DELEGATION_POLICY} from '../public/core/delegation-sources.mjs';
 import {spawn} from 'node:child_process';
-import {isAssignableProvider,providerModels} from '../public/core/providers.mjs';
+import {isAssignableProvider,providerHas,providerModels} from '../public/core/providers.mjs';
 import {CLAUDE_ROLE_MODELS} from '../public/core/claude-routing.mjs';
 import {validatePluginSelection} from '../public/core/plugins.mjs';
 import {DELEGATION_MIN_CHILDREN,DELEGATION_MAX_CHILDREN} from '../public/core/delegation.mjs';
@@ -90,7 +90,7 @@ function boundedAssignmentText(value,label,max){
 export function validateDelegationResult(value,rows,options={}){
  if(!value||typeof value!=='object'||Array.isArray(value)||value.independent!==true||!Array.isArray(value.children)||value.children.length<DELEGATION_MIN_CHILDREN||value.children.length>DELEGATION_MAX_CHILDREN)throw new Error('Invalid delegation: 2 to 4 independent children are required');
  const children=value.children.map(child=>{
-  if(!child||typeof child!=='object'||!isAssignableProvider(child.provider))throw new Error('Invalid delegation provider');
+  if(!child||typeof child!=='object'||!isAssignableProvider(child.provider)||!providerHas(child.provider,'assignment','any'))throw new Error('Invalid delegation provider');
   if(!DELEGATION_EFFORTS.has(child.effort))throw new Error(`Invalid delegation effort: ${child.effort??''}`);
   if(!Array.isArray(child.acceptanceCriteria)||child.acceptanceCriteria.length<1||child.acceptanceCriteria.length>8)throw new Error('Invalid delegation acceptance criteria');
   const sourceIds=validateDelegationSourceIds(child.sourceIds,options);

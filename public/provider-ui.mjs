@@ -108,7 +108,7 @@ export function recoveryConfirmText(provider){
  return providerHas(id,'cancellation','confirmation_required')?`이전 ${providerName(id)} 실행이 종료되었음을 확인했습니다.`:'이전 실행이 종료되었음을 확인했습니다.';
 }
 
-// A provider in its conformance trial gets a card only once it has recorded usage.
+// A provider in its conformance trial (none at present) gets a card only once it has recorded usage.
 export function usageCardModels(records){
  const recorded=provider=>(records||[]).some(row=>lower(row?.provider)===provider);
  return PROVIDER_IDS.filter(provider=>isAssignableProvider(provider)||recorded(provider)).map(provider=>{

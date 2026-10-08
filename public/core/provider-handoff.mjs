@@ -1,6 +1,6 @@
 import {ConflictError,ValidationError,applyAction} from './tasks.mjs';
 import {executionUsage,usageHistory} from './execution-usage.mjs';
-import {isAssignableProvider,usesTransport} from './providers.mjs';
+import {isAssignableProvider,providerHas,usesTransport} from './providers.mjs';
 const bounded=(value,label,max)=>{if(typeof value!=='string'||!value.trim()||value.length>max)throw new ValidationError('Invalid handoff '+label);return value.trim();};
 export function isHandoffReplay(task,input){return (task.checkpoint?.handoffHistory??[]).some(h=>h.executionId===input.executionId&&h.generation===input.generation);}
 export function handoffTask(task,input,{now=()=>new Date().toISOString(),id=()=>crypto.randomUUID(),recoverInterrupted=false}={}){
@@ -9,7 +9,7 @@ export function handoffTask(task,input,{now=()=>new Date().toISOString(),id=()=>
  if((task.status!=='running'&&!recover)||c.executionId!==input.executionId||c.generation!==input.generation)throw new ConflictError('Stale handoff owner',task.version);
  if(task.attachments?.length||task.checkpoint?.sourceBound)throw new ValidationError('Reconnect original sources: automatic handoff does not transfer attachments.');
  const history=c.handoffHistory??[];if(history.length>=2)throw new ValidationError('At most two provider handoffs per task.');
- const h=input.handoff;if(!h||!isAssignableProvider(h.provider)||h.provider===c.provider)throw new ValidationError('Handoff must target the other provider.');
+ const h=input.handoff;if(!h||!isAssignableProvider(h.provider)||!providerHas(h.provider,'assignment','any')||h.provider===c.provider)throw new ValidationError('Handoff must target the other provider.');
  const record={executionId:input.executionId,generation:input.generation,from:c.provider,to:h.provider,instructions:bounded(h.instructions,'instructions',12000),reason:bounded(h.reason,'reason',1000),acceptance:bounded(h.acceptance,'acceptance',2000),createdAt:now()};
  const content=bounded(input.content,'verified progress',12000);
  if(input.artifacts!==undefined&&(!Array.isArray(input.artifacts)||input.artifacts.length>10))throw new ValidationError('Invalid handoff artifacts');
